@@ -31,17 +31,22 @@ import { parseCacheDocument } from "../markdown/anchors";
 import { buildHeadingPaths } from "../markdown/headings";
 import { createMarkdownRuntime } from "../markdown/markdown";
 import { parseMarkdownDocument } from "../markdown/segmenter";
-import type { BlockKind } from "../markdown/types";
+import type { BlockKind, CacheSummary } from "../markdown/types";
 import {
   createDeletedMarker,
   parseDeletedMarker,
 } from "../cache/deletedMarker";
+import {
+  MAX_SUMMARY_CHARS,
+  summarySourceHash,
+} from "../cache/summaryMarker";
 import {
   syncDocument,
   serializeCacheDocument,
   type CacheEntry,
   type SyncProgressReporter,
   type SyncResult,
+  type TranslationAssistOptions,
 } from "./sync";
 import type { CacheDocument } from "../markdown/types";
 import type {
@@ -50,9 +55,13 @@ import type {
 import {
   validateTranslationResult,
 } from "../translation/types";
+import { estimateTokenCount } from "../translation/batching";
 import { blockHash, newBlockId } from "../util/hash";
 
 const LANGUAGE_TAG = /^[A-Za-z]{2,8}(?:-[A-Za-z0-9]{1,8})*$/;
+
+/** 摘要是一个手动触发的单次请求；超过该输入规模时提示手动填写，避免超出模型上下文。 */
+const SUMMARY_MAX_INPUT_TOKENS = 12_000;
 
 // ---- 公共类型 ----
 
@@ -84,6 +93,14 @@ export interface PreviewState extends LanguageSettings {
   sourceText: string;
   cacheText?: string;
   cacheUri: vscode.Uri;
+  /** 缓存中的全文摘要（若存在）；由 parseCacheDocument 剥离读取。 */
+  summary?: CacheSummary;
+}
+
+/** 设置页提供的稳定翻译/摘要上下文默认值。 */
+export interface TranslationAssistSettings {
+  stableTranslation: boolean;
+  summaryContext: boolean;
 }
 
 /** 块级回译结果；`line` 为原文行号（1 基），供预览定位。 */
@@ -167,6 +184,43 @@ export class SyncService {
     return { sourceLanguage, targetLanguage };
   }
 
+  /** 读取稳定翻译/摘要上下文的默认开关（预览会话与命令入口共用）。 */
+  getAssistSettings(): TranslationAssistSettings {
+    const config = vscode.workspace.getConfiguration("markdownBilingualSync");
+    return {
+      stableTranslation: config.get<boolean>("stableTranslation", true),
+      summaryContext: config.get<boolean>("summaryContext", true),
+    };
+  }
+
+  /** 当前 Provider 是否支持自动生成全文摘要。 */
+  get summarySupported(): boolean {
+    return this.provider.supportsSummary === true;
+  }
+
+  /** 合并显式开关与设置默认值；显式值来自预览会话。 */
+  private resolveAssist(
+    assist?: Partial<TranslationAssistSettings>,
+  ): TranslationAssistSettings {
+    const defaults = this.getAssistSettings();
+    return {
+      stableTranslation:
+        assist?.stableTranslation ?? defaults.stableTranslation,
+      summaryContext: assist?.summaryContext ?? defaults.summaryContext,
+    };
+  }
+
+  /** 从缓存文档中取摘要文本；摘要上下文关闭时返回 undefined。 */
+  private summaryForCache(
+    cache: CacheDocument | undefined,
+    assist: TranslationAssistSettings,
+  ): string | undefined {
+    if (!assist.summaryContext) {
+      return undefined;
+    }
+    return cache?.summary?.text.trim() || undefined;
+  }
+
   /**
    * 加载某个原文的操作状态。
    *
@@ -180,7 +234,7 @@ export class SyncService {
     purpose = "同步",
   ): Promise<LoadedState> {
     if (sourceUri.scheme !== "file") {
-      throw new Error("仅支持本地的 Markdown 文件。请先保存文件到磁盘。");
+      throw new Error("仅支持本地的 Markdown / Skill 文件。请先保存文件到磁盘。");
     }
     const settings = this.getSettings();
     const document = await vscode.workspace.openTextDocument(sourceUri);
@@ -220,12 +274,16 @@ export class SyncService {
    */
   async loadPreviewState(sourceUri: vscode.Uri): Promise<PreviewState> {
     const state = await this.loadState(sourceUri, false);
+    const summary = state.cacheText?.trim()
+      ? parseCacheDocument(state.cacheText, this.md).summary
+      : undefined;
     return {
       sourceText: state.sourceText,
       cacheText: state.cacheText,
       cacheUri: state.cacheUri,
       sourceLanguage: state.sourceLanguage,
       targetLanguage: state.targetLanguage,
+      summary,
     };
   }
 
@@ -244,6 +302,7 @@ export class SyncService {
     onProgress?: SyncProgressReporter,
     signal?: AbortSignal,
     allowPartial = false,
+    assist?: Partial<TranslationAssistSettings>,
   ): Promise<SyncOutcome> {
     try {
       return await this.withLock(sourceUri, async () => {
@@ -255,6 +314,7 @@ export class SyncService {
           signal,
           false,
           allowPartial,
+          assist,
         );
       });
     } catch (error) {
@@ -274,8 +334,9 @@ export class SyncService {
     sourceUri: vscode.Uri,
     onProgress?: SyncProgressReporter,
     signal?: AbortSignal,
+    assist?: Partial<TranslationAssistSettings>,
   ): Promise<SyncOutcome> {
-    return this.sync(sourceUri, true, onProgress, signal, true);
+    return this.sync(sourceUri, true, onProgress, signal, true, assist);
   }
 
   /**
@@ -288,6 +349,7 @@ export class SyncService {
     sourceUri: vscode.Uri,
     onProgress?: SyncProgressReporter,
     signal?: AbortSignal,
+    assist?: Partial<TranslationAssistSettings>,
   ): Promise<SyncOutcome> {
     try {
       return await this.withLock(sourceUri, async () => {
@@ -299,6 +361,7 @@ export class SyncService {
           signal,
           true,
           true,
+          assist,
         );
       });
     } catch (error) {
@@ -320,6 +383,7 @@ export class SyncService {
     sourceUri: vscode.Uri,
     blockIndex: number,
     signal?: AbortSignal,
+    assist?: Partial<TranslationAssistSettings>,
   ): Promise<{ mode: "sync" | "block"; outcome?: SyncOutcome }> {
     return this.withLock(sourceUri, async () => {
       const state = await this.loadState(sourceUri, true);
@@ -331,6 +395,9 @@ export class SyncService {
             false,
             undefined,
             signal,
+            false,
+            false,
+            assist,
           ),
         };
       }
@@ -354,16 +421,32 @@ export class SyncService {
             false,
             undefined,
             signal,
+            false,
+            false,
+            assist,
           ),
         };
       }
 
       const headingPaths = buildHeadingPaths(source.blocks);
+      const assistSettings = this.resolveAssist(assist);
+      const summary = this.summaryForCache(cache, assistSettings);
+      const reference =
+        assistSettings.stableTranslation &&
+        aligned.cache.anchor.mode !== "deleted" &&
+        aligned.cache.anchor.mode !== "copy" &&
+        aligned.cache.block.raw.trim()
+          ? {
+              text: aligned.cache.block.raw,
+              role: "previous-target" as const,
+            }
+          : undefined;
       const item = {
         id: aligned.cache.anchor.id,
         text: aligned.source.raw,
         kind: aligned.source.kind,
         headingPath: headingPaths.get(aligned.source.index) ?? [],
+        ...(reference ? { reference } : {}),
       };
       this.log(
         `retranslate block ${blockIndex} of ${path.basename(sourceUri.fsPath)} (${aligned.source.kind})`,
@@ -375,6 +458,7 @@ export class SyncService {
           targetLanguage: state.targetLanguage,
           items: [item],
           glossary: glossary.entries,
+          ...(summary ? { summary } : {}),
         },
         signal,
       );
@@ -538,6 +622,7 @@ export class SyncService {
       const nextText = serializeCacheDocument(
         cache.frontmatter ?? source.frontmatter,
         entries,
+        cache.summary,
       );
       await this.cacheStore.write(state.cacheUri, nextText);
       this.log(`delete untranslated block ${blockIndex} of ${path.basename(sourceUri.fsPath)}`);
@@ -571,7 +656,7 @@ export class SyncService {
         const entries = this.orderedCacheEntries(cache).filter(
           (entry) => entry.anchor.id !== aligned.cache!.anchor.id,
         );
-        const nextText = serializeCacheDocument(cache.frontmatter, entries);
+        const nextText = serializeCacheDocument(cache.frontmatter, entries, cache.summary);
         await this.cacheStore.write(state.cacheUri, nextText);
         this.log(`undo delete (remove marker) ${blockIndex}`);
         return nextText;
@@ -654,6 +739,7 @@ export class SyncService {
     sourceUri: vscode.Uri,
     blockIndex: number,
     signal?: AbortSignal,
+    assist?: Partial<TranslationAssistSettings>,
   ): Promise<BackTranslationResult> {
     if (signal?.aborted) {
       throw new CancelledError();
@@ -683,11 +769,21 @@ export class SyncService {
       throw new Error("这个块还没有译文，无法回译。");
     }
     const headingPaths = buildHeadingPaths(source.blocks);
+    const assistSettings = this.resolveAssist(assist);
+    const summary = this.summaryForCache(cache, assistSettings);
     const item = {
       id: `back-${aligned.cache.anchor.id}`,
       text: aligned.cache.block.raw,
       kind: aligned.source.kind,
       headingPath: headingPaths.get(aligned.source.index) ?? [],
+      ...(assistSettings.stableTranslation && aligned.source.raw.trim()
+        ? {
+            reference: {
+              text: aligned.source.raw,
+              role: "previous-source" as const,
+            },
+          }
+        : {}),
     };
     const rawResult = await this.provider.translate(
       {
@@ -695,6 +791,7 @@ export class SyncService {
         targetLanguage: state.sourceLanguage,
         items: [item],
         glossary: [],
+        ...(summary ? { summary } : {}),
       },
       signal,
     );
@@ -729,6 +826,7 @@ export class SyncService {
     sourceUri: vscode.Uri,
     text: string,
     signal?: AbortSignal,
+    summary?: string,
   ): Promise<string> {
     if (signal?.aborted) {
       throw new CancelledError();
@@ -751,6 +849,7 @@ export class SyncService {
         targetLanguage: state.sourceLanguage,
         items: [item],
         glossary: [],
+        ...(summary?.trim() ? { summary } : {}),
       },
       signal,
     );
@@ -763,6 +862,142 @@ export class SyncService {
       throw new Error("回译结果为空。");
     }
     return result;
+  }
+
+  // ---- 全文摘要 ----
+
+  /**
+   * 读取当前缓存的全文摘要；缓存不存在或没有摘要时返回 undefined。
+   * 只读，不触发翻译。
+   */
+  async loadSummary(sourceUri: vscode.Uri): Promise<CacheSummary | undefined> {
+    const state = await this.loadPreviewState(sourceUri);
+    return state.summary;
+  }
+
+  /**
+   * 手动生成全文摘要。只接受已保存的原文，超过输入上限时拒绝并提示手动填写。
+   * 成功后把摘要写入译文缓存并返回最新缓存文本。
+   */
+  async generateSummary(
+    sourceUri: vscode.Uri,
+    signal?: AbortSignal,
+  ): Promise<string> {
+    if (signal?.aborted) {
+      throw new CancelledError();
+    }
+    if (!this.provider.supportsSummary || !this.provider.summarize) {
+      throw new Error(
+        "当前翻译服务不支持自动生成全文摘要，请在预览中手动填写，或切换到 OpenAI 兼容服务。",
+      );
+    }
+    const state = await this.loadState(sourceUri, true, "生成摘要");
+    if (!state.sourceText.trim()) {
+      throw new Error("原文为空，无法生成摘要。");
+    }
+    if (estimateTokenCount(state.sourceText) > SUMMARY_MAX_INPUT_TOKENS) {
+      throw new Error(
+        `原文超过摘要输入上限（约 ${SUMMARY_MAX_INPUT_TOKENS} tokens），请手动填写摘要或拆分文档。`,
+      );
+    }
+    const text = (
+      await this.provider.summarize(
+        {
+          text: state.sourceText,
+          sourceLanguage: state.sourceLanguage,
+          targetLanguage: state.targetLanguage,
+          title: path.basename(sourceUri.fsPath),
+        },
+        signal,
+      )
+    ).trim();
+    if (signal?.aborted) {
+      throw new CancelledError();
+    }
+    if (!text) {
+      throw new Error("AI 返回了空摘要，请重试或手动填写。");
+    }
+    return this.writeSummary(state, text, this.provider.label);
+  }
+
+  /** 保存用户在预览中编辑的摘要；会按当前原文更新关联哈希。 */
+  async saveSummary(sourceUri: vscode.Uri, text: string): Promise<string> {
+    if (!text.trim()) {
+      throw new Error("摘要不能为空。");
+    }
+    const state = await this.loadState(sourceUri, true, "保存摘要");
+    return this.writeSummary(state, text, "manual");
+  }
+
+  /**
+   * 删除缓存中的摘要，保留译文块；若缓存只剩空文件则删除文件。
+   * 返回最新缓存文本（缓存文件被删除时为 undefined）。
+   */
+  async clearSummary(
+    sourceUri: vscode.Uri,
+  ): Promise<string | undefined> {
+    const state = await this.loadState(sourceUri, false);
+    if (!state.cacheText?.trim()) {
+      return undefined;
+    }
+    const cache = parseCacheDocument(state.cacheText, this.md);
+    if (!cache.summary) {
+      return state.cacheText;
+    }
+    const entries = this.orderedCacheEntries(cache);
+    const nextText = serializeCacheDocument(cache.frontmatter, entries);
+    if (!nextText.trim()) {
+      await this.cacheStore.delete(state.cacheUri);
+      this.log(`clear summary and empty cache of ${path.basename(sourceUri.fsPath)}`);
+      return undefined;
+    }
+    await this.cacheStore.write(state.cacheUri, nextText);
+    this.log(`clear summary of ${path.basename(sourceUri.fsPath)}`);
+    return nextText;
+  }
+
+  /** 摘要写入会重排缓存条目，存在未跟踪/孤儿锚点时拒绝，避免静默丢失内容。 */
+  private assertCacheSummaryWritable(cache: CacheDocument): void {
+    if (cache.untracked.length > 0) {
+      throw new Error(
+        "译文缓存中存在未加锚点的内容，请先清理后再保存摘要。",
+      );
+    }
+    if (cache.orphanAnchors.length > 0) {
+      throw new Error(
+        "译文缓存中存在找不到译文块的锚点，请先清理后再保存摘要。",
+      );
+    }
+  }
+
+  /** 把摘要写入缓存；没有缓存文件时创建一个只含摘要元数据的缓存。 */
+  private async writeSummary(
+    state: LoadedState,
+    text: string,
+    model?: string,
+  ): Promise<string> {
+    const summaryText = text.trim();
+    if (summaryText.length > MAX_SUMMARY_CHARS) {
+      throw new Error(
+        `摘要过长（超过 ${MAX_SUMMARY_CHARS} 字符），请精简后再保存。`,
+      );
+    }
+    const cache = parseCacheDocument(state.cacheText ?? "", this.md);
+    this.assertCacheSummaryWritable(cache);
+    const entries = this.orderedCacheEntries(cache);
+    const nextText = serializeCacheDocument(
+      cache.frontmatter ?? parseMarkdownDocument(state.sourceText, this.md).frontmatter,
+      entries,
+      {
+        text: summaryText,
+        sourceHash: summarySourceHash(state.sourceText),
+        updatedAt: new Date().toISOString(),
+        ...(model ? { model } : {}),
+      },
+    );
+    await this.cacheStore.write(state.cacheUri, nextText);
+    this.log(`write summary of ${path.basename(state.sourceUri.fsPath)}`);
+    return nextText;
   }
 
   // ---- target-only 块与原文插入联动 ----
@@ -868,7 +1103,7 @@ export class SyncService {
           },
           content: draft.targetText,
         });
-        cacheText = serializeCacheDocument(cache.frontmatter, entries);
+        cacheText = serializeCacheDocument(cache.frontmatter, entries, cache.summary);
       }
 
       await this.cacheStore.write(state.cacheUri, cacheText);
@@ -958,6 +1193,7 @@ export class SyncService {
     const nextText = serializeCacheDocument(
       cache.frontmatter ?? source.frontmatter,
       entries,
+      cache.summary,
     );
     await this.cacheStore.write(state.cacheUri, nextText);
     this.log(`insert target block after ${afterIndex} of ${path.basename(sourceUri.fsPath)}`);
@@ -999,7 +1235,7 @@ export class SyncService {
           }
         : entry,
     );
-    const nextText = serializeCacheDocument(cache.frontmatter, entries);
+    const nextText = serializeCacheDocument(cache.frontmatter, entries, cache.summary);
     await this.cacheStore.write(state.cacheUri, nextText);
     this.log(`update target block ${targetId}`);
     return nextText;
@@ -1019,7 +1255,7 @@ export class SyncService {
     const entries = this.orderedCacheEntries(cache).filter(
       (entry) => entry.anchor.id !== targetId,
     );
-    const nextText = serializeCacheDocument(cache.frontmatter, entries);
+    const nextText = serializeCacheDocument(cache.frontmatter, entries, cache.summary);
     await this.cacheStore.write(state.cacheUri, nextText);
     this.log(`remove target block ${targetId}`);
     return nextText;
@@ -1039,7 +1275,7 @@ export class SyncService {
     const entries = this.orderedCacheEntries(cache).filter(
       (entry) => entry.anchor.id !== targetId,
     );
-    const nextText = serializeCacheDocument(cache.frontmatter, entries);
+    const nextText = serializeCacheDocument(cache.frontmatter, entries, cache.summary);
     await this.cacheStore.write(state.cacheUri, nextText);
     this.log(`delete target-only block ${targetId}`);
     return nextText;
@@ -1056,6 +1292,7 @@ export class SyncService {
     sourceUri: vscode.Uri,
     targetId: string,
     signal?: AbortSignal,
+    assist?: Partial<TranslationAssistSettings>,
   ): Promise<{ text: string; afterIndex: number }> {
     const state = await this.loadState(sourceUri, false);
     const source = parseMarkdownDocument(state.sourceText, this.md);
@@ -1066,10 +1303,13 @@ export class SyncService {
     if (!target) {
       throw new Error("这个译文块已不存在。");
     }
+    const assistSettings = this.resolveAssist(assist);
+    const summary = this.summaryForCache(cache, assistSettings);
     const generated = await this.backTranslateTargetText(
       sourceUri,
       target.block.raw,
       signal,
+      summary,
     );
     const parsed = parseMarkdownDocument(generated, this.md);
     if (parsed.blocks.length !== 1) {
@@ -1169,7 +1409,7 @@ export class SyncService {
           }
         : entry,
     );
-    const nextText = serializeCacheDocument(cache.frontmatter, entries);
+    const nextText = serializeCacheDocument(cache.frontmatter, entries, cache.summary);
     await this.cacheStore.write(state.cacheUri, nextText);
     this.log(`promote target block ${targetId} to source ${sourceBlock.hash}`);
     return nextText;
@@ -1235,7 +1475,7 @@ export class SyncService {
             }
           : item,
       );
-      const nextText = serializeCacheDocument(cache.frontmatter, nextEntries);
+      const nextText = serializeCacheDocument(cache.frontmatter, nextEntries, cache.summary);
       await this.cacheStore.write(state.cacheUri, nextText);
       this.log(
         `lock block ${cacheId} to source ${sourceBlock.hash} of ${path.basename(sourceUri.fsPath)}`,
@@ -1317,7 +1557,7 @@ export class SyncService {
       if (!changed) {
         return state.cacheText;
       }
-      const nextText = serializeCacheDocument(cache.frontmatter, entries);
+      const nextText = serializeCacheDocument(cache.frontmatter, entries, cache.summary);
       await this.cacheStore.write(state.cacheUri, nextText);
       this.log(
         `detach ${deletedIndices.length} deleted source block(s) from ${path.basename(sourceUri.fsPath)}`,
@@ -1600,11 +1840,18 @@ export class SyncService {
     signal?: AbortSignal,
     retranslateAll = false,
     allowPartial = false,
+    assist?: Partial<TranslationAssistSettings>,
   ): Promise<SyncOutcome> {
     this.log(
       `sync ${path.basename(state.sourceUri.fsPath)} (${retranslateAll ? "all" : retranslateStale ? "stale" : "missing"}, partial=${allowPartial})`,
     );
     const glossary = await this.loadGlossary();
+    const assistSettings = this.resolveAssist(assist);
+    // 摘要上下文由缓存中的元数据提供；过期摘要仍按用户选择继续使用。
+    const cache = state.cacheText?.trim()
+      ? parseCacheDocument(state.cacheText, this.md)
+      : undefined;
+    const summary = this.summaryForCache(cache, assistSettings);
     const result = await syncDocument({
       md: this.md,
       sourceText: state.sourceText,
@@ -1615,6 +1862,10 @@ export class SyncService {
       retranslateStale,
       retranslateAll,
       glossary: glossary.entries,
+      assist: {
+        stableTranslation: assistSettings.stableTranslation,
+        ...(summary ? { summary } : {}),
+      },
       signal,
       onProgress,
       allowPartial,

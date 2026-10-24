@@ -15,6 +15,11 @@
  * 过期与人工锁定；`editCache`、`syncService` 依赖 `anchorLine` 精确改写缓存。
  */
 import type { MarkdownIt } from "markdown-it";
+import type { CacheSummary } from "./types";
+import {
+  looksLikeSummaryMarker,
+  parseSummaryMarker,
+} from "../cache/summaryMarker";
 import { normalizeNewlines } from "../util/hash";
 import { parseMarkdownDocument } from "./segmenter";
 import {
@@ -147,8 +152,29 @@ export function parseCacheDocument(
   const cleanedLines = [...lines];
   const anchors: Array<{ line: number; anchor: BlockAnchor }> = [];
   const seenIds = new Set<string>();
+  let summary: CacheSummary | undefined;
 
   for (let i = 0; i < lines.length; i += 1) {
+    // 摘要标记是缓存元数据，不属于正文块；无论是否成功解析都从块文本中剥离，
+    // 避免损坏的摘要行变成 untracked 内容阻断同步。
+    const parsedSummary = parseSummaryMarker(lines[i]);
+    if (parsedSummary) {
+      if (summary) {
+        warnings.push(
+          `第 ${i + 1} 行出现了重复的全文摘要标记，已采用最后一条。`,
+        );
+      }
+      summary = parsedSummary;
+      cleanedLines[i] = "";
+      continue;
+    }
+    if (looksLikeSummaryMarker(lines[i])) {
+      warnings.push(
+        `第 ${i + 1} 行的全文摘要标记格式无效，已忽略该行。`,
+      );
+      cleanedLines[i] = "";
+      continue;
+    }
     const anchor = parseAnchorLine(lines[i]);
     if (anchor) {
       // id 重复说明缓存被手工复制/拼接；第二条不能再参与归属，否则会指向同一个块。
@@ -240,6 +266,7 @@ export function parseCacheDocument(
 
   return {
     frontmatter: parsed.frontmatter,
+    summary,
     blocks,
     targetBlocks,
     untracked,

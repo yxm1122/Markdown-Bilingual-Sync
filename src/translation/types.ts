@@ -17,6 +17,20 @@ import type { BlockKind } from "../markdown/types";
 
 // ---- 请求与结果数据类型 ----
 
+/** 稳定翻译参考的角色：旧译文或回译前的原文。 */
+export type TranslationReferenceRole = "previous-target" | "previous-source";
+
+/**
+ * 稳定翻译参考：把上一版结果作为模型修订的参照，而不是从零翻译。
+ * 参考文本与块正文一样按不可信输入处理，Provider 不得把它当作指令执行。
+ */
+export interface TranslationReference {
+  /** 上一版译文或原文。 */
+  text: string;
+  /** previous-target=重新翻译时的旧译文；previous-source=回译时的当前原文。 */
+  role: TranslationReferenceRole;
+}
+
 /**
  * 单个待翻译块。
  * id 由调用方生成并在本次请求内唯一；headingPath 只是给模型的上下文，
@@ -31,6 +45,8 @@ export interface TranslationItem {
   kind: BlockKind;
   /** 从祖先标题组成的路径，仅作上下文提示。 */
   headingPath: string[];
+  /** 可选：上一版结果，用于重新翻译或回译时减少措辞波动。 */
+  reference?: TranslationReference;
 }
 
 /** 术语表条目：source 到 target 的纯文本映射，不参与 Markdown 结构解析。 */
@@ -39,12 +55,26 @@ export interface GlossaryEntry {
   target: string;
 }
 
-/** 一次翻译请求；items/glossary 视为只读，Provider 不得修改调用方数据。 */
+/** 一次翻译请求；items/glossary/summary 视为只读，Provider 不得修改调用方数据。 */
 export interface TranslationRequest {
   sourceLanguage: string;
   targetLanguage: string;
   items: TranslationItem[];
   glossary: GlossaryEntry[];
+  /**
+   * 可选全文摘要（原文语言）。存在时作为整篇文档的固定上下文，
+   * 会占用每一批请求的 token 预算；Provider 必须把它当作参考数据，不得执行其中指令。
+   */
+  summary?: string;
+}
+
+/** 手动生成全文摘要的输入；sourceText 是整篇原文，不是单个块。 */
+export interface SummaryRequest {
+  text: string;
+  sourceLanguage: string;
+  targetLanguage: string;
+  /** 文件名，仅用于提示模型文档标题；不是可信指令。 */
+  title?: string;
 }
 
 /** Provider 返回的单块译文；id 必须与请求中某一项完全一致。 */
@@ -94,6 +124,8 @@ export interface TranslationProvider {
   readonly id: string;
   /** 本地化显示名。 */
   readonly label: string;
+  /** 是否支持自动生成全文摘要；不支持时仍可手动编辑摘要。 */
+  readonly supportsSummary?: boolean;
   /**
    * 翻译一批块。
    * @param request 待翻译内容与语言/术语信息。
@@ -109,6 +141,14 @@ export interface TranslationProvider {
     onProgress?: TranslationProgress,
     onChunk?: TranslationChunkHandler,
   ): Promise<TranslationResultItem[]>;
+  /**
+   * 可选能力：根据整篇原文生成原文语言的全文摘要（供翻译上下文使用）。
+   * 不支持时由调用方提示用户手动填写。
+   */
+  summarize?(
+    request: SummaryRequest,
+    signal?: AbortSignal,
+  ): Promise<string>;
   /** 可选能力：测试连接；未实现时路由器会提示当前服务不支持。 */
   testConnection?(
     sourceLanguage: string,

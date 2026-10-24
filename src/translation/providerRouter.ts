@@ -17,6 +17,7 @@ import type { MockTranslationProvider } from "./mockProvider";
 import type { OpenAITranslationProvider } from "./openaiProvider";
 import type {
   ConnectionTestResult,
+  SummaryRequest,
   TranslationChunkHandler,
   TranslationProgress,
   TranslationProvider,
@@ -55,6 +56,25 @@ export class TranslationProviderRouter implements TranslationProvider {
   /** 当前 Provider 的显示名。 */
   get label(): string {
     return this.current().label;
+  }
+
+  /** 当前 Provider 是否支持自动摘要（HTTP 模板通常不支持）。 */
+  get supportsSummary(): boolean {
+    return this.current().supportsSummary === true;
+  }
+
+  /** 转发整篇摘要请求；目标 Provider 未实现时给出可操作的中文提示。 */
+  async summarize(
+    request: SummaryRequest,
+    signal?: AbortSignal,
+  ): Promise<string> {
+    const provider = this.current();
+    if (!provider.summarize || provider.supportsSummary !== true) {
+      throw new Error(
+        "当前翻译服务不支持自动生成全文摘要。请在预览中手动填写摘要，或切换到 OpenAI 兼容服务。",
+      );
+    }
+    return provider.summarize(request, signal);
   }
 
   /** 转发翻译请求；进度、增量与取消语义完全由目标 Provider 决定。 */

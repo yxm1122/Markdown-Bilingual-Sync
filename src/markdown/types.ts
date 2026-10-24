@@ -117,6 +117,23 @@ export interface AnchoredBlock {
 }
 
 /**
+ * 缓存文件中的全文摘要元数据。
+ *
+ * 摘要不属于翻译块，解析时从缓存文本中剥离，不参与对齐与导出；
+ * `sourceHash` 用于判断摘要是否已经落后于当前原文。
+ */
+export interface CacheSummary {
+  /** 摘要正文（原文语言）。 */
+  text: string;
+  /** 生成摘要时的整篇原文哈希；与当前原文不一致时仅提示过期，仍可继续使用。 */
+  sourceHash: string;
+  /** ISO 时间戳。 */
+  updatedAt: string;
+  /** 生成摘要的模型或 Provider 标签；手动编辑时可缺省。 */
+  model?: string;
+}
+
+/**
  * 解析后的译文缓存文档。
  *
  * `blocks` 与 `targetBlocks` 分开保存，是因为只有前者能参与“原文-译文”对齐；
@@ -124,6 +141,8 @@ export interface AnchoredBlock {
  */
 export interface CacheDocument {
   frontmatter?: MarkdownBlock;
+  /** 可选的全文摘要元数据；解析时已从块文本中剥离。 */
+  summary?: CacheSummary;
   /** 带锚点、可参与对齐的译文块（含 `deleted` 墓碑）。 */
   blocks: AnchoredBlock[];
   /** `mode` 为 `target` 的附加译文块，没有对应原文。 */

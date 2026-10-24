@@ -1209,6 +1209,21 @@
       if (!type) {
         return;
       }
+      // 摘要保存需要显式带回 textarea 内容；生成/清除不需要文本。
+      if (type === "saveSummary") {
+        const panel = action.closest("[data-summary-panel]");
+        const textarea = panel?.querySelector("[data-summary-text]");
+        if (!(textarea instanceof HTMLTextAreaElement) || !textarea.value.trim()) {
+          showToast(text("summaryEmpty"), "error");
+          return;
+        }
+        post({ type: "saveSummary", summaryText: textarea.value });
+        return;
+      }
+      if (type === "generateSummary" || type === "clearSummary") {
+        post({ type: type });
+        return;
+      }
       if (type === "togglePaneReadonly") {
         // 只读切换会让宿主重绘整页；先记录滚动位置，刷新后恢复阅读位置。
         captureScroll();
@@ -1253,6 +1268,22 @@
 
   // 鼠标离开块后自动收起三点菜单与二级操作，避免菜单残留在页面上；
   // relatedTarget 仍在块内时说明只是移到了子元素，不收起。
+  // 稳定翻译/摘要上下文是会话级开关，只改变主进程后续请求参数，不触发布局刷新。
+  root.addEventListener("change", function (event) {
+    const target = event.target;
+    if (
+      !(target instanceof HTMLInputElement) ||
+      !target.matches("[data-assist-toggle]")
+    ) {
+      return;
+    }
+    post({
+      type: "setAssistToggle",
+      key: target.dataset.assistToggle || "",
+      value: target.checked,
+    });
+  });
+
   root.addEventListener("mouseout", function (event) {
     const target = event.target;
     if (!(target instanceof Element)) {

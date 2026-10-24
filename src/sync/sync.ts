@@ -18,6 +18,7 @@
  */
 import type { MarkdownIt } from "markdown-it";
 import { isDeletedMarker } from "../cache/deletedMarker";
+import { createSummaryMarker } from "../cache/summaryMarker";
 import { alignDocument, isHumanAnchoredBlock } from "../markdown/align";
 import {
   parseCacheDocument,
@@ -31,6 +32,7 @@ import {
   type BlockAnchor,
   type BlockKind,
   type CacheDocument,
+  type CacheSummary,
   type MarkdownBlock,
   type ParsedMarkdown,
 } from "../markdown/types";
@@ -68,6 +70,14 @@ export type SyncProgressReporter = (
   detail?: SyncProgressDetail,
 ) => void;
 
+/** 稳定翻译与全文摘要的运行时选项（由设置/预览开关解析后传入）。 */
+export interface TranslationAssistOptions {
+  /** 重新翻译时是否把旧译文作为参考；缺省 false，由 SyncService 按设置解析。 */
+  stableTranslation?: boolean;
+  /** 全文摘要（原文语言）；存在时作为每批固定上下文，并计入预算。 */
+  summary?: string;
+}
+
 /** `syncDocument` 的输入。 */
 export interface SyncOptions {
   /** 与切块、缓存解析共享的 markdown-it 实例。 */
@@ -83,6 +93,8 @@ export interface SyncOptions {
   /** 是否重译所有 `auto` 块（不影响人工块）。 */
   retranslateAll?: boolean;
   glossary?: readonly GlossaryEntry[];
+  /** 稳定翻译参考与全文摘要上下文。 */
+  assist?: TranslationAssistOptions;
   signal?: AbortSignal;
   onProgress?: SyncProgressReporter;
   /**
@@ -149,16 +161,21 @@ function normalizeContent(text: string): string {
 /**
  * 序列化整篇缓存。
  *
- * 有 frontmatter 时置于最前；每个条目之间用空行分隔，并在末尾补一个换行。返回空串
- * 表示没有任何内容。正文按原样写入，调用方需保证其已被规范化且不含锚点行。
+ * 有 frontmatter 时置于最前，随后是可选摘要标记；每个条目之间用空行分隔，
+ * 并在末尾补一个换行。返回空串表示没有任何内容。正文按原样写入，调用方需保证
+ * 其已被规范化且不含锚点行。
  */
 export function serializeCacheDocument(
   frontmatter: MarkdownBlock | undefined,
   entries: readonly CacheEntry[],
+  summary?: CacheSummary,
 ): string {
   const parts: string[] = [];
   if (frontmatter?.raw.trim()) {
     parts.push(frontmatter.raw.trimEnd());
+  }
+  if (summary?.text.trim()) {
+    parts.push(createSummaryMarker(summary));
   }
   for (const entry of entries) {
     parts.push(serializeAnchor(entry.anchor));
@@ -471,6 +488,17 @@ export async function syncDocument(options: SyncOptions): Promise<SyncResult> {
     if (!anchorId) {
       throw new Error(`块 ${sourceBlock.index + 1} 缺少锚点 id。`);
     }
+    const reference =
+      options.assist?.stableTranslation === true &&
+      cached &&
+      cached.anchor.mode !== "deleted" &&
+      cached.anchor.mode !== "copy" &&
+      cached.block.raw.trim()
+        ? {
+            text: cached.block.raw,
+            role: "previous-target" as const,
+          }
+        : undefined;
     tasks.push({
       anchorId,
       item: {
@@ -478,6 +506,7 @@ export async function syncDocument(options: SyncOptions): Promise<SyncResult> {
         text: sourceBlock.raw,
         kind: sourceBlock.kind,
         headingPath: headingPaths.get(sourceBlock.index) ?? [],
+        ...(reference ? { reference } : {}),
       },
     });
   }
@@ -499,7 +528,11 @@ export async function syncDocument(options: SyncOptions): Promise<SyncResult> {
     );
 
     let entries = mergeTargetEntries(prepared.entries, cache);
-    const draftText = serializeCacheDocument(source.frontmatter, entries);
+    const draftText = serializeCacheDocument(
+      source.frontmatter,
+      entries,
+      cache.summary,
+    );
     const draft = parseCacheDocument(draftText, md);
     // 译文正文若意外包含块级结构或空行，会在这里裂出未跟踪块。
     if (draft.untracked.length > 0) {
@@ -533,7 +566,11 @@ export async function syncDocument(options: SyncOptions): Promise<SyncResult> {
       };
     });
 
-    const cacheText = serializeCacheDocument(source.frontmatter, entries);
+    const cacheText = serializeCacheDocument(
+      source.frontmatter,
+      entries,
+      cache.summary,
+    );
     const finalCache = parseCacheDocument(cacheText, md);
     const alignment = alignDocument(source.blocks, finalCache);
     return {
@@ -630,6 +667,9 @@ export async function syncDocument(options: SyncOptions): Promise<SyncResult> {
           targetLanguage,
           items: tasks.map((task) => task.item),
           glossary: [...glossary],
+          ...(options.assist?.summary?.trim()
+            ? { summary: options.assist.summary }
+            : {}),
         },
         signal,
         (completed, total) => {

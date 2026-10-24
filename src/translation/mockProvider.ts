@@ -17,6 +17,7 @@ import type { BlockKind } from "../markdown/types";
 import {
   applyGlossary,
   validateTranslationResult,
+  type SummaryRequest,
   type TranslationChunkHandler,
   type TranslationItem,
   type TranslationProgress,
@@ -269,6 +270,32 @@ function mockTranslate(
 export class MockTranslationProvider implements TranslationProvider {
   readonly id = "mock";
   readonly label = "演示翻译（Mock）";
+  readonly supportsSummary = true;
+
+  /**
+   * 生成固定的演示摘要：取前几个非空段落/标题，便于离线验证摘要 UI 与上下文链路。
+   * 不调用网络、不执行文档内容。
+   */
+  async summarize(
+    request: SummaryRequest,
+    signal?: AbortSignal,
+  ): Promise<string> {
+    if (signal?.aborted) {
+      throw new Error("翻译已取消");
+    }
+    const lines = request.text
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter(Boolean)
+      .slice(0, 6);
+    return [
+      "Mock document summary",
+      request.title ? `Title: ${request.title}` : "",
+      ...lines.map((line) => `- ${line.slice(0, 120)}`),
+    ]
+      .filter(Boolean)
+      .join("\n");
+  }
 
   /**
    * 同步生成全部译文并校验。

@@ -7,6 +7,19 @@
  */
 
 /**
+ * 扩展支持的编辑器语言 ID。
+ *
+ * `skill` 是 Qoder 等环境为部分 Markdown 文件提供的语言 ID；文件内容仍是 Markdown，
+ * 因此缓存、导出与切块逻辑无需区分，只在激活事件、菜单与活动编辑器判断中放行。
+ */
+export const SUPPORTED_LANGUAGE_IDS = ["markdown", "skill"] as const;
+
+/** 判断语言 ID 是否属于扩展支持的范围。纯函数。 */
+export function isSupportedLanguageId(languageId: string): boolean {
+  return (SUPPORTED_LANGUAGE_IDS as readonly string[]).includes(languageId);
+}
+
+/**
  * 取 BCP-47 标签的主语言子标签并转小写，作为文件后缀。
  *
  * 例如 zh-CN → zh、ja-JP → ja、en → en。只允许 1–8 位字母数字，避免把用户设置原样

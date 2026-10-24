@@ -109,6 +109,41 @@ describe("GenericHttpTranslationProvider", () => {
     });
   });
 
+  it("passes reference and summary template variables", async () => {
+    const { provider, calls } = createProvider(
+      async (_url, init) => {
+        const body = JSON.parse(String(init?.body));
+        return jsonResponse({ translation: `译：${body.q}` });
+      },
+      {
+        bodyTemplate: JSON.stringify({
+          q: "{{text}}",
+          reference: "{{referenceText}}",
+          role: "{{referenceRole}}",
+          summary: "{{summary}}",
+        }),
+      },
+    );
+    const sourceItem = {
+      ...item("a", "Hello."),
+      reference: {
+        text: "旧译文",
+        role: "previous-target" as const,
+      },
+    };
+    await provider.translate({
+      ...request([sourceItem]),
+      summary: "全文摘要",
+    });
+
+    expect(JSON.parse(String(calls[0].init?.body))).toEqual({
+      q: "Hello.",
+      reference: "旧译文",
+      role: "previous-target",
+      summary: "全文摘要",
+    });
+  });
+
   it("sends one request per item and reports progress", async () => {
     const { provider, calls } = createProvider(async (_url, init) => {
       const body = JSON.parse(String(init?.body));

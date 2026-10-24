@@ -48,7 +48,7 @@ export const UI_TEXT = {
   // 扩展宿主侧：命令、输入框、确认对话框与批量处理提示。
   extension: {
     openMarkdownFirst:
-      "请先打开一个 Markdown 文件，再运行 Markdown Bilingual Sync 命令。",
+      "请先打开一个 Markdown 或 Skill 文件，再运行 Markdown Bilingual Sync 命令。",
     syncPreparing: "正在准备同步…",
     syncTitleAll: "全部重译完成",
     syncTitleStale: "批量重译完成",
@@ -217,6 +217,25 @@ export const UI_TEXT = {
       resetSourceTitle: "清除所有暂存的原文修改、插入和删除",
     },
     // 翻译态占位文本：目标块无内容、未翻译、已删除等场景。
+    summary: {
+      title: "全文摘要",
+      placeholder: "尚未生成全文摘要。可点击“AI 生成”，也可以直接手动填写。",
+      generate: "AI 生成",
+      generating: "生成中…",
+      save: "保存摘要",
+      clear: "清除摘要",
+      stale: "可能过期",
+      tokens: "约 {count} tokens",
+      generatedAt: "生成于 {time}",
+      manual: "手动编辑",
+      staleHint: "原文已变化，摘要仍会作为上下文使用。",
+      useSummary: "使用全文摘要上下文",
+      stableTranslation: "参考上一版译文",
+      unsupported: "当前翻译服务不支持自动生成，请手动填写。",
+      noSummary: "未生成",
+      generated: "已生成",
+      empty: "摘要不能为空。",
+    },
     placeholders: {
       targetEmpty: "译文块没有产生可见内容。",
       copyPending: "尚未同步，将按原文原样复制。",
@@ -386,6 +405,13 @@ export const UI_TEXT = {
     sourceWriteFailed: "写回原文失败。",
     backTranslating: "正在回译该块…",
     backCancelled: "已取消回译。",
+    summaryGenerating: "正在生成全文摘要…",
+    summaryGenerated: "全文摘要已生成。",
+    summaryCancelled: "已取消生成摘要。",
+    summarySaving: "正在保存全文摘要…",
+    summarySaved: "全文摘要已保存。",
+    summaryCleared: "全文摘要已清除。",
+    summaryEmpty: "摘要不能为空。",
     backStaged: "回译结果已暂存为原文修改，点击“应用原文修改”写回文件。",
     backSame: "回译结果与当前原文一致，未暂存修改。",
     backMultiBlock: "回译结果包含多个 Markdown 块，无法暂存为单个原文块。",

@@ -11,6 +11,7 @@
 
 - 以顶层语义块为翻译单元：标题、段落、整段列表、整张表格、整段引用。
 - 双语 Webview 预览：并排、交错与真正的左右分栏布局，分栏模式支持两个独立滚动窗格和块级滚动同步；支持 GFM、代码高亮、KaTeX、脚注和 GitHub Alerts。
+- 同时支持 Markdown 与 Qoder 等环境提供的 `skill` 语言 ID（文件内容仍为 Markdown）。
 - 可切换的 OpenAI 兼容或通用 HTTP 翻译服务，API Key 只保存在 VS Code SecretStorage；内置常用服务预设。
 - 导入已有译文：按顶层块结构校验并对齐，全部标记为译文锁定；预览工具栏和命令面板都可发起导入。
 - 缓存清理：可清理当前文件缓存，或一键清除扩展存储中的所有译文缓存。
@@ -20,6 +21,8 @@
 - 译文锁定：编辑译文缓存并保存后，该块不会被自动重译覆盖。
 - 预览内编辑：点击原文或译文内容即可就地编辑原始 Markdown；译文保存后立即锁定，原文修改暂存后可先查看差异再写回源文件。
 - 回译改写原文：对已有译文的块执行反向翻译，结果直接进入原文暂存；写回后该块译文锁定到新的原文，不会被同步覆盖。
+- 稳定翻译：重新翻译参考旧译文，回译参考当前原文，减少细微修改造成的措辞波动；设置与预览开关均可控制。
+- 全文摘要：手动生成原文语言摘要，作为同步/重译/回译的上下文；摘要随译文缓存保存，可在预览中查看、编辑、清除。
 - 单块重译、过期块重译、全部机器译文重译。
 - 全局术语表与标题上下文增强。
 - 导出到同目录语言后缀文件，写入前显示分栏差异确认。
@@ -88,6 +91,9 @@ npm run package
 - 需要接受当前原文时，使用 **标记已同步**。
 - 需要重译单个块时，使用该块上的 **重新翻译**。
 - 每个已有译文的可翻译块都有 **回译** 按钮：把译文翻回原文语言，结果直接进入原文暂存，不弹出额外窗口；点击 **应用原文修改** 后写回源文件，并把这一个译文块锁定到新的原文。回译结果与当前原文一致时不会产生暂存修改。
+- **稳定翻译** 默认开启：重新翻译（单块/过期/全部）会把旧译文作为参考，回译会把当前原文作为参考；显式重译 human 块时也会参考旧译文。预览中的“参考上一版译文”开关只影响当前会话，设置页 `stableTranslation` 控制默认值。
+- **全文摘要** 只能手动生成（OpenAI 兼容/Mock），HTTP Provider 可手动填写。摘要面板显示状态、token 估算和过期提示；“AI 生成/保存/清除”会写回缓存。预览中的“使用全文摘要上下文”开关只影响当前会话，设置页 `summaryContext` 控制默认值。
+- 摘要写入缓存内的专用标记，不参与块对齐和导出；源文变化后显示“可能过期”但仍会作为上下文使用；清除缓存时摘要一起删除。摘要生成输入上限约 12k tokens，超出时请手动填写。
 
 ### 块状态与缓存标记
 
@@ -143,8 +149,9 @@ npm run package
 
 - `markdownBilingualSync.provider` 设为 `http` 后启用。
 - 请求方法支持 `POST`、`PUT`、`PATCH`；`httpHeaders` 与 `httpBody` 都是 JSON 模板。
-- 模板变量：`{{text}}`、`{{id}}`、`{{kind}}`、`{{headingPath}}`、`{{sourceLanguage}}`、`{{targetLanguage}}`、`{{apiKey}}`。
+- 模板变量：`{{text}}`、`{{id}}`、`{{kind}}`、`{{headingPath}}`、`{{sourceLanguage}}`、`{{targetLanguage}}`、`{{apiKey}}`、`{{referenceText}}`、`{{referenceRole}}`、`{{summary}}`。
 - 通用 Provider 每个翻译块发送一次请求；`httpResponseType` 为 `json` 时按 `httpResponsePath` 提取文本，为 `text` 时直接把响应体作为译文。
+- 稳定翻译参考和全文摘要只有模板显式引用 `{{referenceText}}`/`{{summary}}` 时才会发送；`{{referenceRole}}` 为 `previous-target` 或 `previous-source`。
 - 示例 `httpBody`：
   ```json
   {"text":"{{text}}","source_language":"{{sourceLanguage}}","target_language":"{{targetLanguage}}"}
@@ -237,8 +244,10 @@ npm run package
 | `markdownBilingualSync.apiModel` | `gpt-4o-mini` | 服务端支持的模型名 |
 | `markdownBilingualSync.apiDisableThinking` | `false` | 开启后发送 `enable_thinking: false`，仅用于支持该参数的服务 |
 | `markdownBilingualSync.apiBatchSize` | `50` | 单批块数硬上限；实际批次由 token 预算动态决定 |
-| `markdownBilingualSync.apiBatchTokenBudget` | `2000` | 每批输入内容的估算 token 预算；会避免过小批次，系统提示、术语表和输出另计 |
+| `markdownBilingualSync.apiBatchTokenBudget` | `2000` | 每批输入内容的估算 token 预算；会避免过小批次，全文摘要、参考译文与术语表计入，输出另计 |
 | `markdownBilingualSync.translationConcurrency` | `8` | 文件级、文件内批次和手动请求共享的并发上限（1–100） |
+| `markdownBilingualSync.stableTranslation` | `true` | 重新翻译参考旧译文、回译参考当前原文，减少措辞波动；预览内可临时切换 |
+| `markdownBilingualSync.summaryContext` | `true` | 默认把手动生成的全文摘要作为同步/重译/回译上下文；预览内可临时切换 |
 | `markdownBilingualSync.apiTimeoutMs` | `120000` | 单次请求超时（毫秒），OpenAI 兼容与通用 HTTP 共用 |
 | `markdownBilingualSync.httpEndpoint` | 空 | 通用 HTTP 接口完整 URL，可含模板变量 |
 | `markdownBilingualSync.httpMethod` | `POST` | 通用 HTTP 请求方法：`POST`、`PUT`、`PATCH` |
@@ -279,6 +288,8 @@ npm run package
 - 删除原文块并写回后，对应译文会自动降级为独立译文块（target 锚点），不会产生孤立锚点或阻止后续同步。
 - 清理当前缓存或清除所有缓存后无法在扩展内恢复；需要长期保留的译文请先导出。
 - 回译按块执行，不会自动批量回译整个文档。
+- 全文摘要只能手动生成；HTTP Provider 不支持自动生成摘要，只能手动填写；超大文档（超过约 12k tokens）目前不自动分段摘要。
+- 摘要和稳定参考会增加每次翻译的输入 token；摘要上下文按每批固定开销计入预算。
 - 不支持 Mermaid、原始 HTML、自定义提示词和流式输出。
 - 术语表是全局的，不支持项目级覆盖。
 - UI 目前仅提供中文；界面、预览和通知文案集中在 `src/i18n/zh.ts`，领域诊断文案仍随模块内联。

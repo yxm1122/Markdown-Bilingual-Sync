@@ -90,6 +90,12 @@ class FakeCacheStore {
     this.text = text;
     this.writes += 1;
   }
+
+  async delete(): Promise<boolean> {
+    const existed = this.text !== undefined;
+    this.text = undefined;
+    return existed;
+  }
 }
 
 describe("SyncService block editing and back-translation", () => {
@@ -106,12 +112,16 @@ describe("SyncService block editing and back-translation", () => {
     const provider: TranslationProvider = {
       id: "test",
       label: "Test",
+      supportsSummary: true,
       async translate(request) {
         requests.push(request);
         return request.items.map((item) => ({
           id: item.id,
-          text: `回译：${item.text}`,
+          text: `回译：${item.id}`,
         }));
+      },
+      async summarize(summaryRequest) {
+        return `摘要：${summaryRequest.text.split("\n")[0]}`;
       },
     };
     const glossaryStore = {
@@ -626,5 +636,78 @@ describe("SyncService block editing and back-translation", () => {
     expect(cache.targetBlocks).toHaveLength(1);
     expect(cache.targetBlocks[0].anchor.mode).toBe("target");
     expect(cache.targetBlocks[0].block.raw).toBe("人工锁定译文。");
+  });
+
+  it("stores summaries in cache and sends them with stable translation references", async () => {
+    const uri = mocks.FakeUri.file("/project/demo.md") as unknown as Uri;
+    const paragraph = inspect(SOURCE, cacheStore.text!).alignment.blocks.find(
+      (block) => block.source.kind === "paragraph" && block.cache,
+    )!;
+    const previousTarget = paragraph.cache!.block.raw;
+
+    const cacheText = await service.saveSummary(uri, "本文介绍翻译流程。");
+    const cache = parseCacheDocument(cacheText, makeMd());
+    expect(cache.summary?.text).toBe("本文介绍翻译流程。");
+    expect(inspect(SOURCE, cacheText).alignment.blocks).toHaveLength(4);
+
+    requests = [];
+    await service.retranslateBlock(uri, paragraph.source.index);
+    expect(requests[0].summary).toBe("本文介绍翻译流程。");
+    expect(requests[0].items[0].reference).toEqual({
+      role: "previous-target",
+      text: previousTarget,
+    });
+
+    requests = [];
+    await service.backTranslateBlock(uri, paragraph.source.index);
+    expect(requests[0].summary).toBe("本文介绍翻译流程。");
+    expect(requests[0].items[0].reference).toEqual({
+      role: "previous-source",
+      text: paragraph.source.raw,
+    });
+
+    const cleared = await service.clearSummary(uri);
+    expect(parseCacheDocument(cleared ?? "", makeMd()).summary).toBeUndefined();
+  });
+
+  it("generates a summary through the provider and keeps it across sync", async () => {
+    const uri = mocks.FakeUri.file("/project/demo.md") as unknown as Uri;
+    const cacheText = await service.generateSummary(uri);
+    expect(parseCacheDocument(cacheText, makeMd()).summary?.text).toContain(
+      "摘要：",
+    );
+
+    requests = [];
+    await service.retranslateAll(uri);
+    expect(requests[0].summary).toContain("摘要：");
+    expect(cacheStore.text).toContain("mbs-summary:");
+  });
+
+  it("generates a summary without an existing translation cache", async () => {
+    cacheStore.text = undefined;
+    const uri = mocks.FakeUri.file("/project/demo.md") as unknown as Uri;
+
+    const cacheText = await service.generateSummary(uri);
+    const parsed = parseCacheDocument(cacheText, makeMd());
+    expect(parsed.summary?.text).toContain("摘要：");
+    expect(parsed.blocks).toHaveLength(0);
+
+    await service.clearSummary(uri);
+    expect(cacheStore.text).toBeUndefined();
+  });
+
+  it("can disable stable reference and summary context per operation", async () => {
+    const uri = mocks.FakeUri.file("/project/demo.md") as unknown as Uri;
+    const paragraph = inspect(SOURCE, cacheStore.text!).alignment.blocks.find(
+      (block) => block.source.kind === "paragraph" && block.cache,
+    )!;
+    await service.saveSummary(uri, "摘要文本");
+    requests = [];
+    await service.retranslateBlock(uri, paragraph.source.index, undefined, {
+      stableTranslation: false,
+      summaryContext: false,
+    });
+    expect(requests[0].summary).toBeUndefined();
+    expect(requests[0].items[0].reference).toBeUndefined();
   });
 });

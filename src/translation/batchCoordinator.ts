@@ -8,7 +8,7 @@
  * 关键不变量：
  * - 合并请求使用 `mbsq_<callId>_<index>` 复合 id，调用方永远看不到复合 id；
  * - 每个调用块必须恰好交付一次：重复交付立即报错，缺失则整个调用失败；
- * - 只合并 sourceLanguage/targetLanguage 完全相同的调用；术语表按 source 去重（先到先得）；
+ * - 只合并 sourceLanguage/targetLanguage/全文摘要完全相同的调用；术语表按 source 去重（先到先得）；
  * - 一个调用取消不影响同组其他调用；只有组内所有调用都取消/结算后才 abort 组信号。
  *
  * 外部依赖：被包装的 TranslationProvider；纯内存调度，不读写文件/配置。
@@ -16,9 +16,11 @@
  * 安全边界：不解析译文内容；复合 id 仅是内存中的路由键，不写入缓存。
  * 调用方应保证 request.items 非空（本实现不会为空组发起代理请求）。
  */
+import { shortHash } from "../util/hash";
 import type {
   GlossaryEntry,
   TranslationChunkHandler,
+  SummaryRequest,
   TranslationProgress,
   TranslationProvider,
   TranslationRequest,
@@ -96,6 +98,27 @@ export class BatchTranslationCoordinator implements TranslationProvider {
   /** 显示名透传被包装 Provider。 */
   get label(): string {
     return this.delegate.label;
+  }
+
+  /** 摘要能力透传；HTTP 等不支持自动摘要的 Provider 返回 false。 */
+  get supportsSummary(): boolean {
+    return this.delegate.supportsSummary === true;
+  }
+
+  /** 摘要请求不参与跨文件合并，直接转发给被包装 Provider。 */
+  summarize(
+    request: SummaryRequest,
+    signal?: AbortSignal,
+  ): Promise<string> {
+    if (signal?.aborted) {
+      return Promise.reject(new Error("翻译已取消"));
+    }
+    if (!this.delegate.summarize || this.delegate.supportsSummary !== true) {
+      return Promise.reject(
+        new Error("当前翻译服务不支持自动生成全文摘要，请手动填写。"),
+      );
+    }
+    return this.delegate.summarize(request, signal);
   }
 
   /**
@@ -178,10 +201,12 @@ export class BatchTranslationCoordinator implements TranslationProvider {
       if (calls.length === 0) {
         return;
       }
-      // 以“源语言\0目标语言”为键分组：不同语言对绝不能合并，否则提示词与校验会错位。
+      // 以“源语言\0目标语言\0摘要哈希”为键分组：不同语言对或不同全文摘要不能合并，
+      // 否则固定上下文会串台。摘要只存哈希，避免把长文本放进 Map 键。
       const groups = new Map<string, PendingCall[]>();
       for (const call of calls) {
-        const key = `${call.request.sourceLanguage}\u0000${call.request.targetLanguage}`;
+        const summaryKey = shortHash(call.request.summary?.trim() ?? "");
+        const key = `${call.request.sourceLanguage}\u0000${call.request.targetLanguage}\u0000${summaryKey}`;
         const group = groups.get(key) ?? [];
         group.push(call);
         groups.set(key, group);
@@ -352,6 +377,9 @@ export class BatchTranslationCoordinator implements TranslationProvider {
           targetLanguage: calls[0].request.targetLanguage,
           items: combinedItems,
           glossary,
+          ...(calls[0].request.summary?.trim()
+            ? { summary: calls[0].request.summary }
+            : {}),
         },
         controller.signal,
         undefined,

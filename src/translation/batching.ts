@@ -24,6 +24,8 @@ export interface TranslationBatchOptions {
   tokenBudget: number;
   /** 期望的并行度；<=1 时走简单贪心，不追求批次均衡。 */
   concurrency?: number;
+  /** 每批固定上下文（全文摘要等）的估算 token；会从每批预算中扣除。 */
+  contextTokens?: number;
 }
 
 const ITEM_OVERHEAD_TOKENS = 24;
@@ -63,8 +65,16 @@ export function estimateItemTokens(item: TranslationItem): number {
   return (
     ITEM_OVERHEAD_TOKENS +
     estimateTokenCount(item.text) +
-    estimateTokenCount(item.headingPath.join(" > "))
+    estimateTokenCount(item.headingPath.join(" > ")) +
+    (item.reference
+      ? estimateTokenCount(item.reference.text) + 12
+      : 0)
   );
+}
+
+/** 估算每批固定上下文（全文摘要）的 token；无摘要时为 0。纯函数。 */
+export function estimateSummaryContextTokens(summary?: string): number {
+  return summary?.trim() ? estimateTokenCount(summary) + 24 : 0;
 }
 
 /** 规范化分批参数：取整并保证下界，非法数值回退到默认值。纯函数。 */
@@ -72,6 +82,7 @@ function normalizeOptions(options: TranslationBatchOptions): {
   maxItems: number;
   tokenBudget: number;
   concurrency: number;
+  contextTokens: number;
 } {
   const maxItems = Number.isFinite(options.maxItems)
     ? Math.max(1, Math.floor(options.maxItems))
@@ -82,7 +93,10 @@ function normalizeOptions(options: TranslationBatchOptions): {
   const concurrency = Number.isFinite(options.concurrency)
     ? Math.max(1, Math.floor(options.concurrency ?? 1))
     : 1;
-  return { maxItems, tokenBudget, concurrency };
+  const contextTokens = Number.isFinite(options.contextTokens)
+    ? Math.max(0, Math.floor(options.contextTokens ?? 0))
+    : 0;
+  return { maxItems, tokenBudget, concurrency, contextTokens };
 }
 
 // ---- 基础贪心打包 ----
@@ -341,9 +355,13 @@ export function planTranslationBatches(
     return [];
   }
   const options = normalizeOptions(rawOptions);
+  // 摘要等固定上下文会随每个请求发送，因此从每批可用预算中扣除；
+  // 即使上下文本身超过预算，仍允许单块成批，不能丢块。
+  const effectiveBudget = Math.max(1, options.tokenBudget - options.contextTokens);
+  const effective = { ...options, tokenBudget: effectiveBudget };
   const estimates = items.map(estimateItemTokens);
-  if (options.concurrency <= 1) {
-    return greedyPack(items, estimates, options.maxItems, options.tokenBudget);
+  if (effective.concurrency <= 1) {
+    return greedyPack(items, estimates, effective.maxItems, effectiveBudget);
   }
-  return balancedPack(items, estimates, options);
+  return balancedPack(items, estimates, effective);
 }

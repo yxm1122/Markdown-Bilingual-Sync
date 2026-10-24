@@ -38,6 +38,7 @@ import {
   type SyncOutcome,
 } from "./sync/syncService";
 import { formatSyncSummary } from "./sync/summary";
+import { isSupportedLanguageId } from "./util/language";
 import { MockTranslationProvider } from "./translation/mockProvider";
 import {
   GenericHttpTranslationProvider,
@@ -101,13 +102,13 @@ function formatError(error: unknown): string {
 }
 
 /**
- * 取当前活动编辑器对应的 Markdown 文档。
- * @returns 文档 URI；没有活动 Markdown 编辑器时返回 undefined
- * @sideeffect 非 Markdown 场景会弹出警告提示（命令入口共用）
+ * 取当前活动编辑器对应的 Markdown / Skill 文档。
+ * @returns 文档 URI；不支持的语言或没有活动编辑器时返回 undefined
+ * @sideeffect 非支持语言场景会弹出警告提示（命令入口共用）
  */
 function activeMarkdownUri(): vscode.Uri | undefined {
   const editor = vscode.window.activeTextEditor;
-  if (!editor || editor.document.languageId !== "markdown") {
+  if (!editor || !isSupportedLanguageId(editor.document.languageId)) {
     void vscode.window.showWarningMessage(
       UI_TEXT.extension.openMarkdownFirst,
     );
@@ -265,7 +266,7 @@ async function saveDirtyMarkdownInFolder(
   folder: vscode.Uri,
 ): Promise<void> {
   for (const document of vscode.workspace.textDocuments) {
-    if (!document.isDirty || document.languageId !== "markdown") {
+    if (!document.isDirty || !isSupportedLanguageId(document.languageId)) {
       continue;
     }
     if (!isFileInsideFolder(folder.fsPath, document.uri.fsPath)) {
@@ -660,7 +661,7 @@ export function activate(context: vscode.ExtensionContext): void {
   register("markdownBilingualSync.openCacheFolder", () =>
     handleErrors(async () => {
       const editor = vscode.window.activeTextEditor;
-      if (editor?.document.languageId === "markdown") {
+      if (editor && isSupportedLanguageId(editor.document.languageId)) {
         await syncService.openCacheFolder(editor.document.uri);
       } else {
         await syncService.openGlobalCacheFolder();
@@ -1296,13 +1297,13 @@ export function activate(context: vscode.ExtensionContext): void {
         return;
       }
       // 原文保存：只刷新对应文件的预览（预览更新会重新读取磁盘内容）。
-      if (document.languageId === "markdown") {
+      if (isSupportedLanguageId(document.languageId)) {
         previewManager.refresh(document.uri);
       }
     }),
     vscode.workspace.onDidCloseTextDocument((document) => {
-      // 关闭 Markdown 文档时同时关闭其预览面板，避免留下无源文件的窗口。
-      if (document.languageId === "markdown") {
+      // 关闭 Markdown/Skill 文档时同时关闭其预览面板，避免留下无源文件的窗口。
+      if (isSupportedLanguageId(document.languageId)) {
         previewManager.close(document.uri);
       }
     }),

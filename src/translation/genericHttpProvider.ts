@@ -6,7 +6,8 @@
  *
  * 关键不变量：
  * - 模板变量仅允许 {{text}}/{{id}}/{{kind}}/{{headingPath}}/{{sourceLanguage}}/
- *   {{targetLanguage}}/{{apiKey}}；未知变量在配置阶段直接拒绝；
+ *   {{targetLanguage}}/{{apiKey}}/{{referenceText}}/{{referenceRole}}/{{summary}}；
+ *   未知变量在配置阶段直接拒绝；
  * - 每个待翻译块单独请求一次，结果必须非空、非原文（长句）、不超过 500k 字符；
  * - 请求 URL 与请求头在发送前重新校验，模板替换不会绕过 HTTPS/回环限制。
  *
@@ -95,6 +96,9 @@ const ALLOWED_PLACEHOLDERS = new Set([
   "sourceLanguage",
   "targetLanguage",
   "apiKey",
+  "referenceText",
+  "referenceRole",
+  "summary",
 ]);
 const HEADER_NAME = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/;
 
@@ -746,6 +750,9 @@ export class GenericHttpTranslationProvider implements TranslationProvider {
       headingPath: item.headingPath.join(" > "),
       sourceLanguage: request.sourceLanguage,
       targetLanguage: request.targetLanguage,
+      referenceText: item.reference?.text ?? "",
+      referenceRole: item.reference?.role ?? "",
+      summary: request.summary ?? "",
     };
   }
 

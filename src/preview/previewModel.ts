@@ -122,6 +122,31 @@ export interface PreviewCounts {
   copy: number;
 }
 
+/** 预览中的全文摘要视图。 */
+export interface PreviewSummaryView {
+  /** 摘要正文；未生成时为空串。 */
+  text: string;
+  /** 生成摘要后源文是否发生变化（过期仍会继续作为上下文）。 */
+  stale: boolean;
+  /** ISO 生成时间；手动填写时可能为空。 */
+  updatedAt?: string;
+  /** 生成摘要的模型/Provider；手动填写时为 manual。 */
+  model?: string;
+  /** 摘要估算 token 数。 */
+  tokens: number;
+  /** 当前 Provider 是否支持自动生成摘要。 */
+  canGenerate: boolean;
+}
+
+/** 稳定翻译/摘要上下文的预览状态。 */
+export interface PreviewAssistView {
+  /** 会话级开关；初始值来自设置。 */
+  stableTranslation: boolean;
+  summaryContext: boolean;
+  /** 摘要面板信息；没有摘要时仍有 canGenerate。 */
+  summary: PreviewSummaryView;
+}
+
 /** 一次预览渲染所需的全部数据；由 PreviewManager 在每次刷新时重建。 */
 export interface PreviewModel {
   /** 文件名（basename），用于标题与页面 `<title>`。 */
@@ -136,6 +161,8 @@ export interface PreviewModel {
   sourceFootnotesHtml: string;
   targetFootnotesHtml: string;
   counts: PreviewCounts;
+  /** 稳定翻译/摘要上下文面板状态。 */
+  assist: PreviewAssistView;
   /** 对齐/缓存/缺缓存等提示，去重后展示。 */
   warnings: string[];
   /** 当前暂存的原文修改、删除、插入总数，用于「应用原文修改 N」按钮。 */
@@ -155,6 +182,8 @@ export interface PreviewModelInput {
   resolveImage?: (src: string) => string;
   /** 尚未写回的原文暂存，用于渲染「待应用」状态。 */
   pendingSource?: SourceStage;
+  /** 稳定翻译/摘要上下文面板状态；缺省为关闭摘要、开启稳定翻译。 */
+  assist?: PreviewAssistView;
 }
 
 /** 块状态到中文文案的映射；文案来自 i18n，避免在渲染层散落字符串。 */
@@ -659,7 +688,6 @@ export function buildPreviewModel(input: PreviewModelInput): PreviewModel {
     }
   }
 
-  // 缓存只有译文独占块、没有锚点块时也视为「无缓存」，导出按钮会被禁用。
   // 译文独占块（targetBlocks）同样是有效缓存内容：删除全部原文后只剩它们时，
   // 导出仍然可用，不应提示“尚未生成缓存”。
   const cacheExists = Boolean(
@@ -675,6 +703,16 @@ export function buildPreviewModel(input: PreviewModelInput): PreviewModel {
     targetLanguage: input.targetLanguage,
     providerLabel: input.providerLabel,
     cacheExists,
+    assist: input.assist ?? {
+      stableTranslation: true,
+      summaryContext: true,
+      summary: {
+        text: "",
+        stale: false,
+        tokens: 0,
+        canGenerate: false,
+      },
+    },
     blocks,
     sourceFootnotesHtml: sourceRendered.footnoteHtml,
     targetFootnotesHtml: targetRendered.footnoteHtml,

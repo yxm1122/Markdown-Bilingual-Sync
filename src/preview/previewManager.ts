@@ -37,6 +37,7 @@ import type {
   ExportService,
   PreparedExport,
 } from "../export/exportService";
+import { summarySourceHash } from "../cache/summaryMarker";
 import { formatText, UI_TEXT } from "../i18n/zh";
 import { createMarkdownRuntime } from "../markdown/markdown";
 import { parseMarkdownDocument } from "../markdown/segmenter";
@@ -48,6 +49,7 @@ import {
 } from "../source/editSource";
 import { CancelledError, SyncService } from "../sync/syncService";
 import { SyncBlockedError } from "../sync/sync";
+import { estimateTokenCount } from "../translation/batching";
 import { languageSuffix } from "../util/language";
 import { buildPreviewModel, type PreviewModel } from "./previewModel";
 import {
@@ -360,6 +362,12 @@ class PreviewPanelSession implements vscode.Disposable {
   private sourceReadonly = false;
   /** 右栏只读（面板级、内存态，不持久化）。 */
   private targetReadonly = false;
+  /** 稳定翻译开关（会话级；初始值来自设置）。 */
+  private stableTranslation: boolean;
+  /** 摘要上下文开关（会话级；初始值来自设置）。 */
+  private summaryContext: boolean;
+  /** 摘要生成进行中；防止重复请求。 */
+  private summaryGenerating = false;
 
   /**
    * 注册消息监听并触发首次渲染（不等待）。
@@ -382,6 +390,9 @@ class PreviewPanelSession implements vscode.Disposable {
     private readonly output: vscode.OutputChannel,
     private readonly taskMonitor: TranslationTaskMonitor,
   ) {
+    const assistDefaults = syncService.getAssistSettings();
+    this.stableTranslation = assistDefaults.stableTranslation;
+    this.summaryContext = assistDefaults.summaryContext;
     // Webview 消息可能乱序/恶意：统一交给 onMessage 做形状校验后再分发。
     this.panel.webview.onDidReceiveMessage((message: unknown) => {
       void this.onMessage(message);
@@ -686,7 +697,12 @@ class PreviewPanelSession implements vscode.Disposable {
         };
       }
       const sourceDirectory = vscode.Uri.joinPath(this.sourceUri, "..");
-      // 模型是纯数据快照：暂存状态只影响展示，不在这里落盘。
+      // 摘要上下文由缓存元数据提供；源文变化只标记过期，仍按用户选择继续使用。
+      const summary = state.summary;
+      const summaryText = summary?.text ?? "";
+      const summaryStale = summary
+        ? summary.sourceHash !== summarySourceHash(state.sourceText)
+        : false;
       const model = buildPreviewModel({
         sourceText: state.sourceText,
         cacheText: cacheTextOverride ?? state.cacheText,
@@ -696,6 +712,18 @@ class PreviewPanelSession implements vscode.Disposable {
         fileLabel: path.basename(this.sourceUri.fsPath),
         resolveImage: (src) => this.resolveImage(src, sourceDirectory),
         pendingSource: this.pendingSourceStage(),
+        assist: {
+          stableTranslation: this.stableTranslation,
+          summaryContext: this.summaryContext,
+          summary: {
+            text: summaryText,
+            stale: summaryStale,
+            ...(summary?.updatedAt ? { updatedAt: summary.updatedAt } : {}),
+            ...(summary?.model ? { model: summary.model } : {}),
+            tokens: estimateTokenCount(summaryText),
+            canGenerate: this.syncService.summarySupported,
+          },
+        },
       });
       if (this.disposed || version !== this.updateVersion) {
         return;
@@ -812,6 +840,16 @@ class PreviewPanelSession implements vscode.Disposable {
     const requestedLayout =
       typeof message.layout === "string" ? message.layout : undefined;
     const pane = typeof message.pane === "string" ? message.pane : undefined;
+    const summaryText =
+      typeof message.summaryText === "string"
+        ? message.summaryText
+        : undefined;
+    const assistKey =
+      message.key === "stableTranslation" ||
+      message.key === "summaryContext"
+        ? message.key
+        : undefined;
+    const assistValue = message.value === true;
     try {
       switch (type) {
         // ---- 布局与只读：只影响当前面板的渲染参数 ----
@@ -942,6 +980,28 @@ class PreviewPanelSession implements vscode.Disposable {
         case "backTranslate":
           if (blockIndex !== undefined) {
             await this.backTranslateBlock(blockIndex);
+          }
+          break;
+        // ---- 全文摘要与稳定翻译开关 ----
+        case "generateSummary":
+          await this.generateSummary();
+          break;
+        case "saveSummary":
+          if (summaryText !== undefined) {
+            await this.saveSummary(summaryText);
+          }
+          break;
+        case "clearSummary":
+          await this.clearSummary();
+          break;
+        case "setAssistToggle":
+          if (assistKey) {
+            if (assistKey === "stableTranslation") {
+              this.stableTranslation = assistValue;
+            } else {
+              this.summaryContext = assistValue;
+            }
+            // 开关只影响后续请求；不重绘页面，避免丢失摘要文本框中未保存的编辑。
           }
           break;
         // ---- 导出确认：打开 / 写入 / 取消 ----
@@ -1229,6 +1289,10 @@ class PreviewPanelSession implements vscode.Disposable {
             this.sourceUri,
             targetId,
             controller.signal,
+            {
+              stableTranslation: this.stableTranslation,
+              summaryContext: this.summaryContext,
+            },
           );
         },
       );
@@ -1811,6 +1875,106 @@ class PreviewPanelSession implements vscode.Disposable {
    * - 回译文本与当前原文一致时视为无变化，不产生暂存；
    * - 暂存该块会取消它已有的「删除」标记，避免同一块既删又改。
    */
+  // ---- 全文摘要 ----
+
+  /**
+   * 手动生成全文摘要。只由预览按钮触发，不会在打开/保存/同步时自动调用。
+   * 使用通知进度条支持取消；完成后把最新缓存文本交给 update。
+   */
+  private async generateSummary(): Promise<void> {
+    if (this.summaryGenerating) {
+      return;
+    }
+    this.summaryGenerating = true;
+    const controller = new AbortController();
+    let cancelled = false;
+    this.setBusy(true, UI_TEXT.notifications.summaryGenerating);
+    try {
+      const cacheText = await vscode.window.withProgress(
+        {
+          location: vscode.ProgressLocation.Notification,
+          title: "Markdown Bilingual Sync",
+          cancellable: true,
+        },
+        async (progress, token) => {
+          token.onCancellationRequested(() => {
+            cancelled = true;
+            controller.abort();
+          });
+          progress.report({
+            message: UI_TEXT.notifications.summaryGenerating,
+          });
+          return this.syncService.generateSummary(
+            this.sourceUri,
+            controller.signal,
+          );
+        },
+      );
+      if (this.disposed) {
+        return;
+      }
+      await this.update(
+        {
+          text: UI_TEXT.notifications.summaryGenerated,
+          kind: "success",
+        },
+        undefined,
+        cacheText,
+      );
+    } catch (error) {
+      if (cancelled || error instanceof CancelledError) {
+        this.showToast(UI_TEXT.notifications.summaryCancelled, "info");
+        return;
+      }
+      throw error;
+    } finally {
+      this.summaryGenerating = false;
+      this.setBusy(false);
+    }
+  }
+
+  /** 保存用户编辑后的摘要；空文本由服务层拒绝。 */
+  private async saveSummary(text: string): Promise<void> {
+    if (!text.trim()) {
+      throw new Error(UI_TEXT.notifications.summaryEmpty);
+    }
+    this.setBusy(true, UI_TEXT.notifications.summarySaving);
+    try {
+      const cacheText = await this.syncService.saveSummary(
+        this.sourceUri,
+        text,
+      );
+      await this.update(
+        {
+          text: UI_TEXT.notifications.summarySaved,
+          kind: "success",
+        },
+        undefined,
+        cacheText,
+      );
+    } finally {
+      this.setBusy(false);
+    }
+  }
+
+  /** 清除摘要；若缓存只剩摘要，则缓存文件也会被删除。 */
+  private async clearSummary(): Promise<void> {
+    this.setBusy(true, UI_TEXT.notifications.summarySaving);
+    try {
+      const cacheText = await this.syncService.clearSummary(this.sourceUri);
+      await this.update(
+        {
+          text: UI_TEXT.notifications.summaryCleared,
+          kind: "info",
+        },
+        undefined,
+        cacheText,
+      );
+    } finally {
+      this.setBusy(false);
+    }
+  }
+
   private async backTranslateBlock(blockIndex: number): Promise<void> {
     const controller = new AbortController();
     let cancelled = false;
@@ -1834,6 +1998,10 @@ class PreviewPanelSession implements vscode.Disposable {
             this.sourceUri,
             blockIndex,
             controller.signal,
+            {
+              stableTranslation: this.stableTranslation,
+              summaryContext: this.summaryContext,
+            },
           );
         },
       );
@@ -2013,6 +2181,10 @@ class PreviewPanelSession implements vscode.Disposable {
               this.sourceUri,
               report,
               controller.signal,
+              {
+                stableTranslation: this.stableTranslation,
+                summaryContext: this.summaryContext,
+              },
             )
           : await this.syncService.sync(
               this.sourceUri,
@@ -2020,6 +2192,10 @@ class PreviewPanelSession implements vscode.Disposable {
               report,
               controller.signal,
               true,
+              {
+                stableTranslation: this.stableTranslation,
+                summaryContext: this.summaryContext,
+              },
             );
       const { result } = outcome;
       this.taskMonitor.finish(
@@ -2109,6 +2285,10 @@ class PreviewPanelSession implements vscode.Disposable {
             this.sourceUri,
             blockIndex,
             controller.signal,
+            {
+              stableTranslation: this.stableTranslation,
+              summaryContext: this.summaryContext,
+            },
           );
         },
       );

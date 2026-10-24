@@ -83,8 +83,14 @@ function configuredProvider(
 function userPayload(call: FetchCall): {
   sourceLanguage: string;
   targetLanguage: string;
+  summary?: string;
   glossary: Array<{ source: string; target: string }>;
-  items: Array<{ id: string; text: string; headingPath: string[] }>;
+  items: Array<{
+    id: string;
+    text: string;
+    headingPath: string[];
+    reference?: { role: string; text: string };
+  }>;
 } {
   const body = JSON.parse(String(call.init.body)) as {
     messages: Array<{ role: string; content: string }>;
@@ -152,6 +158,57 @@ describe("OpenAITranslationProvider", () => {
       text: "Hello world.",
       headingPath: ["Intro"],
     });
+  });
+
+  it("sends stable reference and full-document summary in the request", async () => {
+    const { provider, calls } = configuredProvider(async () =>
+      completion('{"items":[{"id":"b1","text":"你好，世界。"}]}'),
+    );
+    const sourceItem = {
+      ...item("b1", "Hello world."),
+      reference: {
+        text: "你好，世界。",
+        role: "previous-target" as const,
+      },
+    };
+    const sourceRequest: TranslationRequest = {
+      ...request([sourceItem]),
+      summary: "本文介绍扩展的翻译流程。",
+    };
+
+    await provider.translate(sourceRequest);
+
+    const payload = userPayload(calls[0]);
+    expect(payload.summary).toBe("本文介绍扩展的翻译流程。");
+    expect(payload.items[0].reference).toEqual({
+      role: "previous-target",
+      text: "你好，世界。",
+    });
+  });
+
+  it("generates a plain-text source-language summary without translation JSON", async () => {
+    const { provider, calls } = configuredProvider(async () =>
+      completion("This document explains the translation workflow."),
+    );
+
+    const summary = await provider.summarize({
+      text: "# Workflow\n\nSteps.",
+      sourceLanguage: "en",
+      targetLanguage: "zh-CN",
+      title: "demo.md",
+    });
+
+    expect(summary).toBe(
+      "This document explains the translation workflow.",
+    );
+    expect(calls).toHaveLength(1);
+    const body = JSON.parse(String(calls[0].init.body)) as {
+      messages: Array<{ role: string; content: string }>;
+    };
+    expect(body.messages[0].content).toContain("reference summary");
+    expect(JSON.parse(body.messages[1].content).text).toBe(
+      "# Workflow\n\nSteps.",
+    );
   });
 
   it("sends enable_thinking only when thinking is disabled", async () => {

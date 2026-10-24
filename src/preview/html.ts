@@ -721,6 +721,54 @@ export interface PreviewHtmlInput {
  *   其余字段一律经 `escapeHtml`；
  * - 内联 JSON 会把 `<` 转成 `\u003c`，避免 `</script>` 截断脚本标签。
  */
+/**
+ * 渲染全文摘要面板：手动生成/保存/清除、编辑文本与两个会话级开关。
+ * 摘要位于文档级，不随分栏/只读状态变化。
+ */
+function renderSummaryPanel(model: PreviewModel): string {
+  const assist = model.assist;
+  const summary = assist.summary;
+  const hasSummary = Boolean(summary.text.trim());
+  const status = hasSummary
+    ? summary.stale
+      ? T.summary.stale
+      : T.summary.generated
+    : T.summary.noSummary;
+  const meta: string[] = [];
+  if (hasSummary) {
+    meta.push(formatText(T.summary.tokens, { count: summary.tokens }));
+    if (summary.updatedAt) {
+      meta.push(
+        formatText(T.summary.generatedAt, {
+          time: summary.updatedAt,
+        }),
+      );
+    }
+    if (summary.model) {
+      meta.push(
+        `${T.summary.manual === summary.model ? T.summary.manual : summary.model}`,
+      );
+    }
+  }
+  return `<details class="mbs-summary-panel" data-summary-panel${hasSummary ? " open" : ""}>
+  <summary>
+    <span class="mbs-summary-title">${T.summary.title}</span>
+    <span class="mbs-summary-state${summary.stale ? " is-stale" : ""}">${escapeHtml(status)}</span>
+  </summary>
+  <div class="mbs-summary-body">
+    <div class="mbs-summary-actions">
+      <button type="button" class="mbs-button mbs-button-primary" data-action="generateSummary"${summary.canGenerate ? "" : ` disabled title="${escapeHtml(T.summary.unsupported)}"`}>${T.summary.generate}</button>
+      <button type="button" class="mbs-button" data-action="saveSummary">${T.summary.save}</button>
+      <button type="button" class="mbs-button" data-action="clearSummary"${hasSummary ? "" : " disabled"}>${T.summary.clear}</button>
+      <label class="mbs-assist-toggle"><input type="checkbox" data-assist-toggle="stableTranslation"${assist.stableTranslation ? " checked" : ""}> ${T.summary.stableTranslation}</label>
+      <label class="mbs-assist-toggle"><input type="checkbox" data-assist-toggle="summaryContext"${assist.summaryContext ? " checked" : ""}${hasSummary ? "" : " disabled"}> ${T.summary.useSummary}</label>
+    </div>
+    <textarea class="mbs-summary-text" data-summary-text spellcheck="false" rows="8" placeholder="${escapeHtml(T.summary.placeholder)}">${escapeHtml(summary.text)}</textarea>
+    <p class="mbs-summary-meta">${escapeHtml(meta.join(" · "))}${summary.stale ? ` · ${escapeHtml(T.summary.staleHint)}` : ""}</p>
+  </div>
+</details>`;
+}
+
 export function buildPreviewHtml(input: PreviewHtmlInput): string {
   const {
     model,
@@ -774,6 +822,7 @@ export function buildPreviewHtml(input: PreviewHtmlInput): string {
     saveStandaloneTarget: T.actions.saveStandaloneTarget,
     standaloneEditHint: T.actions.standaloneEditHint,
     emptyEdit: T.actions.emptyEdit,
+    summaryEmpty: T.summary.empty,
     cancelEdit: T.actions.cancelEdit,
     saveSourceStage: T.actions.saveSourceStage,
     saveTarget: T.actions.saveTarget,
@@ -857,6 +906,7 @@ export function buildPreviewHtml(input: PreviewHtmlInput): string {
     <span class="mbs-hint">${T.subbar.hint}</span>
   </div>
   ${renderWarnings(model)}
+  ${renderSummaryPanel(model)}
   ${content}
   <footer class="mbs-footer">
     <span>${T.footer.phase}</span>

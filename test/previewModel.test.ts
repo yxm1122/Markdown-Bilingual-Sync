@@ -755,6 +755,43 @@ describe("buildPreviewModel", () => {
 });
 
 describe("buildPreviewHtml", () => {
+  it("renders the summary panel and assist toggles", async () => {
+    const result = await translate();
+    const model = buildPreviewModel({
+      sourceText: SOURCE,
+      cacheText: result.cacheText,
+      ...LABELS,
+      assist: {
+        stableTranslation: false,
+        summaryContext: true,
+        summary: {
+          text: "这是全文摘要。",
+          stale: true,
+          updatedAt: "2026-10-24T00:00:00.000Z",
+          model: "test-model",
+          tokens: 12,
+          canGenerate: true,
+        },
+      },
+    });
+    const html = buildPreviewHtml({
+      model,
+      nonce: "test-nonce",
+      csp: "default-src 'none'",
+      cssHref: "preview.css",
+      scriptHref: "preview.js",
+      katexHref: "katex.css",
+    });
+
+    expect(html).toContain('data-summary-panel');
+    expect(html).toContain("这是全文摘要。");
+    expect(html).toContain("可能过期");
+    expect(html).toContain('data-assist-toggle="stableTranslation"');
+    expect(html).toContain('data-assist-toggle="summaryContext" checked');
+    expect(html).toContain('data-action="generateSummary"');
+    expect(html).not.toContain('data-assist-toggle="stableTranslation" checked');
+  });
+
   it("escapes document metadata and warnings", () => {
     const html = buildPreviewHtml({
       model: {
@@ -763,6 +800,16 @@ describe("buildPreviewHtml", () => {
         targetLanguage: "zh-CN",
         providerLabel: "Mock",
         cacheExists: false,
+        assist: {
+          stableTranslation: true,
+          summaryContext: true,
+          summary: {
+            text: "",
+            stale: false,
+            tokens: 0,
+            canGenerate: false,
+          },
+        },
         blocks: [],
         sourceFootnotesHtml: "",
         targetFootnotesHtml: "",

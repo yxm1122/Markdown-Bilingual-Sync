@@ -2,6 +2,7 @@
 import { describe, expect, it } from "vitest";
 import {
   estimateItemTokens,
+  estimateSummaryContextTokens,
   estimateTokenCount,
   planTranslationBatches,
 } from "../src/translation/batching";
@@ -109,5 +110,34 @@ describe("dynamic translation batching", () => {
     expect(
       planTranslationBatches([], { maxItems: 50, tokenBudget: 6000 }),
     ).toEqual([]);
+  });
+
+  it("counts reference text and summary context in the budget", () => {
+    const plain = item("a", "x".repeat(1000));
+    const withReference: TranslationItem = {
+      ...plain,
+      reference: { text: "旧译文".repeat(500), role: "previous-target" },
+    };
+    expect(estimateItemTokens(withReference)).toBeGreaterThan(
+      estimateItemTokens(plain),
+    );
+    expect(estimateSummaryContextTokens(undefined)).toBe(0);
+    expect(estimateSummaryContextTokens("摘要".repeat(500))).toBeGreaterThan(0);
+
+    const items = Array.from({ length: 4 }, (_, index) =>
+      item(String(index), "x".repeat(1000)),
+    );
+    const withoutContext = planTranslationBatches(items, {
+      maxItems: 50,
+      tokenBudget: 2200,
+      concurrency: 1,
+    });
+    const withContext = planTranslationBatches(items, {
+      maxItems: 50,
+      tokenBudget: 2200,
+      concurrency: 1,
+      contextTokens: 1200,
+    });
+    expect(withContext.length).toBeGreaterThan(withoutContext.length);
   });
 });
