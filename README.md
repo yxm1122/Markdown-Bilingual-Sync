@@ -1,5 +1,8 @@
 # Markdown Bilingual Sync
 
+[![CI](https://github.com/yxm1122/Markdown-Bilingual-Sync/actions/workflows/ci.yml/badge.svg)](https://github.com/yxm1122/Markdown-Bilingual-Sync/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://github.com/yxm1122/Markdown-Bilingual-Sync/blob/main/LICENSE)
+
 在 VS Code 中翻译 Markdown，并以双语预览阅读；原文是唯一事实源，手动修改的译文会自动锁定，不会被静默覆盖。
 
 当前版本为 Phase 3 完成版本，UI 为中文，支持本地 VSIX 安装与从源码构建。
@@ -35,8 +38,8 @@ code --install-extension artifacts/vsix/markdown-bilingual-sync.vsix
 需要 Node.js 20 或更高版本：
 
 ```bash
-git clone <仓库地址>
-cd markdown-bilingual-sync
+git clone https://github.com/yxm1122/Markdown-Bilingual-Sync.git
+cd Markdown-Bilingual-Sync
 npm ci
 npm run package
 ```

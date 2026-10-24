@@ -6,6 +6,14 @@
   "publisher": "local",
   "private": true,
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/yxm1122/Markdown-Bilingual-Sync.git"
+  },
+  "homepage": "https://github.com/yxm1122/Markdown-Bilingual-Sync#readme",
+  "bugs": {
+    "url": "https://github.com/yxm1122/Markdown-Bilingual-Sync/issues"
+  },
   "engines": {
     "vscode": "^1.90.0"
   },
@@ -410,7 +418,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "preview:sample": "tsx scripts/render-sample.ts",
-    "package": "npm run compile && node -e \"require('node:fs').mkdirSync('artifacts/vsix',{recursive:true})\" && vsce package --allow-missing-repository --out artifacts/vsix/markdown-bilingual-sync.vsix"
+    "package": "npm run compile && node -e \"require('node:fs').mkdirSync('artifacts/vsix',{recursive:true})\" && vsce package --out artifacts/vsix/markdown-bilingual-sync.vsix"
   },
   "dependencies": {
     "@traptitech/markdown-it-katex": "^3.6.0",
