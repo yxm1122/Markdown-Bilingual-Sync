@@ -15,6 +15,7 @@ import { parseGlossaryText, type GlossaryLoadResult } from "./glossary";
 const EMPTY_GLOSSARY = "[]\n";
 
 export class GlossaryStore {
+  /** 保存扩展上下文；术语表路径由 globalStorageUri 派生。 */
   constructor(private readonly context: vscode.ExtensionContext) {}
 
   /** 术语表文件的固定位置（globalStorage/glossary.json）。 */
@@ -56,6 +57,7 @@ export class GlossaryStore {
     }
   }
 
+  /** 确保术语表文件存在；不存在时创建空数组文件，返回其 URI。 */
   private async ensureFile(): Promise<vscode.Uri> {
     const uri = this.glossaryUri;
     await vscode.workspace.fs.createDirectory(this.context.globalStorageUri);

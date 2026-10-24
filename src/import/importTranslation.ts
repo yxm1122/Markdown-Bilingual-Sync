@@ -40,6 +40,7 @@ export interface ImportTranslationResult {
 
 /** 导入专用业务错误；消息可直接展示给用户。 */
 export class ImportTranslationError extends Error {
+  /** 构造可直接展示给用户的导入错误。 */
   constructor(message: string) {
     super(message);
     this.name = "ImportTranslationError";

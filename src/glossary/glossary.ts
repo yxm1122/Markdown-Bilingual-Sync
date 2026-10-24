@@ -22,10 +22,12 @@ export interface GlossaryLoadResult {
   warnings: string[];
 }
 
+/** 判断值是否为普通对象（排除 null 与数组）。 */
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
+/** 读取术语字符串：trim 后非空且不超过长度上限，否则返回 undefined。 */
 function readTerm(value: unknown): string | undefined {
   if (typeof value !== "string") {
     return undefined;
