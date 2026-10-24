@@ -1,0 +1,97 @@
+/**
+ * 翻译服务路由器（translation/providerRouter）
+ *
+ * 职责：按当前的 provider 设置（mock / openai / http）把调用转发给对应实现，
+ * 自身不缓存实例、不发起请求，设置变更在下一次调用时生效。
+ *
+ * 关键不变量：
+ * - id/label 必须与当前目标 Provider 一致，避免状态栏与任务面板显示错位；
+ * - 未知 provider 值一律回退到 mock（与扩展入口的配置读取保持一致）。
+ *
+ * 外部依赖：三个 Provider 实现与共享类型；不直接读写配置或密钥。
+ *
+ * 安全边界：路由器不做 URL/密钥校验，校验责任在具体 Provider；转发时原样传递取消信号。
+ */
+import type { GenericHttpTranslationProvider } from "./genericHttpProvider";
+import type { MockTranslationProvider } from "./mockProvider";
+import type { OpenAITranslationProvider } from "./openaiProvider";
+import type {
+  ConnectionTestResult,
+  TranslationChunkHandler,
+  TranslationProgress,
+  TranslationProvider,
+  TranslationRequest,
+  TranslationResultItem,
+} from "./types";
+
+/** 可选的翻译服务类型；与 VS Code 配置 provider 的取值一致。 */
+export type ProviderKind = "mock" | "openai" | "http";
+
+// ---- 路由器实现 ----
+
+/**
+ * 动态路由器：每次调用时读取 kind 再选择实现，因此切换配置无需重建对象。
+ * 所有方法都直接委托，不吞错、不改写错误信息。
+ */
+export class TranslationProviderRouter implements TranslationProvider {
+  /**
+   * @param getKind 读取当前 provider 类型；未知值会回退到 mock。
+   * @param mock 演示 Provider。
+   * @param openai OpenAI 兼容 Provider。
+   * @param http 自定义 HTTP 模板 Provider。
+   */
+  constructor(
+    private readonly getKind: () => ProviderKind,
+    private readonly mock: MockTranslationProvider,
+    private readonly openai: OpenAITranslationProvider,
+    private readonly http: GenericHttpTranslationProvider,
+  ) {}
+
+  /** 当前 Provider 的稳定标识。 */
+  get id(): string {
+    return this.current().id;
+  }
+
+  /** 当前 Provider 的显示名。 */
+  get label(): string {
+    return this.current().label;
+  }
+
+  /** 转发翻译请求；进度、增量与取消语义完全由目标 Provider 决定。 */
+  translate(
+    request: TranslationRequest,
+    signal?: AbortSignal,
+    onProgress?: TranslationProgress,
+    onChunk?: TranslationChunkHandler,
+  ): Promise<TranslationResultItem[]> {
+    return this.current().translate(request, signal, onProgress, onChunk);
+  }
+
+  /**
+   * 转发连接测试；目标 Provider 未实现测试能力时抛出中文提示。
+   * @throws 不支持测试、配置错误、网络错误或取消。
+   */
+  async testConnection(
+    sourceLanguage: string,
+    targetLanguage: string,
+    signal?: AbortSignal,
+  ): Promise<ConnectionTestResult> {
+    const provider = this.current();
+    if (!provider.testConnection) {
+      throw new Error(
+        "当前翻译服务不支持连接测试，请切换到 OpenAI 兼容或自定义 HTTP 服务。",
+      );
+    }
+    return provider.testConnection(sourceLanguage, targetLanguage, signal);
+  }
+
+  /** 解析当前 Provider；未知类型按 mock 处理，保证调用永远有落点。 */
+  private current(): TranslationProvider {
+    const kind = this.getKind();
+    return kind === "openai"
+      ? this.openai
+      : kind === "http"
+        ? this.http
+        : this.mock;
+  }
+}

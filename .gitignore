@@ -1,0 +1,14 @@
+node_modules/
+dist/
+media/katex/
+artifacts/
+tmp/
+*.vsix
+*.tsbuildinfo
+coverage/
+.vscode-test/
+.env
+.env.*
+*.log
+.DS_Store
+Thumbs.db

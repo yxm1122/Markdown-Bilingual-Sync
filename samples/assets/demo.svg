@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="640" height="200" viewBox="0 0 640 200" role="img" aria-label="Source and translation panels">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#1f6feb"/>
+      <stop offset="1" stop-color="#8957e5"/>
+    </linearGradient>
+  </defs>
+  <rect width="640" height="200" rx="18" fill="url(#bg)"/>
+  <rect x="36" y="40" width="260" height="120" rx="12" fill="#ffffff" fill-opacity="0.92"/>
+  <rect x="344" y="40" width="260" height="120" rx="12" fill="#0d1117" fill-opacity="0.85"/>
+  <g fill="#57606a">
+    <rect x="56" y="64" width="180" height="10" rx="5"/>
+    <rect x="56" y="86" width="220" height="10" rx="5"/>
+    <rect x="56" y="108" width="150" height="10" rx="5"/>
+    <rect x="56" y="130" width="196" height="10" rx="5"/>
+  </g>
+  <g fill="#8b949e">
+    <rect x="364" y="64" width="180" height="10" rx="5"/>
+    <rect x="364" y="86" width="220" height="10" rx="5"/>
+    <rect x="364" y="108" width="150" height="10" rx="5"/>
+    <rect x="364" y="130" width="196" height="10" rx="5"/>
+  </g>
+  <text x="320" y="188" fill="#ffffff" font-family="Segoe UI, sans-serif" font-size="13" text-anchor="middle">Source · Translation</text>
+</svg>

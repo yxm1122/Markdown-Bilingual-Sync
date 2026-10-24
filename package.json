@@ -1,0 +1,436 @@
+{
+  "name": "markdown-bilingual-sync",
+  "displayName": "Markdown Bilingual Sync",
+  "description": "Translate Markdown with a configurable AI provider, render both languages side by side, and export human-reviewed results.",
+  "version": "0.9.2",
+  "publisher": "local",
+  "private": true,
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "keywords": [
+    "markdown",
+    "translate",
+    "bilingual",
+    "i18n"
+  ],
+  "activationEvents": [
+    "onLanguage:markdown"
+  ],
+  "main": "./dist/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "markdownBilingualSync.translateFile",
+        "title": "翻译当前文件",
+        "category": "Markdown Bilingual Sync",
+        "icon": "$(globe)"
+      },
+      {
+        "command": "markdownBilingualSync.openPreview",
+        "title": "打开双语预览",
+        "category": "Markdown Bilingual Sync",
+        "icon": {
+          "light": "media/bilingual-preview-light.svg",
+          "dark": "media/bilingual-preview-dark.svg"
+        }
+      },
+      {
+        "command": "markdownBilingualSync.syncFile",
+        "title": "同步译文",
+        "category": "Markdown Bilingual Sync",
+        "icon": "$(sync)"
+      },
+      {
+        "command": "markdownBilingualSync.retranslateStale",
+        "title": "重译过期译文",
+        "category": "Markdown Bilingual Sync",
+        "icon": "$(history)"
+      },
+      {
+        "command": "markdownBilingualSync.retranslateAll",
+        "title": "重新翻译全部机器译文",
+        "category": "Markdown Bilingual Sync",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "markdownBilingualSync.exportTranslation",
+        "title": "导出译文…",
+        "category": "Markdown Bilingual Sync",
+        "icon": "$(export)"
+      },
+      {
+        "command": "markdownBilingualSync.editTranslation",
+        "title": "编辑译文缓存",
+        "category": "Markdown Bilingual Sync",
+        "icon": "$(edit)"
+      },
+      {
+        "command": "markdownBilingualSync.refreshPreview",
+        "title": "刷新双语预览",
+        "category": "Markdown Bilingual Sync",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "markdownBilingualSync.openTaskPanel",
+        "title": "打开翻译任务面板",
+        "category": "Markdown Bilingual Sync",
+        "icon": "$(list-unordered)"
+      },
+      {
+        "command": "markdownBilingualSync.openCacheFolder",
+        "title": "打开译文缓存目录",
+        "category": "Markdown Bilingual Sync"
+      },
+      {
+        "command": "markdownBilingualSync.clearCache",
+        "title": "清理当前译文缓存",
+        "category": "Markdown Bilingual Sync",
+        "icon": "$(trash)"
+      },
+      {
+        "command": "markdownBilingualSync.clearAllCaches",
+        "title": "清除所有译文缓存",
+        "category": "Markdown Bilingual Sync",
+        "icon": "$(clear-all)"
+      },
+      {
+        "command": "markdownBilingualSync.importTranslation",
+        "title": "导入已有译文…",
+        "category": "Markdown Bilingual Sync",
+        "icon": "$(cloud-download)"
+      },
+      {
+        "command": "markdownBilingualSync.batchTranslateFolder",
+        "title": "批量翻译目录…",
+        "category": "Markdown Bilingual Sync",
+        "icon": "$(files)"
+      },
+      {
+        "command": "markdownBilingualSync.batchExportFolder",
+        "title": "批量导出目录…",
+        "category": "Markdown Bilingual Sync",
+        "icon": "$(file-export)"
+      },
+      {
+        "command": "markdownBilingualSync.editGlossary",
+        "title": "编辑全局术语表",
+        "category": "Markdown Bilingual Sync",
+        "icon": "$(book)"
+      },
+      {
+        "command": "markdownBilingualSync.setApiKey",
+        "title": "设置 AI 翻译 API Key",
+        "category": "Markdown Bilingual Sync",
+        "icon": "$(key)"
+      },
+      {
+        "command": "markdownBilingualSync.applyProviderPreset",
+        "title": "应用翻译服务预设…",
+        "category": "Markdown Bilingual Sync",
+        "icon": "$(settings-gear)"
+      },
+      {
+        "command": "markdownBilingualSync.testApiConnection",
+        "title": "测试 AI 翻译连接",
+        "category": "Markdown Bilingual Sync",
+        "icon": "$(debug-disconnect)"
+      },
+      {
+        "command": "markdownBilingualSync.clearApiKey",
+        "title": "清除 AI 翻译 API Key",
+        "category": "Markdown Bilingual Sync",
+        "icon": "$(trash)"
+      }
+    ],
+    "menus": {
+      "editor/title": [
+        {
+          "command": "markdownBilingualSync.openPreview",
+          "when": "editorLangId == markdown",
+          "group": "navigation@10"
+        }
+      ],
+      "editor/context": [
+        {
+          "command": "markdownBilingualSync.openPreview",
+          "when": "editorLangId == markdown",
+          "group": "navigation"
+        },
+        {
+          "command": "markdownBilingualSync.syncFile",
+          "when": "editorLangId == markdown",
+          "group": "navigation"
+        },
+        {
+          "command": "markdownBilingualSync.retranslateStale",
+          "when": "editorLangId == markdown",
+          "group": "navigation"
+        },
+        {
+          "command": "markdownBilingualSync.retranslateAll",
+          "when": "editorLangId == markdown",
+          "group": "navigation"
+        },
+        {
+          "command": "markdownBilingualSync.exportTranslation",
+          "when": "editorLangId == markdown",
+          "group": "navigation"
+        },
+        {
+          "command": "markdownBilingualSync.editTranslation",
+          "when": "editorLangId == markdown",
+          "group": "navigation"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "markdownBilingualSync.translateFile",
+          "when": "editorLangId == markdown"
+        },
+        {
+          "command": "markdownBilingualSync.openPreview",
+          "when": "editorLangId == markdown"
+        },
+        {
+          "command": "markdownBilingualSync.syncFile",
+          "when": "editorLangId == markdown"
+        },
+        {
+          "command": "markdownBilingualSync.retranslateStale",
+          "when": "editorLangId == markdown"
+        },
+        {
+          "command": "markdownBilingualSync.retranslateAll",
+          "when": "editorLangId == markdown"
+        },
+        {
+          "command": "markdownBilingualSync.exportTranslation",
+          "when": "editorLangId == markdown"
+        },
+        {
+          "command": "markdownBilingualSync.editTranslation",
+          "when": "editorLangId == markdown"
+        },
+        {
+          "command": "markdownBilingualSync.refreshPreview",
+          "when": "editorLangId == markdown"
+        },
+        {
+          "command": "markdownBilingualSync.openTaskPanel"
+        },
+        {
+          "command": "markdownBilingualSync.clearAllCaches"
+        },
+        {
+          "command": "markdownBilingualSync.clearCache",
+          "when": "editorLangId == markdown"
+        },
+        {
+          "command": "markdownBilingualSync.importTranslation",
+          "when": "editorLangId == markdown"
+        },
+        {
+          "command": "markdownBilingualSync.batchTranslateFolder"
+        },
+        {
+          "command": "markdownBilingualSync.batchExportFolder"
+        },
+        {
+          "command": "markdownBilingualSync.editGlossary"
+        },
+        {
+          "command": "markdownBilingualSync.applyProviderPreset"
+        },
+        {
+          "command": "markdownBilingualSync.setApiKey"
+        },
+        {
+          "command": "markdownBilingualSync.testApiConnection"
+        },
+        {
+          "command": "markdownBilingualSync.clearApiKey"
+        }
+      ]
+    },
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "markdownBilingualSync.tasks",
+          "title": "翻译任务",
+          "icon": "media/tasks.svg"
+        }
+      ]
+    },
+    "views": {
+      "markdownBilingualSync.tasks": [
+        {
+          "id": "markdownBilingualSync.tasksView",
+          "name": "翻译任务",
+          "type": "webview"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "Markdown Bilingual Sync",
+      "properties": {
+        "markdownBilingualSync.provider": {
+          "type": "string",
+          "scope": "application",
+          "enum": [
+            "mock",
+            "openai",
+            "http"
+          ],
+          "enumDescriptions": [
+            "本地演示翻译，不发起网络请求。",
+            "调用 OpenAI 兼容的 Chat Completions 接口。API Key 通过命令保存到 VS Code SecretStorage。",
+            "调用任意 JSON/文本 HTTP 接口，通过模板配置请求头、请求体和响应字段。API Key 通过命令保存到 VS Code SecretStorage。"
+          ],
+          "default": "mock",
+          "description": "翻译服务。选择 openai 后使用接口、模型与批量设置；选择 http 后使用下方的 HTTP 模板设置。"
+        },
+        "markdownBilingualSync.apiBaseUrl": {
+          "type": "string",
+          "scope": "application",
+          "default": "https://api.openai.com/v1",
+          "description": "OpenAI 兼容服务的基础地址，例如 https://api.openai.com/v1 或 http://127.0.0.1:11434/v1。扩展会自动追加 /chat/completions；除本机地址外必须使用 HTTPS。"
+        },
+        "markdownBilingualSync.apiModel": {
+          "type": "string",
+          "scope": "application",
+          "default": "gpt-4o-mini",
+          "description": "AI 翻译使用的模型名称，需与 apiBaseUrl 指向的服务兼容。"
+        },
+        "markdownBilingualSync.apiDisableThinking": {
+          "type": "boolean",
+          "scope": "application",
+          "default": false,
+          "description": "开启后在请求中发送 enable_thinking: false，用于支持该参数的服务。默认关闭，由用户自行选择。"
+        },
+        "markdownBilingualSync.apiBatchSize": {
+          "type": "number",
+          "scope": "application",
+          "default": 50,
+          "minimum": 1,
+          "maximum": 50,
+          "description": "单批最多包含的 Markdown 块数（硬上限）。实际批次由 apiBatchTokenBudget 动态决定。"
+        },
+        "markdownBilingualSync.apiBatchTokenBudget": {
+          "type": "number",
+          "scope": "application",
+          "default": 2000,
+          "minimum": 500,
+          "maximum": 32000,
+          "description": "每批输入内容的估算 token 预算。扩展会按块大小动态打包，并尽量保持批次不过小；系统提示、术语表与输出另计。模型上下文或输出上限较小时请调低。"
+        },
+        "markdownBilingualSync.translationConcurrency": {
+          "type": "number",
+          "scope": "application",
+          "default": 8,
+          "minimum": 1,
+          "maximum": 100,
+          "description": "文件级翻译与同一文件内批次请求共享的并发上限。默认 8，最大 100；Provider 限流或本机模型较慢时调低。"
+        },
+        "markdownBilingualSync.apiTimeoutMs": {
+          "type": "number",
+          "scope": "application",
+          "default": 120000,
+          "minimum": 5000,
+          "maximum": 600000,
+          "description": "单次 AI 请求的超时时间（毫秒）。超时后会取消请求并保留已有缓存。"
+        },
+        "markdownBilingualSync.httpEndpoint": {
+          "type": "string",
+          "scope": "application",
+          "default": "",
+          "description": "自定义 HTTP 翻译接口的完整 URL。支持 {{apiKey}}、{{sourceLanguage}}、{{targetLanguage}} 等模板变量；除本机地址外必须使用 HTTPS。"
+        },
+        "markdownBilingualSync.httpMethod": {
+          "type": "string",
+          "scope": "application",
+          "enum": [
+            "POST",
+            "PUT",
+            "PATCH"
+          ],
+          "default": "POST",
+          "description": "自定义 HTTP 翻译接口的请求方法。"
+        },
+        "markdownBilingualSync.httpHeaders": {
+          "type": "string",
+          "scope": "application",
+          "default": "{\"Content-Type\":\"application/json\",\"Authorization\":\"Bearer {{apiKey}}\"}",
+          "description": "请求头 JSON 模板。值中可以使用 {{apiKey}}、{{sourceLanguage}}、{{targetLanguage}} 等变量；API Key 不会写入设置。"
+        },
+        "markdownBilingualSync.httpBody": {
+          "type": "string",
+          "scope": "application",
+          "default": "{\"text\":\"{{text}}\",\"source_language\":\"{{sourceLanguage}}\",\"target_language\":\"{{targetLanguage}}\"}",
+          "description": "请求体 JSON 模板。字符串值中可以使用 {{text}}、{{id}}、{{kind}}、{{headingPath}}、{{sourceLanguage}}、{{targetLanguage}}、{{apiKey}}；通用 Provider 每个块发送一次请求。"
+        },
+        "markdownBilingualSync.httpResponseType": {
+          "type": "string",
+          "scope": "application",
+          "enum": [
+            "json",
+            "text"
+          ],
+          "default": "json",
+          "description": "响应类型。json 会按 httpResponsePath 提取文本；text 会直接把响应体作为译文。"
+        },
+        "markdownBilingualSync.httpResponsePath": {
+          "type": "string",
+          "scope": "application",
+          "default": "translation",
+          "description": "JSON 响应中的译文字段路径，例如 translation、data.translations.0.text 或 result[0].text。"
+        },
+        "markdownBilingualSync.sourceLanguage": {
+          "type": "string",
+          "default": "en",
+          "description": "原文语言（BCP-47，如 en、zh-CN）。"
+        },
+        "markdownBilingualSync.targetLanguage": {
+          "type": "string",
+          "default": "zh-CN",
+          "description": "译文语言（BCP-47，如 zh-CN、ja-JP）。缓存与导出后缀取主语言标签。"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "node esbuild.js && node scripts/copy-katex.mjs",
+    "watch": "node esbuild.js --watch",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "preview:sample": "tsx scripts/render-sample.ts",
+    "package": "npm run compile && node -e \"require('node:fs').mkdirSync('artifacts/vsix',{recursive:true})\" && vsce package --allow-missing-repository --out artifacts/vsix/markdown-bilingual-sync.vsix"
+  },
+  "dependencies": {
+    "@traptitech/markdown-it-katex": "^3.6.0",
+    "highlight.js": "^11.12.0",
+    "katex": "^0.16.47",
+    "markdown-it": "^15.0.3",
+    "markdown-it-anchor": "^10.0.0",
+    "markdown-it-footnote": "^4.0.0",
+    "markdown-it-github-alerts": "^1.0.1",
+    "markdown-it-task-lists": "^2.1.1"
+  },
+  "devDependencies": {
+    "@types/katex": "^0.16.8",
+    "@types/markdown-it": "^14.1.2",
+    "@types/node": "^20.17.0",
+    "@types/vscode": "^1.90.0",
+    "@vscode/vsce": "^3.2.0",
+    "esbuild": "^0.25.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.7.0",
+    "vitest": "^3.0.0"
+  }
+}
