@@ -1,10 +1,9 @@
 {
   "name": "markdown-bilingual-sync",
   "displayName": "Markdown Bilingual Sync",
-  "description": "Translate Markdown with a configurable AI provider, render both languages side by side, and export human-reviewed results.",
+  "description": "AI-powered bilingual Markdown translation and preview for VS Code: block-anchored cache, translation locking, split views, glossary, and export.",
   "version": "0.9.3",
-  "publisher": "local",
-  "private": true,
+  "publisher": "yxm1122",
   "license": "MIT",
   "repository": {
     "type": "git",
@@ -22,9 +21,16 @@
   ],
   "keywords": [
     "markdown",
+    "translation",
     "translate",
     "bilingual",
-    "i18n"
+    "i18n",
+    "localization",
+    "ai",
+    "openai",
+    "llm",
+    "glossary",
+    "vscode-extension"
   ],
   "activationEvents": [
     "onLanguage:markdown"
