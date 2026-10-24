@@ -7,7 +7,7 @@
  * - 统一包装命令错误：CancelledError 静默，其余写输出并弹出错误提示；
  * - 维护任务监控器与状态栏/任务视图的联动；
  * - 监听文档保存/关闭与配置变化，驱动预览刷新；
- * - API Key 只存放在 SecretStorage（见 API_KEY_SECRET），不写入 settings。
+ * - API Key 只存放在 SecretStorage，按 Provider 使用独立键（OpenAI/HTTP，旧共用键仅作迁移回退），不写入 settings。
  *
  * 命令/视图生命周期：
  * - activate 每次扩展主机启动时调用一次；命令注册与监听都 push 到 context.subscriptions，
@@ -60,10 +60,34 @@ import { TaskViewProvider } from "./status/taskViewProvider";
 
 // ---- 常量与小工具 ----
 
-/** SecretStorage 中的 API Key 键名；OpenAI 与自定义 HTTP Provider 共用同一个 Key。 */
-const API_KEY_SECRET = "markdownBilingualSync.apiKey";
+/** SecretStorage 中 OpenAI Provider 专用的 API Key 键名。 */
+const OPENAI_API_KEY_SECRET = "markdownBilingualSync.apiKey.openai";
+/** SecretStorage 中自定义 HTTP Provider 专用的 API Key 键名。 */
+const HTTP_API_KEY_SECRET = "markdownBilingualSync.apiKey.http";
+/** 旧版共用的 API Key 键名：读取时作为迁移回退，Mock 模式写入该键。 */
+const LEGACY_API_KEY_SECRET = "markdownBilingualSync.apiKey";
 /** API Key 长度上限，与输入框校验、Provider 内部校验保持一致。 */
 const MAX_API_KEY_LENGTH = 20_000;
+
+/**
+ * 读取指定 Provider 的 API Key；专用键缺失时回退到旧版共用键，
+ * 保证升级用户无需重新输入 Key。
+ *
+ * @param context 扩展上下文（提供 secrets）
+ * @param secretKey Provider 专用键名
+ * @returns 已存储的 Key；三个键都不存在时返回空字符串
+ * @failure SecretStorage 读取失败时向上抛出
+ */
+async function readApiKeyWithLegacyFallback(
+  context: vscode.ExtensionContext,
+  secretKey: string,
+): Promise<string> {
+  const scoped = await context.secrets.get(secretKey);
+  if (scoped) {
+    return scoped;
+  }
+  return (await context.secrets.get(LEGACY_API_KEY_SECRET)) ?? "";
+}
 
 /**
  * 把任意异常转换为可展示的文本。
@@ -121,6 +145,7 @@ function getTranslationConcurrency(): number {
 /**
  * 组装 OpenAI 兼容 Provider 配置。
  * 每次翻译调用都会重新读取配置与 SecretStorage，保证修改设置后无需重载窗口。
+ * API Key 优先读取 OpenAI 专用键，缺失时回退到旧版共用键。
  *
  * @param context 扩展上下文（提供 secrets）
  * @returns 不含日志输出的配置对象
@@ -140,13 +165,14 @@ async function loadOpenAIConfig(
     tokenBudget: Number(config.get<number>("apiBatchTokenBudget", 2_000)),
     timeoutMs: Number(config.get<number>("apiTimeoutMs", 120_000)),
     disableThinking: config.get<boolean>("apiDisableThinking", false) === true,
-    apiKey: (await context.secrets.get(API_KEY_SECRET)) ?? "",
+    apiKey: await readApiKeyWithLegacyFallback(context, OPENAI_API_KEY_SECRET),
   };
 }
 
 /**
  * 组装自定义 HTTP Provider 配置。
  * 模板在 Provider 内部渲染，API Key 只通过 {{apiKey}} 变量注入，不写回设置。
+ * API Key 优先读取 HTTP 专用键，缺失时回退到旧版共用键。
  *
  * @param context 扩展上下文（提供 secrets）
  * @returns HTTP 模板配置
@@ -164,7 +190,7 @@ async function loadGenericHttpConfig(
     responseType: String(config.get<string>("httpResponseType", "json")),
     responsePath: String(config.get<string>("httpResponsePath", "translation")),
     timeoutMs: Number(config.get<number>("apiTimeoutMs", 120_000)),
-    apiKey: (await context.secrets.get(API_KEY_SECRET)) ?? "",
+    apiKey: await readApiKeyWithLegacyFallback(context, HTTP_API_KEY_SECRET),
   };
 }
 
@@ -524,14 +550,20 @@ export function activate(context: vscode.ExtensionContext): void {
 
   // ---- 命令注册 ----
 
-  // 单文件翻译：translateFile 与 syncFile 行为一致，保留两个命令 ID 兼容既有菜单/键位。
-  register("markdownBilingualSync.translateFile", () =>
+  /**
+   * 单文件翻译/同步的共享实现：翻译当前活动 Markdown 文件并打开预览。
+   * translateFile 与 syncFile 行为完全一致，保留两个命令 ID 仅为兼容既有菜单/键位。
+   */
+  const translateActiveMarkdown = (): Promise<void> =>
     handleErrors(async () => {
       const uri = activeMarkdownUri();
       if (uri) {
         await runSync(uri, "sync", true);
       }
-    }),
+    });
+
+  register("markdownBilingualSync.translateFile", () =>
+    translateActiveMarkdown(),
   );
 
   // 只打开预览，不触发翻译；预览面板按源文件 URI 复用。
@@ -549,13 +581,9 @@ export function activate(context: vscode.ExtensionContext): void {
     void taskViewProvider.toggle();
   });
 
+  // 与 translateFile 共用同一实现，保留独立命令 ID。
   register("markdownBilingualSync.syncFile", () =>
-    handleErrors(async () => {
-      const uri = activeMarkdownUri();
-      if (uri) {
-        await runSync(uri, "sync", true);
-      }
-    }),
+    translateActiveMarkdown(),
   );
 
   // 重译过期块：命令入口先做全量确认，预览面板内则按过期数量确认。
@@ -1095,7 +1123,7 @@ export function activate(context: vscode.ExtensionContext): void {
     }),
   );
 
-  // 设置 API Key：密码框输入，写入 SecretStorage（不写入 settings/工作区/缓存）。
+  // 设置 API Key：密码框输入，按当前 Provider 写入 SecretStorage 的独立键（不写入 settings/工作区/缓存）。
   register("markdownBilingualSync.setApiKey", () =>
     handleErrors(async () => {
       const value = await vscode.window.showInputBox({
@@ -1118,9 +1146,20 @@ export function activate(context: vscode.ExtensionContext): void {
       if (!apiKey) {
         return;
       }
-      await context.secrets.store(API_KEY_SECRET, apiKey);
-      // 提示文案与测试动作取决于当前 provider（Mock 下仅提醒切换服务）。
+      // openai/http 写入各自专用键；mock 沿用旧共用键，保持“先设 Key 再切换 Provider”的流程。
       const providerKind = getProviderKind();
+      const secretKey =
+        providerKind === "openai"
+          ? OPENAI_API_KEY_SECRET
+          : providerKind === "http"
+            ? HTTP_API_KEY_SECRET
+            : LEGACY_API_KEY_SECRET;
+      await context.secrets.store(secretKey, apiKey);
+      // 专用键写入成功后清理旧共用键，避免回退读取到过期 Key。
+      if (providerKind !== "mock") {
+        await context.secrets.delete(LEGACY_API_KEY_SECRET);
+      }
+      // 提示文案与测试动作取决于当前 provider（Mock 下仅提醒切换服务）。
       const hint =
         providerKind === "mock"
           ? UI_TEXT.extension.apiKeyHintMock
@@ -1212,11 +1251,18 @@ export function activate(context: vscode.ExtensionContext): void {
     }),
   );
 
-  // 清除 API Key：需二次确认；删除后下次请求会因缺少密钥而失败（由用户重新设置）。
+  // 清除 API Key：需二次确认；三个键（OpenAI/HTTP/旧共用）存在任意一个即全部删除。
   register("markdownBilingualSync.clearApiKey", () =>
     handleErrors(async () => {
-      const existing = await context.secrets.get(API_KEY_SECRET);
-      if (!existing) {
+      const secretKeys = [
+        OPENAI_API_KEY_SECRET,
+        HTTP_API_KEY_SECRET,
+        LEGACY_API_KEY_SECRET,
+      ];
+      const existing = await Promise.all(
+        secretKeys.map((key) => context.secrets.get(key)),
+      );
+      if (!existing.some((value) => Boolean(value))) {
         void vscode.window.showInformationMessage(
           UI_TEXT.extension.noApiKey,
         );
@@ -1230,7 +1276,9 @@ export function activate(context: vscode.ExtensionContext): void {
       if (choice !== UI_TEXT.extension.clearApiKeyAction) {
         return;
       }
-      await context.secrets.delete(API_KEY_SECRET);
+      await Promise.all(
+        secretKeys.map((key) => context.secrets.delete(key)),
+      );
       void vscode.window.showInformationMessage(
         UI_TEXT.extension.apiKeyCleared,
       );

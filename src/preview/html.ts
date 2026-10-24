@@ -59,15 +59,14 @@ function escapeHtml(value: string): string {
  * @param block 块视图；虚拟块与真实块共用本函数。
  * @returns `<section class="mbs-block">` 片段。
  * @remarks
- * - 操作区按状态互斥生成，优先级：译文独占 > 译文待生成原文 > 正常块 > 源块已删除 > 待插入原文；
+ * - 操作区按状态互斥生成，优先级：译文独占 > 正常块 > 源块已删除 > 待插入原文；
  * - `data-block` 承载真实块索引（虚拟块为负数），`data-pending-*` / `data-standalone-*`
  *   让媒体脚本知道编辑时该发哪条消息；
  * - 源侧仅在可编辑时输出 `data-edit-content`；译文侧始终带该标记，但没有对应
- *   `<textarea>` 时媒体脚本会忽略点击（译文删除/独占/待生成即属此情况）。
+ *   `<textarea>` 时媒体脚本会忽略点击（译文删除/独占即属此情况）。
  */
 function renderBlock(block: PreviewBlockView): string {
   const isPendingInsert = Boolean(block.pendingInsertId);
-  const isPendingTarget = Boolean(block.pendingTargetInsertId);
   const isStandalone = Boolean(block.standaloneTargetId);
   const isDeleted = block.sourceDeleted;
   const actions: string[] = [];
@@ -78,12 +77,6 @@ function renderBlock(block: PreviewBlockView): string {
     actions.push(
       `<button type="button" class="mbs-action" data-action="backTranslateTargetOnly" data-standalone-id="${escapeHtml(block.standaloneTargetId ?? "")}" title="${escapeHtml(T.actions.backTranslateTargetTitle)}">${T.actions.backTranslateTarget}</button>`,
       `<button type="button" class="mbs-action mbs-action-quiet" data-action="deleteTargetOnlyBlock" data-standalone-id="${escapeHtml(block.standaloneTargetId ?? "")}" title="${escapeHtml(T.actions.removeStandaloneTitle)}">${T.actions.removeStandalone}</button>`,
-    );
-  } else if (isPendingTarget) {
-    // 译文待生成原文：可回译，或移除这个草稿块（当前扩展未产出此状态）。
-    actions.push(
-      `<button type="button" class="mbs-action" data-action="backTranslateTargetInsert" data-pending-target-id="${escapeHtml(block.pendingTargetInsertId ?? "")}" title="${escapeHtml(T.actions.backTranslateTargetTitle)}">${T.actions.backTranslateTarget}</button>`,
-      `<button type="button" class="mbs-action mbs-action-quiet" data-action="removeTargetInsert" data-pending-target-id="${escapeHtml(block.pendingTargetInsertId ?? "")}" title="${escapeHtml(T.actions.removeTargetInsertTitle)}">${T.actions.removeTargetInsert}</button>`,
     );
   } else if (!isPendingInsert && !isDeleted) {
     // 正常双语块：撤销译文删除 / 重译 / 标记已同步 / 回译 / 定位原文 / 插入删除。
@@ -136,42 +129,34 @@ function renderBlock(block: PreviewBlockView): string {
         : block.status === "copy-pending"
           ? `<div class="mbs-placeholder">${T.placeholders.copyPending}</div>`
           : `<div class="mbs-placeholder">${T.placeholders.untranslated}</div>`;
-  // 源块可编辑的前提：既不是删除标记，也不是待生成/独占块。
+  // 源块可编辑的前提：既不是删除标记，也不是独占块。
   const sourceEdit =
-    isDeleted || isPendingTarget || isStandalone
+    isDeleted || isStandalone
       ? ""
       : `<button type="button" class="mbs-pane-edit" data-edit-pane="source" data-block="${block.blockIndex}" title="${escapeHtml(T.actions.editSourceTitle)}">${T.actions.editSource}</button>`;
   const targetEdit =
     block.canEditTarget && !isDeleted
       ? `<button type="button" class="mbs-pane-edit" data-edit-pane="target" data-block="${block.blockIndex}" title="${escapeHtml(T.actions.editTargetTitle)}">${T.actions.editTarget}</button>`
       : "";
-  // 「原文待应用 / 原文待删除 / 原文已暂存」徽标；与 renderSplitCellHeader 共用同一规则。
+  // 「原文待应用 / 原文待删除」徽标；与 renderSplitCellHeader 共用同一规则。
   const pendingBadge = isDeleted
     ? `<span class="mbs-badge mbs-badge-pending-delete">${T.actions.sourceDeletePendingLabel}</span>`
-    : isPendingTarget && block.targetSourceStaged
-      ? `<span class="mbs-badge mbs-badge-pending-source">${T.actions.targetSourceStagedBadge}</span>`
-      : block.sourcePending && !isPendingInsert
-        ? `<span class="mbs-badge mbs-badge-pending-source">${T.actions.sourcePendingBadge}</span>`
-        : "";
+    : block.sourcePending && !isPendingInsert
+      ? `<span class="mbs-badge mbs-badge-pending-source">${T.actions.sourcePendingBadge}</span>`
+      : "";
   // 把虚拟块身份写进 section，媒体脚本据此回传 pendingId / standaloneId。
   const pendingAttributes = block.pendingInsertId
     ? ` data-pending-id="${escapeHtml(block.pendingInsertId)}" data-pending-insert="true"`
-    : block.pendingTargetInsertId
-      ? ` data-pending-target-id="${escapeHtml(block.pendingTargetInsertId)}" data-pending-target="true"`
-      : block.standaloneTargetId
-        ? ` data-standalone-id="${escapeHtml(block.standaloneTargetId)}" data-standalone="true"`
-        : "";
+    : block.standaloneTargetId
+      ? ` data-standalone-id="${escapeHtml(block.standaloneTargetId)}" data-standalone="true"`
+      : "";
   const deletedAttribute = isDeleted ? ' data-source-deleted="true"' : "";
-  // 源侧占位：独占块与待生成原文块没有真实原文可显示。
+  // 源侧占位：独占块没有真实原文可显示。
   const sourcePlaceholder = isStandalone
     ? T.actions.standaloneSourceEmpty
-    : isPendingTarget
-      ? block.targetSourceStaged
-        ? T.actions.targetInsertSourceStaged
-        : T.actions.targetInsertSourcePending
-      : T.placeholders.sourceEmpty;
+    : T.placeholders.sourceEmpty;
 
-  return `<section class="mbs-block${isPendingInsert ? " mbs-block-pending-insert" : ""}${isDeleted ? " mbs-block-pending-delete" : ""}${isPendingTarget ? " mbs-block-pending-target" : ""}${isStandalone ? " mbs-block-standalone" : ""}" data-status="${block.status}" data-block="${block.blockIndex}" data-source-hash="${escapeHtml(block.sourceHash)}"${block.cacheId ? ` data-cache-id="${escapeHtml(block.cacheId)}"` : ""}${block.sourcePending ? ' data-source-pending="true"' : ""}${deletedAttribute}${pendingAttributes}>
+  return `<section class="mbs-block${isPendingInsert ? " mbs-block-pending-insert" : ""}${isDeleted ? " mbs-block-pending-delete" : ""}${isStandalone ? " mbs-block-standalone" : ""}" data-status="${block.status}" data-block="${block.blockIndex}" data-source-hash="${escapeHtml(block.sourceHash)}"${block.cacheId ? ` data-cache-id="${escapeHtml(block.cacheId)}"` : ""}${block.sourcePending ? ' data-source-pending="true"' : ""}${deletedAttribute}${pendingAttributes}>
   <header class="mbs-block-head">
     <span class="mbs-kind">${KIND_LABELS[block.kind]}</span>
     <span class="mbs-badge mbs-badge-${block.status}">${escapeHtml(block.statusLabel)}</span>
@@ -183,8 +168,8 @@ function renderBlock(block: PreviewBlockView): string {
   <div class="mbs-pair">
     <div class="mbs-pane mbs-pane-source" data-pane="source">
       <div class="mbs-pane-label">${T.panes.source}${sourceEdit}</div>
-      <div class="mbs-markdown"${isDeleted || isPendingTarget || isStandalone ? "" : ' data-edit-content="source"'} title="${isDeleted || isPendingTarget || isStandalone ? "" : escapeHtml(T.actions.editHint)}">${block.sourceHtml || `<div class="mbs-placeholder">${sourcePlaceholder}</div>`}</div>
-      ${isPendingTarget || isStandalone ? "" : `<textarea class="mbs-raw" data-raw="source" hidden>${escapeHtml(block.sourceRaw)}</textarea>`}
+      <div class="mbs-markdown"${isDeleted || isStandalone ? "" : ' data-edit-content="source"'} title="${isDeleted || isStandalone ? "" : escapeHtml(T.actions.editHint)}">${block.sourceHtml || `<div class="mbs-placeholder">${sourcePlaceholder}</div>`}</div>
+      ${isStandalone ? "" : `<textarea class="mbs-raw" data-raw="source" hidden>${escapeHtml(block.sourceRaw)}</textarea>`}
     </div>
     <div class="mbs-pane mbs-pane-target" data-pane="target">
       <div class="mbs-pane-label">${T.panes.target}${targetEdit}</div>
@@ -204,13 +189,9 @@ function renderBlock(block: PreviewBlockView): string {
  */
 function renderPendingBadge(block: PreviewBlockView): string {
   const isDeleted = block.sourceDeleted;
-  const isPendingTarget = Boolean(block.pendingTargetInsertId);
   const isPendingInsert = Boolean(block.pendingInsertId);
   if (isDeleted) {
     return `<span class="mbs-badge mbs-badge-pending-delete">${T.actions.sourceDeletePendingLabel}</span>`;
-  }
-  if (isPendingTarget && block.targetSourceStaged) {
-    return `<span class="mbs-badge mbs-badge-pending-source">${T.actions.targetSourceStagedBadge}</span>`;
   }
   if (block.sourcePending && !isPendingInsert) {
     return `<span class="mbs-badge mbs-badge-pending-source">${T.actions.sourcePendingBadge}</span>`;
@@ -303,22 +284,16 @@ function renderSplitPlaceholderCell(
     kind === "source"
       ? block.standaloneTargetId
         ? T.actions.standaloneSourceEmpty
-        : block.pendingTargetInsertId
-          ? block.targetSourceStaged
-            ? T.actions.targetInsertSourceStaged
-            : T.actions.targetInsertSourcePending
-          : T.placeholders.sourceEmpty
+        : T.placeholders.sourceEmpty
       : block.hasCache
         ? T.placeholders.targetEmpty
         : block.status === "copy-pending"
           ? T.placeholders.copyPending
           : T.placeholders.untranslated;
   // 仍然带虚拟块身份，便于右侧栏的编辑/回译按钮定位。
-  const pendingAttributes = block.pendingTargetInsertId
-    ? ` data-pending-target-id="${escapeHtml(block.pendingTargetInsertId)}" data-pending-target="true"`
-    : block.standaloneTargetId
-      ? ` data-standalone-id="${escapeHtml(block.standaloneTargetId)}" data-standalone="true"`
-      : "";
+  const pendingAttributes = block.standaloneTargetId
+    ? ` data-standalone-id="${escapeHtml(block.standaloneTargetId)}" data-standalone="true"`
+    : "";
   return `<section class="mbs-block mbs-split-cell mbs-split-cell-${kind} mbs-split-cell-placeholder" data-status="${block.status}" data-block="${block.blockIndex}"${pendingAttributes} data-sync-key="${escapeHtml(block.key)}">
   ${renderSplitCellHeader(block, [], false)}
   <div class="mbs-pane mbs-pane-${kind}" data-pane="${kind}">
@@ -331,7 +306,7 @@ function renderSplitPlaceholderCell(
 /**
  * 渲染分栏的原文单元格。
  *
- * @param block 块视图（调用方保证不是译文独占 / 译文待生成块）。
+ * @param block 块视图（调用方保证不是译文独占块）。
  * @returns 带原文内容、编辑入口与块操作的单元格。
  * @remarks 待插入块只给「移除插入」；源块已删除时只给「撤销删除」；其余块给重译 + 插入/删除。
  */
@@ -386,10 +361,9 @@ function renderSplitSourceCell(block: PreviewBlockView): string {
  *
  * @param block 块视图（调用方保证不是待插入的原文块）。
  * @returns 带译文内容、编辑入口与块操作的单元格。
- * @remarks 操作优先级：译文独占 / 译文待生成原文 > 源块已删除（仅定位）> 正常（撤销删除、标记同步、回译、插入删除）。
+ * @remarks 操作优先级：译文独占 > 源块已删除（仅定位）> 正常（撤销删除、标记同步、回译、插入删除）。
  */
 function renderSplitTargetCell(block: PreviewBlockView): string {
-  const isPendingTarget = Boolean(block.pendingTargetInsertId);
   const isStandalone = Boolean(block.standaloneTargetId);
   const isSourceDeleted = block.sourceDeleted;
   const isTargetDeleted = block.status === "deleted";
@@ -398,11 +372,6 @@ function renderSplitTargetCell(block: PreviewBlockView): string {
     actions.push(
       `<button type="button" class="mbs-action" data-action="backTranslateTargetOnly" data-standalone-id="${escapeHtml(block.standaloneTargetId ?? "")}" title="${escapeHtml(T.actions.backTranslateTargetTitle)}">${T.actions.backTranslateTarget}</button>`,
       `<button type="button" class="mbs-action mbs-action-quiet" data-action="deleteTargetOnlyBlock" data-standalone-id="${escapeHtml(block.standaloneTargetId ?? "")}" title="${escapeHtml(T.actions.removeStandaloneTitle)}">${T.actions.removeStandalone}</button>`,
-    );
-  } else if (isPendingTarget) {
-    actions.push(
-      `<button type="button" class="mbs-action" data-action="backTranslateTargetInsert" data-pending-target-id="${escapeHtml(block.pendingTargetInsertId ?? "")}" title="${escapeHtml(T.actions.backTranslateTargetTitle)}">${T.actions.backTranslateTarget}</button>`,
-      `<button type="button" class="mbs-action mbs-action-quiet" data-action="removeTargetInsert" data-pending-target-id="${escapeHtml(block.pendingTargetInsertId ?? "")}" title="${escapeHtml(T.actions.removeTargetInsertTitle)}">${T.actions.removeTargetInsert}</button>`,
     );
   } else if (isSourceDeleted) {
     // 源块待删除：译文只能定位原文或撤销源块删除，避免同时暂存两侧修改。
@@ -444,13 +413,11 @@ function renderSplitTargetCell(block: PreviewBlockView): string {
         : block.status === "copy-pending"
           ? `<div class="mbs-placeholder">${T.placeholders.copyPending}</div>`
           : `<div class="mbs-placeholder">${T.placeholders.untranslated}</div>`;
-  const pendingAttributes = isPendingTarget
-    ? ` data-pending-target-id="${escapeHtml(block.pendingTargetInsertId ?? "")}" data-pending-target="true"`
-    : isStandalone
-      ? ` data-standalone-id="${escapeHtml(block.standaloneTargetId ?? "")}" data-standalone="true"`
-      : "";
+  const pendingAttributes = isStandalone
+    ? ` data-standalone-id="${escapeHtml(block.standaloneTargetId ?? "")}" data-standalone="true"`
+    : "";
 
-  return `<section class="mbs-block mbs-split-cell mbs-split-cell-target${isPendingTarget ? " mbs-block-pending-target" : ""}${isStandalone ? " mbs-block-standalone" : ""}${isSourceDeleted ? " mbs-block-pending-delete" : ""}" data-status="${block.status}" data-block="${block.blockIndex}"${block.sourceHash ? ` data-source-hash="${escapeHtml(block.sourceHash)}"` : ""}${block.cacheId ? ` data-cache-id="${escapeHtml(block.cacheId)}"` : ""}${block.sourcePending ? ' data-source-pending="true"' : ""}${isSourceDeleted ? ' data-source-deleted="true"' : ""}${pendingAttributes} data-sync-key="${escapeHtml(block.key)}">
+  return `<section class="mbs-block mbs-split-cell mbs-split-cell-target${isStandalone ? " mbs-block-standalone" : ""}${isSourceDeleted ? " mbs-block-pending-delete" : ""}" data-status="${block.status}" data-block="${block.blockIndex}"${block.sourceHash ? ` data-source-hash="${escapeHtml(block.sourceHash)}"` : ""}${block.cacheId ? ` data-cache-id="${escapeHtml(block.cacheId)}"` : ""}${block.sourcePending ? ' data-source-pending="true"' : ""}${isSourceDeleted ? ' data-source-deleted="true"' : ""}${pendingAttributes} data-sync-key="${escapeHtml(block.key)}">
   ${renderSplitCellHeader(block, actions, false)}
   <div class="mbs-pane mbs-pane-target" data-pane="target">
     <div class="mbs-pane-label">${T.panes.target}${targetEdit}</div>
@@ -482,15 +449,14 @@ function renderSplitFootnoteCell(html: string, label: string): string {
  *
  * @param block 块视图。
  * @param pane 目标栏位。
- * @returns 块 HTML 包装；该栏没有对应内容（独占/待生成/空 HTML）时返回空串。
+ * @returns 块 HTML 包装；该栏没有对应内容（独占/空 HTML）时返回空串。
  */
 function renderReadonlyBlock(
   block: PreviewBlockView,
   pane: "source" | "target",
 ): string {
-  // 独占/待生成块在另一栏没有内容，只读时直接跳过，避免出现空白段。
-  const targetOnly =
-    Boolean(block.standaloneTargetId) || Boolean(block.pendingTargetInsertId);
+  // 独占块在原文栏没有内容，只读时直接跳过，避免出现空白段。
+  const targetOnly = Boolean(block.standaloneTargetId);
   const sourceOnly = Boolean(block.pendingInsertId);
   const html = pane === "source" ? block.sourceHtml : block.targetHtml;
   if (
@@ -590,8 +556,7 @@ function renderSplitLayout(
   const sourceCells: string[] = [];
   const targetCells: string[] = [];
   for (const block of model.blocks) {
-    const targetOnly =
-      Boolean(block.standaloneTargetId) || Boolean(block.pendingTargetInsertId);
+    const targetOnly = Boolean(block.standaloneTargetId);
     const sourceOnly = Boolean(block.pendingInsertId);
     if (!readonly.source) {
       sourceCells.push(
@@ -805,9 +770,7 @@ export function buildPreviewHtml(input: PreviewHtmlInput): string {
     sourceWriteFailed: T.sourceModal.writeFailed,
     sourceEditHint: T.actions.sourceEditHint,
     targetEditHint: T.actions.targetEditHint,
-    targetDraftEditHint: T.actions.targetDraftEditHint,
     targetInsertHint: T.actions.targetInsertHint,
-    saveTargetDraft: T.actions.saveTargetDraft,
     saveStandaloneTarget: T.actions.saveStandaloneTarget,
     standaloneEditHint: T.actions.standaloneEditHint,
     emptyEdit: T.actions.emptyEdit,

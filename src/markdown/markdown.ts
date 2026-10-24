@@ -7,7 +7,7 @@
  * 关键不变量：
  * - `html: false`：原文中的内联 HTML 不会被渲染，避免 Webview 注入；
  * - 非 `#` 链接统一改写为 `href="#"` + `data-mbs-href`，由 Webview 通过消息回传打开；
- * - 标题 id 可加前缀，避免原文/译文两栏渲染时 id 冲突。
+ * - 标题与脚注的 id/href 可加前缀，避免原文/译文两栏渲染时 id 冲突。
  *
  * 与其他模块的关系：`segmenter` 用它的 token 结果切块，预览用它的 render 结果，
  * 因此插件配置的变化会同时影响切块与渲染。
@@ -48,6 +48,28 @@ function slugifyHeading(input: string): string {
 }
 
 /**
+ * 给脚注渲染结果中的 `id`/`href` 属性加前缀。
+ *
+ * markdown-it-footnote 的三个渲染规则直接返回 HTML 字符串（没有可写的 token 属性），
+ * 因此只能在规则输出上改写；`href="#..."` 保留 `#` 在属性值首位，否则会被当作外部链接。
+ */
+function prefixFootnoteAttributes(html: string, prefix: string): string {
+  return html.replace(
+    /(\s)(id|href)="([^"]*)"/g,
+    (match, space: string, name: string, value: string) => {
+      if (!value) {
+        return match;
+      }
+      const prefixed =
+        name === "href" && value.startsWith("#")
+          ? `#${prefix}${value.slice(1)}`
+          : `${prefix}${value}`;
+      return `${space}${name}="${prefixed}"`;
+    },
+  );
+}
+
+/**
  * 创建并配置一个新的 markdown-it 实例。
  *
  * 每次调用都会注册全套插件并覆盖 fence/image/link_open 渲染规则，返回的实例可安全
@@ -82,6 +104,28 @@ export function createMarkdownRuntime(
         }
       : undefined,
   });
+
+  if (idPrefix) {
+    // 包装脚注的三个渲染规则，把插件生成的 fn/fnref 锚点纳入同一前缀命名空间。
+    // 渲染时移除 env.docId：脚注插件会用它再生成 `fn-${docId}-1`，与 idPrefix
+    // 叠加会得到 `src-fn-src-1`；两栏的唯一性已由 idPrefix 保证。
+    const footnoteRules = [
+      "footnote_ref",
+      "footnote_open",
+      "footnote_anchor",
+    ] as const;
+    for (const ruleName of footnoteRules) {
+      const renderFootnote = md.renderer.rules[ruleName];
+      if (!renderFootnote) {
+        continue;
+      }
+      md.renderer.rules[ruleName] = (tokens, idx, opts, env, self) =>
+        prefixFootnoteAttributes(
+          renderFootnote(tokens, idx, opts, { ...env, docId: undefined }, self),
+          idPrefix,
+        );
+    }
+  }
 
   md.renderer.rules.fence = (tokens, idx, opts, env, self) => {
     const token = tokens[idx];

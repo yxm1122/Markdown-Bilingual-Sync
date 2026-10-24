@@ -713,6 +713,32 @@ describe("buildPreviewModel", () => {
     expect(model.blocks.some((block) => block.kind === "footnote")).toBe(
       false,
     );
+
+    const paragraph = model.blocks.find((block) => block.kind === "paragraph");
+    const sourceHtml =
+      `${paragraph?.sourceHtml ?? ""}${model.sourceFootnotesHtml}`;
+    const targetHtml =
+      `${paragraph?.targetHtml ?? ""}${model.targetFootnotesHtml}`;
+    // 引用锚点、脚注项与回链都应带各栏前缀。
+    expect(sourceHtml).toContain('id="src-fn1"');
+    expect(sourceHtml).toContain('href="#src-fn1"');
+    expect(sourceHtml).toContain('id="src-fnref1"');
+    expect(model.sourceFootnotesHtml).toContain('href="#src-fnref1"');
+    expect(targetHtml).toContain('id="tgt-fn1"');
+    expect(targetHtml).toContain('href="#tgt-fn1"');
+    expect(targetHtml).toContain('id="tgt-fnref1"');
+    expect(model.targetFootnotesHtml).toContain('href="#tgt-fnref1"');
+
+    // 原文与译文不再共享同一个 fn id。
+    const sourceIds = [...sourceHtml.matchAll(/id="([^"]+)"/g)].map(
+      (match) => match[1],
+    );
+    const targetIds = [...targetHtml.matchAll(/id="([^"]+)"/g)].map(
+      (match) => match[1],
+    );
+    expect(sourceIds.length).toBeGreaterThan(0);
+    expect(targetIds.length).toBeGreaterThan(0);
+    expect(sourceIds.some((id) => targetIds.includes(id))).toBe(false);
   });
 
   it("resolves relative images and external links", () => {

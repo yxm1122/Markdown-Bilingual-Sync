@@ -273,10 +273,27 @@ export class TaskViewProvider
    *
    * 支持：ready、cancelAll、clearFinished、openOutput、cancelTask、
    * openSource、openPreview；其余消息忽略。
-   * 注意：本方法未捕获异常，失败会以未处理的 Promise 拒绝结束，
-   * 页面不会收到错误提示。
+   * 统一捕获分发过程中的异常（例如源文件已被删除导致 openTextDocument 失败），
+   * 写入输出通道并弹出错误提示，避免未处理的 Promise 拒绝。
    */
   private async onMessage(raw: unknown): Promise<void> {
+    try {
+      await this.handleMessage(raw);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      const stack =
+        error instanceof Error ? (error.stack ?? message) : message;
+      this.options.output.appendLine(
+        `[${new Date().toISOString()}] task view message failed: ${stack}`,
+      );
+      void vscode.window.showErrorMessage(
+        `Markdown Bilingual Sync：${message}`,
+      );
+    }
+  }
+
+  /** 按 type 白名单分发消息；异常统一由 onMessage 捕获处理。 */
+  private async handleMessage(raw: unknown): Promise<void> {
     if (!raw || typeof raw !== "object") {
       return;
     }
@@ -312,7 +329,7 @@ export class TaskViewProvider
       case "openSource": {
         const task = id === undefined ? undefined : this.options.monitor.getTask(id);
         if (task?.uri) {
-          // 源文件可能已被删除/重命名，openTextDocument 会抛错（未在此捕获）。
+          // 源文件可能已被删除/重命名，抛错由 onMessage 统一记录并提示。
           const document = await vscode.workspace.openTextDocument(task.uri);
           await vscode.window.showTextDocument(document, { preview: false });
         }

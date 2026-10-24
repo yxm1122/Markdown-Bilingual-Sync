@@ -4,7 +4,7 @@
  * 职责：
  * - 用 markdown-it 分别渲染原文与缓存译文，按块建立 HTML 索引；
  * - 用 `alignDocument` 对齐原文块与缓存锚点，得到块状态（已翻译 / 过期 / 锁定 / 未翻译 / 复制 / 已删除）；
- * - 把原文暂存（编辑、删除、插入）、待关联的译文块、以及缓存中的「译文独占块」合成为虚拟块；
+ * - 把原文暂存（编辑、删除、插入）以及缓存中的「译文独占块」合成为虚拟块；
  * - 输出统计计数、警告、脚注 HTML 与待应用原文修改数量。
  *
  * 数据流：
@@ -18,8 +18,8 @@
  *
  * 关键不变量：
  * - `PreviewBlockView.blockIndex`：真实块使用解析出的非负索引；虚拟块使用负索引区间，
- *   原文待插入为 `-1000 - n`、译文待插入为 `-2000 - n`、译文独占块为 `-3000 - n`，
- *   不同区间互不重叠，便于 Webview 用 `data-block` 回传定位；
+ *   原文待插入为 `-1000 - n`、译文独占块为 `-3000 - n`，
+ *   两段区间互不重叠，便于 Webview 用 `data-block` 回传定位；
  * - `key` 在模型内唯一（真实块为源块索引字符串，虚拟块带 pending/standalone 前缀）；
  * - 每个 Webview 只读不写：模型是快照，任何写操作都必须回到 PreviewManager；
  * - `counts.total` 为对齐块数 + 译文独占块数，与渲染出的块数可能因空 HTML 跳块而略有差异。
@@ -57,14 +57,14 @@ import { normalizeNewlines } from "../util/hash";
 /**
  * 单个预览块的视图数据（Webview 只读快照）。
  *
- * 渲染策略由字段组合决定：`pendingInsertId` 表示原文待插入，`pendingTargetInsertId`
- * 表示译文待生成原文，`standaloneTargetId` 表示缓存里的译文独占块；三者互斥。
+ * 渲染策略由字段组合决定：`pendingInsertId` 表示原文待插入，`standaloneTargetId`
+ * 表示缓存里的译文独占块；两者互斥。
  * `sourceDeleted` 表示原文块已被暂存删除（尚未写回文件）。
  */
 export interface PreviewBlockView {
   /** 块唯一键；真实块为源块索引字符串，虚拟块形如 `pending:xxx`。原文与译文分栏用它对滚动。 */
   key: string;
-  /** 真实块索引（非负）；虚拟块使用负数区间（-1000/-2000/-3000 起）。 */
+  /** 真实块索引（非负）；虚拟块使用负数区间（-1000/-3000 起）。 */
   blockIndex: number;
   kind: BlockKind;
   status: BlockStatus;
@@ -92,12 +92,8 @@ export interface PreviewBlockView {
   sourceDeleted: boolean;
   /** 原文待插入块 id。 */
   pendingInsertId?: string;
-  /** 译文待生成原文块 id（当前扩展未产出此状态）。 */
-  pendingTargetInsertId?: string;
   /** 译文独占块 id。 */
   standaloneTargetId?: string;
-  /** 译文独占块是否已经暂存回译出的原文（用于「原文已暂存」徽标）。 */
-  targetSourceStaged: boolean;
   /** 是否为人工锁定译文（含已删除标记）。 */
   human: boolean;
   /** 原文相对缓存是否过期；生产代码当前不读取该字段（统计走 counts）。 */
@@ -159,13 +155,6 @@ export interface PreviewModelInput {
   resolveImage?: (src: string) => string;
   /** 尚未写回的原文暂存，用于渲染「待应用」状态。 */
   pendingSource?: SourceStage;
-  /** 待生成原文的译文插入块；当前扩展未使用，渲染分支保留。 */
-  pendingTargetInsertions?: readonly {
-    id: string;
-    afterIndex: number;
-    text: string;
-    sourceStaged?: boolean;
-  }[];
 }
 
 /** 块状态到中文文案的映射；文案来自 i18n，避免在渲染层散落字符串。 */
@@ -300,9 +289,9 @@ function renderParsedDocument(
   return { htmlByIndex, footnoteHtml };
 }
 
-// ---- 虚拟块视图：原文待插入 / 译文待生成原文 / 译文独占 ----
+// ---- 虚拟块视图：原文待插入 / 译文独占 ----
 // 虚拟块不参与对齐，只用于把「尚未落盘」的内容预览出来；它们的 blockIndex 由调用方
-// 传入负数区间（-1000 / -2000 / -3000 起），避免与真实块索引冲突。
+// 传入负数区间（-1000 / -3000 起），避免与真实块索引冲突。
 
 /**
  * 构造「原文待插入」虚拟块。
@@ -338,57 +327,12 @@ function renderPendingInsertion(
     sourcePending: true,
     sourceDeleted: false,
     pendingInsertId: insertion.id,
-    targetSourceStaged: false,
     human: false,
     stale: false,
     hasCache: false,
     canRetranslate: false,
     canMarkSynced: false,
     canEditTarget: false,
-    canBackTranslate: false,
-  };
-}
-
-/**
- * 构造「译文待生成原文」虚拟块（当前扩展命令面不会产生此输入，仅保留渲染能力）。
- *
- * @param targetMd 译文渲染实例。
- * @param insertion 暂存译文插入；`sourceStaged` 表示回译出的原文已暂存。
- * @param blockIndex 负数虚拟索引（`-2000 - n`）。
- * @param sourceLine 展示行号。
- * @returns 可编辑译文草稿的虚拟块视图；不能重译/标记同步。
- */
-function renderPendingTargetInsertion(
-  targetMd: MarkdownIt,
-  insertion: { id: string; text: string; sourceStaged?: boolean },
-  blockIndex: number,
-  sourceLine: number,
-): PreviewBlockView {
-  const parsed = parseMarkdownDocument(insertion.text, targetMd);
-  return {
-    key: `pending-target:${insertion.id}`,
-    blockIndex,
-    kind: parsed.blocks[0]?.kind ?? "other",
-    status: "untranslated",
-    statusLabel: UI_TEXT.preview.actions.targetInsertPendingLabel,
-    headingPath: "",
-    sourceLine,
-    sourceHtml: "",
-    targetHtml: targetMd.render(insertion.text, { docId: "tgt" }),
-    sourceRaw: "",
-    targetRaw: insertion.text,
-    sourceHash: "",
-    cacheId: undefined,
-    sourcePending: false,
-    sourceDeleted: false,
-    pendingTargetInsertId: insertion.id,
-    targetSourceStaged: insertion.sourceStaged === true,
-    human: false,
-    stale: false,
-    hasCache: false,
-    canRetranslate: false,
-    canMarkSynced: false,
-    canEditTarget: true,
     canBackTranslate: false,
   };
 }
@@ -425,7 +369,6 @@ function renderStandaloneTarget(
     sourcePending: false,
     sourceDeleted: false,
     standaloneTargetId: target.id,
-    targetSourceStaged: false,
     human: true,
     stale: false,
     hasCache: true,
@@ -526,21 +469,6 @@ export function buildPreviewModel(input: PreviewModelInput): PreviewModel {
     list.push(insertion);
     insertionsByAfter.set(insertion.afterIndex, list);
   }
-  // 译文插入（待生成原文）按相同方式分组；当前扩展未提供该输入。
-  const targetInsertionsByAfter = new Map<
-    number,
-    Array<{
-      id: string;
-      afterIndex: number;
-      text: string;
-      sourceStaged?: boolean;
-    }>
-  >();
-  for (const insertion of input.pendingTargetInsertions ?? []) {
-    const list = targetInsertionsByAfter.get(insertion.afterIndex) ?? [];
-    list.push(insertion);
-    targetInsertionsByAfter.set(insertion.afterIndex, list);
-  }
   // ---- 译文独占块：按锚点哈希挂到对应原文块之后 ----
   // 锚点 mode=target 时 src 形如 `t-<hash>`，去掉前缀即可与原文块哈希匹配。
   const standaloneByHash = new Map<string, TargetOnlyView[]>();
@@ -563,9 +491,8 @@ export function buildPreviewModel(input: PreviewModelInput): PreviewModel {
     standaloneByHash.set(sourceHash, list);
     standaloneTargetCount += 1;
   }
-  // 三组虚拟块各自维护计数器，用于生成互不重叠的负数 blockIndex。
+  // 两组虚拟块各自维护计数器，用于生成互不重叠的负数 blockIndex。
   let pendingInsertIndex = 0;
-  let pendingTargetIndex = 0;
   let standaloneIndex = 0;
 
   const blocks: PreviewBlockView[] = [];
@@ -594,7 +521,7 @@ export function buildPreviewModel(input: PreviewModelInput): PreviewModel {
     }
   };
   /**
-   * 在指定源块之后依次追加：原文待插入块 -> 译文待插入块 -> 匹配的译文独占块。
+   * 在指定源块之后依次追加：原文待插入块 -> 匹配的译文独占块。
    * @param afterIndex 源块索引；-1 表示文档开头。
    * @param sourceHash 源块哈希，用于匹配译文独占块。
    * @param line 后续虚拟块的展示行号。
@@ -617,21 +544,6 @@ export function buildPreviewModel(input: PreviewModelInput): PreviewModel {
           ),
         );
         pendingInsertIndex += 1;
-      }
-    }
-    const targets = targetInsertionsByAfter.get(afterIndex);
-    if (targets) {
-      targetInsertionsByAfter.delete(afterIndex);
-      for (const insertion of targets) {
-        blocks.push(
-          renderPendingTargetInsertion(
-            targetMd,
-            insertion,
-            -2000 - pendingTargetIndex,
-            line,
-          ),
-        );
-        pendingTargetIndex += 1;
       }
     }
     appendStandalone(sourceHash, line);
@@ -692,7 +604,6 @@ export function buildPreviewModel(input: PreviewModelInput): PreviewModel {
       cacheId: aligned.cache?.anchor.id,
       sourcePending,
       sourceDeleted,
-      targetSourceStaged: false,
       human: aligned.human,
       stale: aligned.stale,
       hasCache: Boolean(aligned.cache),
@@ -732,19 +643,6 @@ export function buildPreviewModel(input: PreviewModelInput): PreviewModel {
         ),
       );
       pendingInsertIndex += 1;
-    }
-  }
-  for (const [afterIndex, list] of targetInsertionsByAfter) {
-    for (const insertion of list) {
-      blocks.push(
-        renderPendingTargetInsertion(
-          targetMd,
-          insertion,
-          -2000 - pendingTargetIndex,
-          Math.max(1, afterIndex + 1),
-        ),
-      );
-      pendingTargetIndex += 1;
     }
   }
   for (const list of standaloneByHash.values()) {

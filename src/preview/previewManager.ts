@@ -323,6 +323,10 @@ class PreviewPanelSession implements vscode.Disposable {
   private disposed = false;
   /** 渲染版本号；异步 load/build 结束后比对，只有最新一次能写 HTML。 */
   private updateVersion = 0;
+  /** update 串行队列：避免 beginExport 的确认渲染被并发刷新按版本号丢弃。 */
+  private updateQueue: Promise<void> = Promise.resolve();
+  /** 导出确认框正在等待首次渲染；此前的后台刷新不得取消 pendingExport。 */
+  private exportConfirmPending = false;
   /** 最近一次成功构建的模型；用于按块索引查找 human 状态等。 */
   private lastModel?: PreviewModel;
   /** 首次渲染完成的信号；所有外部入口先等待它。 */
@@ -430,7 +434,13 @@ class PreviewPanelSession implements vscode.Disposable {
         ),
       };
       this.pendingExport = { prepared, confirmation };
-      await this.update(undefined, confirmation);
+      // 标记确认框正在等待渲染：期间排队的后台刷新不得把 pendingExport 清空。
+      this.exportConfirmPending = true;
+      try {
+        await this.update(undefined, confirmation);
+      } finally {
+        this.exportConfirmPending = false;
+      }
     } finally {
       this.setBusy(false);
     }
@@ -594,11 +604,39 @@ class PreviewPanelSession implements vscode.Disposable {
    * @remarks
    * - 整页替换会重建 DOM：滚动位置由 media/preview.js 从 Webview state 恢复，
    *   但未提交的内联编辑器内容会丢失（刷新由保存/动作触发，属预期行为）；
-   * - 不带 exportConfirmation 的刷新会取消待确认的导出，并提示「已取消」；
+   * - 更新串行执行；不带 exportConfirmation 的刷新会取消已展示的导出确认，
+   *   但 beginExport 的确认框尚未渲染完成时不会被后台刷新提前清空；
    * - 源文件与暂存基准不一致时清空暂存并提示，绝不渲染过期暂存；
    * - 构建失败时渲染错误页，错误同时写入输出通道。
    */
   async update(
+    notice?: {
+      text: string;
+      kind: "info" | "success" | "error";
+    },
+    exportConfirmation?: ExportConfirmationView,
+    cacheTextOverride?: string,
+    sourceConfirmation?: SourceConfirmationView,
+  ): Promise<void> {
+    // 串行化渲染：避免并发的 loadPreviewState 用版本号互相丢弃，
+    // 尤其是 beginExport 的确认框不能被稍后启动的后台刷新吞掉。
+    const task = this.updateQueue.then(() =>
+      this.performUpdate(
+        notice,
+        exportConfirmation,
+        cacheTextOverride,
+        sourceConfirmation,
+      ),
+    );
+    this.updateQueue = task.catch(() => undefined);
+    return task;
+  }
+
+  /**
+   * 真正执行一次预览刷新；只由 {@link update} 串行调用。
+   * 行为约定见 update 的 JSDoc。
+   */
+  private async performUpdate(
     notice?: {
       text: string;
       kind: "info" | "success" | "error";
@@ -614,13 +652,18 @@ class PreviewPanelSession implements vscode.Disposable {
     if (this.sourceWriteInFlight) {
       return;
     }
-    // 普通刷新意味着导出确认框将要被整页替换掉，主动取消待提交的导出。
+    // 普通刷新意味着导出确认框将要被整页替换掉，主动取消待提交的导出；
+    // 但 beginExport 的确认框尚未渲染完成时（exportConfirmPending），
+    // 允许先前排队的后台刷新先跑，不得提前清空 pendingExport。
     if (!exportConfirmation && this.pendingExport) {
-      this.pendingExport = undefined;
-      notice ??= {
-        text: UI_TEXT.notifications.exportConfirmCancelled,
-        kind: "info",
-      };
+      if (!this.exportConfirmPending) {
+        this.pendingExport = undefined;
+        this.exportConfirmPending = false;
+        notice ??= {
+          text: UI_TEXT.notifications.exportConfirmCancelled,
+          kind: "info",
+        };
+      }
     }
     // 版本号在 await 之前自增；只有最后发起的 update 才能落地，避免旧结果覆盖新结果。
     const version = ++this.updateVersion;
@@ -686,6 +729,7 @@ class PreviewPanelSession implements vscode.Disposable {
   dispose(): void {
     this.disposed = true;
     this.pendingExport = undefined;
+    this.exportConfirmPending = false;
     this.clearStagedSource();
   }
 
@@ -1479,12 +1523,14 @@ class PreviewPanelSession implements vscode.Disposable {
    * @remarks
    * 顺序不可调换：
    * 1. 校验基准文本与打开后的文档内容，防止覆盖外部修改；
-   * 2. 用一次 WorkspaceEdit 整篇替换并保存（保持用户 EOL）；
+   * 2. 在 SyncService 的整段文件锁内：用一次 WorkspaceEdit 整篇替换并保存
+   *    （保持用户 EOL）；保存失败先恢复内存文档再抛错；
    * 3. 解除被删源块在缓存中的锚点（detach，基于写回前的旧文本索引）；
    * 4. 提升（promote）回译后已暂存原文的译文独占块；
    * 5. 锁定（lock）回译块对应的缓存锚点。
    * 第 3-5 步任何一步失败都只记录并在最后弹出警告，不中断其余步骤；
-   * 写回期间 `sourceWriteInFlight` 阻止刷新，结束后自行触发一次 update。
+   * 整段锁阻止同步命令插入中间步骤。写回期间 `sourceWriteInFlight` 阻止刷新，
+   * 结束后自行触发一次 update。
    */
   private async writeSourceEdits(): Promise<void> {
     if (!this.hasPendingSource()) {
@@ -1537,72 +1583,86 @@ class PreviewPanelSession implements vscode.Disposable {
         ),
         nextText,
       );
-      if (!(await vscode.workspace.applyEdit(edit))) {
-        throw new Error(UI_TEXT.notifications.sourceWriteFailed);
-      }
       // 先快照待处理项：后续 clearStagedSource 会清空这些 Map。
       const promotions = new Map(this.pendingTargetPromotions);
       const pairedLocks = new Map(this.pendingPairedLocks);
       const deletedSourceIndices = [...this.pendingSourceDeletions];
-      if (!(await document.save())) {
-        throw new Error(UI_TEXT.notifications.sourceWriteFailed);
-      }
       let cacheText: string | undefined;
       let attachError: string | undefined;
-      // ① 解除被删源块的缓存锚点；失败不阻断后续步骤。
-      if (deletedSourceIndices.length > 0) {
-        try {
-          cacheText =
-            (await this.syncService.detachDeletedSourceBlocks(
-              this.sourceUri,
-              state.sourceText,
-              deletedSourceIndices,
-            )) ?? cacheText;
-        } catch (error) {
-          attachError = formatError(error);
-          this.manager.logError(
-            `detach deleted source blocks ${this.sourceUri.fsPath}`,
-            error,
-          );
+      // 文档替换、保存与缓存对账必须处于同一个文件锁临界区：
+      // 同步命令不能插入到中间步骤；保存失败时先恢复内存文档再向上抛错。
+      await this.syncService.runWithSourceLock(this.sourceUri, async () => {
+        if (document.getText() !== state.sourceText) {
+          throw new Error(UI_TEXT.notifications.sourceStagedInvalidated);
         }
-      }
-      // ② 把「回译出原文」的译文独占块提升为普通译文（按哈希找新原文块）。
-      for (const [targetId, promotion] of promotions) {
-        try {
-          cacheText = await this.syncService.promoteTargetBlock(
-            this.sourceUri,
-            targetId,
-            promotion.generatedSourceText,
-          );
-        } catch (error) {
-          attachError = formatError(error);
-          this.manager.logError(
-            `promote target block ${this.sourceUri.fsPath}`,
-            error,
-          );
+        if (!(await vscode.workspace.applyEdit(edit))) {
+          throw new Error(UI_TEXT.notifications.sourceWriteFailed);
         }
-      }
-      // ③ 把回译块对应的缓存锚点锁定为 human；索引偏移由 SyncService 取最近匹配。
-      for (const [blockIndex, lock] of pairedLocks) {
         try {
-          const locked = await this.syncService.lockCachedBlockToSource(
-            this.sourceUri,
-            lock.cacheId,
-            lock.generatedSourceText,
-            blockIndex,
-          );
-          if (locked === undefined) {
-            throw new Error(UI_TEXT.notifications.pairedLockFailed);
+          if (!(await document.save())) {
+            throw new Error(UI_TEXT.notifications.sourceWriteFailed);
           }
-          cacheText = locked;
         } catch (error) {
-          attachError = formatError(error);
-          this.manager.logError(
-            `lock back-translated source ${this.sourceUri.fsPath}`,
-            error,
-          );
+          await this.restoreDocumentText(document, state.sourceText);
+          throw error;
         }
-      }
+        // ① 解除被删源块的缓存锚点；失败不阻断后续步骤。
+        if (deletedSourceIndices.length > 0) {
+          try {
+            cacheText =
+              (await this.syncService.detachDeletedSourceBlocks(
+                this.sourceUri,
+                state.sourceText,
+                deletedSourceIndices,
+                true,
+              )) ?? cacheText;
+          } catch (error) {
+            attachError = formatError(error);
+            this.manager.logError(
+              `detach deleted source blocks ${this.sourceUri.fsPath}`,
+              error,
+            );
+          }
+        }
+        // ② 把「回译出原文」的译文独占块提升为普通译文（按哈希找新原文块）。
+        for (const [targetId, promotion] of promotions) {
+          try {
+            cacheText = await this.syncService.promoteTargetBlock(
+              this.sourceUri,
+              targetId,
+              promotion.generatedSourceText,
+            );
+          } catch (error) {
+            attachError = formatError(error);
+            this.manager.logError(
+              `promote target block ${this.sourceUri.fsPath}`,
+              error,
+            );
+          }
+        }
+        // ③ 把回译块对应的缓存锚点锁定为 human；索引偏移由 SyncService 取最近匹配。
+        for (const [blockIndex, lock] of pairedLocks) {
+          try {
+            const locked = await this.syncService.lockCachedBlockToSource(
+              this.sourceUri,
+              lock.cacheId,
+              lock.generatedSourceText,
+              blockIndex,
+              true,
+            );
+            if (locked === undefined) {
+              throw new Error(UI_TEXT.notifications.pairedLockFailed);
+            }
+            cacheText = locked;
+          } catch (error) {
+            attachError = formatError(error);
+            this.manager.logError(
+              `lock back-translated source ${this.sourceUri.fsPath}`,
+              error,
+            );
+          }
+        }
+      });
       // 写回成功后清空暂存，并通知 Webview 关闭原文确认框。
       this.clearStagedSource();
       await this.panel.webview.postMessage({ type: "sourceSettled" });
@@ -1634,6 +1694,41 @@ class PreviewPanelSession implements vscode.Disposable {
     } finally {
       this.sourceWriteInFlight = false;
       this.setBusy(false);
+    }
+  }
+
+  /**
+   * 保存失败后的内存回滚：把文档内容恢复为写回前的基准文本。
+   *
+   * 只修改编辑器缓冲区，不再次写盘；这样即使保存失败，用户也不会看到源文档
+   * 停留在“整篇替换后但未保存”的中间态。回滚本身失败只记日志，由上层继续
+   * 展示原始保存错误。
+   */
+  private async restoreDocumentText(
+    document: vscode.TextDocument,
+    text: string,
+  ): Promise<void> {
+    try {
+      const restore = new vscode.WorkspaceEdit();
+      restore.replace(
+        document.uri,
+        new vscode.Range(
+          document.positionAt(0),
+          document.positionAt(document.getText().length),
+        ),
+        text,
+      );
+      if (!(await vscode.workspace.applyEdit(restore))) {
+        this.manager.logError(
+          `restore source after failed save ${this.sourceUri.fsPath}`,
+          new Error("工作区拒绝恢复原文缓冲区"),
+        );
+      }
+    } catch (error) {
+      this.manager.logError(
+        `restore source after failed save ${this.sourceUri.fsPath}`,
+        error,
+      );
     }
   }
 
@@ -1821,6 +1916,7 @@ class PreviewPanelSession implements vscode.Disposable {
     try {
       await this.exportService.commit(pending.prepared);
       this.pendingExport = undefined;
+      this.exportConfirmPending = false;
       this.output.appendLine(
         `[${new Date().toISOString()}] export confirmed: ${pending.prepared.target.fsPath}`,
       );
@@ -1866,6 +1962,7 @@ class PreviewPanelSession implements vscode.Disposable {
       return;
     }
     this.pendingExport = undefined;
+    this.exportConfirmPending = false;
     this.output.appendLine(
       `[${new Date().toISOString()}] export cancelled: ${pending.prepared.target.fsPath}`,
     );

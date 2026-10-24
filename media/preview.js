@@ -373,6 +373,8 @@
   // 写入进行中时禁用对应按钮，防止重复提交；状态只活在本次 Webview 生命周期内。
   let exportBusy = false;
   let sourceBusy = false;
+  // 写回失败后，关闭错误确认框时补一次刷新，避免预览停留在写回前的旧模型。
+  let sourceRefreshAfterClose = false;
 
   function modalIsOpen(modal) {
     return Boolean(activeModal && activeModal.el === modal);
@@ -677,6 +679,7 @@
     if (!sourceModal || !data || !data.diff) {
       return;
     }
+    sourceRefreshAfterClose = false;
     renderSource(data);
     clearSourceError();
     setSourcePending(false);
@@ -689,6 +692,11 @@
     }
     closeActiveModal();
     setSourcePending(false);
+    // 写回失败可能已经替换了文档缓冲区；关闭错误框后让主进程重建模型。
+    if (sourceRefreshAfterClose) {
+      sourceRefreshAfterClose = false;
+      post({ type: "refresh" });
+    }
   }
 
   function writeSource() {
@@ -758,6 +766,8 @@
       event.preventDefault();
       if (modalIsOpen(exportModal)) {
         cancelExport();
+      } else if (modalIsOpen(sourceModal)) {
+        closeSourceModal();
       } else {
         closeActiveModal();
       }
@@ -810,9 +820,8 @@
     if (!Number.isFinite(blockIndex)) {
       return;
     }
-    // 三种目标块使用不同的保存消息：独立译文、待回译译文、普通译文。
+    // 两种目标块使用不同的保存消息：独立译文、普通译文。
     const pendingId = block.dataset.pendingId || "";
-    const pendingTargetId = block.dataset.pendingTargetId || "";
     const standaloneId = block.dataset.standaloneId || "";
     pane.dataset.editing = "true";
     content.hidden = true;
@@ -835,9 +844,7 @@
         ? text("sourceEditHint")
         : standaloneId
           ? text("standaloneEditHint")
-          : pendingTargetId
-            ? text("targetDraftEditHint")
-            : text("targetEditHint");
+          : text("targetEditHint");
     const cancel = document.createElement("button");
     cancel.type = "button";
     cancel.className = "mbs-button";
@@ -850,9 +857,7 @@
         ? text("saveSourceStage")
         : standaloneId
           ? text("saveStandaloneTarget")
-          : pendingTargetId
-            ? text("saveTargetDraft")
-            : text("saveTarget");
+          : text("saveTarget");
     bar.append(hint, cancel, save);
     pane.append(editor, bar);
 
@@ -885,12 +890,6 @@
           post({
             type: "updateStandaloneTarget",
             standaloneId: standaloneId,
-            text: value,
-          });
-        } else if (pendingTargetId) {
-          post({
-            type: "updateTargetInsert",
-            pendingTargetId: pendingTargetId,
             text: value,
           });
         } else {
@@ -1042,7 +1041,7 @@
         showToast(text("emptyEdit"), "error");
         return;
       }
-      // 主进程会解析 Markdown 并决定是否生成独立译文块或待回译块。
+      // 插入译文会生成缓存中的译文独占块，立即参与导出。
       post({
         type: target ? "insertTargetBlock" : "insertSourceBlock",
         afterBlockIndex: afterBlockIndex,
@@ -1231,9 +1230,6 @@
       if (action.dataset.pendingId) {
         message.pendingId = action.dataset.pendingId;
       }
-      if (action.dataset.pendingTargetId) {
-        message.pendingTargetId = action.dataset.pendingTargetId;
-      }
       if (action.dataset.standaloneId) {
         message.standaloneId = action.dataset.standaloneId;
       }
@@ -1326,6 +1322,7 @@
       return;
     }
     if (message.type === "sourceError" && modalIsOpen(sourceModal)) {
+      sourceRefreshAfterClose = true;
       setSourcePending(false);
       showSourceError(message.message);
       return;

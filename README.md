@@ -254,7 +254,8 @@ npm run package
 ## 安全与隐私
 
 - API Key 只存入 VS Code SecretStorage，不写入设置、工作区、日志、提示词或缓存。通用 HTTP 模板中的 `{{apiKey}}` 只在发起请求时替换。
-- OpenAI 兼容与通用 HTTP Provider 共用同一个 SecretStorage Key；切换 Provider 或 endpoint 后请重新执行 **测试 AI 翻译连接**，确认 Key 与目标服务匹配。
+- OpenAI 兼容与通用 HTTP Provider 使用独立的 SecretStorage Key；旧版共用 Key 仅作为升级迁移回退。切换 Provider 或 endpoint 后请重新执行 **测试 AI 翻译连接**，确认 Key 与目标服务匹配。
+- 原文写回（文档替换、保存、缓存对账）与同步任务共享同一文件锁；写回失败时会恢复内存文档，不会留下未保存的中间态。
 - HTTP 模板中的未知变量、非法请求头、换行注入和远程明文 HTTP 会被拒绝；错误信息会遮盖密钥。
 - 文档文本会发送到配置的翻译服务；请确认服务端的数据处理策略。
 - 原始 HTML 不渲染；Webview 使用 CSP 和 nonce 限制脚本与资源。

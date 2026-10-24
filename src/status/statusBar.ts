@@ -58,7 +58,7 @@ function taskLine(task: TranslationTaskView): string {
  * 关键不变量：
  * - 任务与并发文案来自 UI_TEXT，另有少量字面量拼接（如“个任务”）；
  * - tooltip 中的任务标签/阶段一律用 appendText 追加，避免 Markdown 注入；
- * - 失败数只统计任务监控器仍保留的历史（最多 40 条），不是全局累计。
+ * - 失败数统计 failed 与 partial（partial 表示有块失败），只统计任务监控器仍保留的历史（最多 40 条），不是全局累计。
  */
 export class TranslationStatusBar implements vscode.Disposable {
   private readonly item: vscode.StatusBarItem;
@@ -128,9 +128,9 @@ export class TranslationStatusBar implements vscode.Disposable {
     const running = snapshot.active.some(
       (task) => task.status === "running",
     );
-    // 失败数来自保留的历史记录（见类注释），清除历史后归零。
+    // 失败数来自保留的历史记录（见类注释），partial 同样计为失败；清除历史后归零。
     const failedCount = snapshot.finished.filter(
-      (task) => task.status === "failed",
+      (task) => task.status === "failed" || task.status === "partial",
     ).length;
 
     if (snapshot.activeCount > 0) {

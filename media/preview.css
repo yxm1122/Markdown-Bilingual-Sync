@@ -814,10 +814,6 @@ button:focus-visible {
   box-shadow: inset 3px 0 0 var(--mbs-accent);
 }
 
-.mbs-block-pending-target {
-  box-shadow: inset 3px 0 0 var(--mbs-human);
-}
-
 .mbs-block-standalone {
   box-shadow: inset 3px 0 0 var(--mbs-accent);
 }

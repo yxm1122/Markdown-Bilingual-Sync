@@ -1180,15 +1180,17 @@ export class SyncService {
    *
    * 回译生成的原文必须恰好一个块；若原文中哈希相同的块不止一个，用 `previousBlockIndex`
    * 选择距离最近的。找不到对应原文或缓存不存在时返回 `undefined`（不写缓存）；块已
-   * 删除时原样返回缓存文本。内部持有文件锁。
+   * 删除时原样返回缓存文本。默认内部持有文件锁；`lockHeld` 用于外层的整段写回锁。
    */
   async lockCachedBlockToSource(
     sourceUri: vscode.Uri,
     cacheId: string,
     generatedSourceText: string,
     previousBlockIndex?: number,
+    lockHeld = false,
   ): Promise<string | undefined> {
-    return this.withLock(sourceUri, async () => {
+    // `lockHeld` 仅由 runWithSourceLock 的写回序列传入，避免同一操作重复加锁。
+    const action = async (): Promise<string | undefined> => {
       const state = await this.loadState(sourceUri, false);
       if (!state.cacheText?.trim()) {
         return undefined;
@@ -1239,7 +1241,8 @@ export class SyncService {
         `lock block ${cacheId} to source ${sourceBlock.hash} of ${path.basename(sourceUri.fsPath)}`,
       );
       return nextText;
-    });
+    };
+    return lockHeld ? action() : this.withLock(sourceUri, action);
   }
 
   /**
@@ -1248,17 +1251,18 @@ export class SyncService {
    * `deletedIndices` 基于 `previousSourceText` 的切块结果：`copy`/`deleted` 条目直接
    * 移除；人工或机器译文若仍有内容，则把锚点改为 `target`（`src` 指向前一个未删除
    * 的原文块或 `start`），保留译文作为 target-only 块。没有变化时返回 `undefined`。
-   * 内部持有文件锁。
+   * 默认内部持有文件锁；`lockHeld` 用于外层的整段写回锁。
    */
   async detachDeletedSourceBlocks(
     sourceUri: vscode.Uri,
     previousSourceText: string,
     deletedIndices: readonly number[],
+    lockHeld = false,
   ): Promise<string | undefined> {
     if (deletedIndices.length === 0) {
       return undefined;
     }
-    return this.withLock(sourceUri, async () => {
+    const action = async (): Promise<string | undefined> => {
       const state = await this.loadState(sourceUri, false);
       if (!state.cacheText?.trim()) {
         return undefined;
@@ -1319,7 +1323,8 @@ export class SyncService {
         `detach ${deletedIndices.length} deleted source block(s) from ${path.basename(sourceUri.fsPath)}`,
       );
       return nextText;
-    });
+    };
+    return lockHeld ? action() : this.withLock(sourceUri, action);
   }
 
   /**
@@ -1649,6 +1654,25 @@ export class SyncService {
     this.output.appendLine(
       `[${new Date().toISOString()}] ${message}`,
     );
+  }
+
+  /**
+   * 在指定源文件的同步锁内执行一段自定义操作。
+   *
+   * 预览的原文写回需要把「文档替换 + 保存 + 缓存对账」合并为一个临界区，
+   * 期间同步命令会因同一文件锁被拒绝。回调内必须调用带 `lockHeld=true` 的
+   * detach/lock 方法，避免重复加锁；`promoteTargetBlock` 本身不再加锁。
+   *
+   * @param sourceUri 源 Markdown 文件。
+   * @param action 已持锁时执行的操作。
+   * @returns action 的返回值。
+   * @throws 清空缓存进行中或同文件已有任务时抛出中文错误。
+   */
+  async runWithSourceLock<T>(
+    sourceUri: vscode.Uri,
+    action: () => Promise<T>,
+  ): Promise<T> {
+    return this.withLock(sourceUri, action);
   }
 
   /**

@@ -66,7 +66,7 @@ export const UI_TEXT = {
     confirmRetranslateAllAction: "全部重译",
     apiKeyInputTitle: "设置 AI 翻译 API Key",
     apiKeyInputPrompt:
-      "密钥保存在 VS Code SecretStorage 中，不会写入设置、工作区或缓存。",
+      "密钥按当前 Provider 单独保存在 VS Code SecretStorage 中，不会写入设置、工作区或缓存。",
     apiKeyEmpty: "API Key 不能为空。",
     apiKeyTooLong: "API Key 过长。",
     apiKeyHintMock:
@@ -183,16 +183,10 @@ export const UI_TEXT = {
       editHint: "点击内容可编辑原始 Markdown",
       sourceEditHint: "暂存后点击“应用原文修改”写回文件",
       targetEditHint: "保存后锁定该块",
-      targetDraftEditHint: "保存草稿，点击“回译生成原文”继续",
-      saveTargetDraft: "保存草稿",
       emptyEdit: "内容不能为空。",
       sourceInsertPendingLabel: "原文待插入",
       sourceDeletePendingLabel: "原文待删除",
-      targetInsertPendingLabel: "译文待生成原文",
-      targetInsertSourcePending: "原文将在回译后生成。",
-      targetInsertSourceStaged: "原文已暂存，应用后建立关联。",
       standaloneSourceEmpty: "无对应原文（译文锁定块）。",
-      standalonePendingLabel: "译文锁定",
       targetOnlyLabel: "译文锁定",
       removeStandalone: "删除译文",
       removeStandaloneTitle: "删除这个译文块",
@@ -200,11 +194,8 @@ export const UI_TEXT = {
       standaloneEditHint: "保存后仅影响导出，不修改原文",
       targetInsertHint: "保存后会立即进入导出，不修改原文",
       addStandaloneTarget: "加入导出",
-      targetSourceStagedBadge: "原文已暂存",
       backTranslateTarget: "回译生成原文",
       backTranslateTargetTitle: "把该译文翻回原文语言，并暂存为新的原文块",
-      removeTargetInsert: "移除译文块",
-      removeTargetInsertTitle: "移除这个待生成的译文块",
       insertBlock: "插入",
       insertBlockTitle: "在该块后插入新的块",
       showBlockActions: "显示或隐藏该块的操作按钮",
@@ -366,19 +357,14 @@ export const UI_TEXT = {
     undoDeleting: "正在撤销删除…",
     undoDeleteDone: "已撤销删除。",
     targetEditEmpty: "译文不能为空。",
-    targetInsertAdded: "已暂存新的译文块，点击“回译生成原文”继续。",
     standaloneAdded: "已新增译文块，会立即进入导出。",
     standaloneUpdated: "已更新译文块。",
     standaloneRemoved: "已删除译文块。",
-    targetInsertUpdated: "已更新待生成的译文块。",
-    targetInsertRemoved: "已移除待生成的译文块。",
     targetInsertBackTranslating: "正在回译生成原文…",
     targetInsertSourceStaged:
       "原文已暂存，点击“应用原文修改”写回文件。",
     targetInsertAttachFailed:
       "原文已写入，但译文插入块关联失败：{message}",
-    targetDraftsDiscarded:
-      "有 {count} 个未回译的译文草稿已随原文写入清除。",
     targetInsertMultiBlock:
       "回译结果包含多个 Markdown 块，无法自动关联到单个译文块。",
     confirmSkipHuman:

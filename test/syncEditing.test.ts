@@ -488,6 +488,48 @@ describe("SyncService block editing and back-translation", () => {
     expect(cacheStore.writes).toBe(writes);
   });
 
+  it("rejects concurrent cache mutations while a source writeback lock is held", async () => {
+    const uri = mocks.FakeUri.file("/project/demo.md") as unknown as Uri;
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const lock = service.runWithSourceLock(uri, async () => {
+      await gate;
+    });
+
+    await expect(
+      service.deleteTargetBlock(uri, 0),
+    ).rejects.toThrow(/已有同步任务/);
+
+    release();
+    await lock;
+  });
+
+  it("allows cache reconciliation under an already-held source lock", async () => {
+    const uri = mocks.FakeUri.file("/project/demo.md") as unknown as Uri;
+    const paragraph = inspect(SOURCE, cacheStore.text!).alignment.blocks.find(
+      (block) => block.source.kind === "paragraph",
+    )!;
+    mocks.documentState.text =
+      parseMarkdownDocument(SOURCE, makeMd())
+        .blocks.filter((block) => block.index !== paragraph.source.index)
+        .map((block) => block.raw)
+        .join("\n\n") + "\n";
+
+    const cacheText = await service.runWithSourceLock(uri, () =>
+      service.detachDeletedSourceBlocks(
+        uri,
+        SOURCE,
+        [paragraph.source.index],
+        true,
+      ),
+    );
+
+    expect(cacheText).toContain('"mode":"target"');
+    expect(cacheText).not.toContain("无法对应");
+  });
+
   it("locks a back-translated source block to its cached translation", async () => {
     const paragraph = inspect(SOURCE, cacheStore.text!).alignment.blocks.find(
       (block) => block.source.kind === "paragraph" && block.cache,
