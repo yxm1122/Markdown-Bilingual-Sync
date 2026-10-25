@@ -1,10 +1,54 @@
 /**
- * 语言标签到文件后缀的转换（Node / 扩展主进程，供缓存、导出与批量扫描复用）。
+ * 语言标签工具（Node / 扩展主进程，供缓存、导出、设置与任务面板复用）。
  *
  * 缓存文件与导出文件都按 `<文件名>.<主语言标签><扩展名>` 命名（缓存固定 .md，导出沿用
  * 原文扩展名），因此这里既决定产物路径，也是“如何识别目标语言导出文件”的唯一规则。
- * 本模块为纯函数，不依赖 vscode/DOM，也不参与消息通信。
+ * 另外集中提供 BCP-47 基础校验与“支持的语言”设置规范化，保证同步服务与任务面板对
+ * 语言标签的判定一致。本模块为纯函数，不依赖 vscode/DOM，也不参与消息通信。
  */
+
+/**
+ * BCP-47 语言标签的基础校验规则。
+ *
+ * 只接受 `en`、`zh-CN`、`zh-Hans-CN` 这类由字母主语言标签和 1–8 位字母数字子标签
+ * 组成的值；不追求完整的 BCP-47 语法，也不做 extlang/private-use 等扩展校验。
+ * 同步服务与 supportedLanguages 共用该规则，避免两处判定漂移。
+ */
+export const LANGUAGE_TAG = /^[A-Za-z]{2,8}(?:-[A-Za-z0-9]{1,8})*$/;
+
+/**
+ * 规范化 markdownBilingualSync.supportedLanguages 设置值。
+ *
+ * 规则：只保留字符串项，逐项 trim；忽略空值、非字符串与不符合 BCP-47 基础规则的项；
+ * 按转小写后的标签去重（大小写不敏感，保留首次出现的拼写与顺序）。输入不是数组时
+ * 返回空数组，调用方负责再把当前 targetLanguage 兜底加入选项。
+ *
+ * @param value 来自 VS Code 设置的原始值（可能被用户改成任意类型）。
+ * @returns 去重后的合法语言标签，保持设置中的相对顺序。
+ */
+export function normalizeSupportedLanguages(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  const result: string[] = [];
+  const seen = new Set<string>();
+  for (const item of value) {
+    if (typeof item !== "string") {
+      continue;
+    }
+    const tag = item.trim();
+    if (!tag || !LANGUAGE_TAG.test(tag)) {
+      continue;
+    }
+    const key = tag.toLowerCase();
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    result.push(tag);
+  }
+  return result;
+}
 
 /**
  * 扩展支持的编辑器语言 ID。

@@ -77,6 +77,11 @@ export function buildTaskViewHtml(input: TaskViewHtmlInput): string {
       <button type="button" data-action="openOutput">${UI_TEXT.taskPanel.openOutput}</button>
     </span>
   </div>
+  <div class="task-language" role="group" aria-label="${UI_TEXT.taskPanel.languageSection}">
+    <select id="task-source-language" class="task-language-select" aria-label="${UI_TEXT.taskPanel.sourceLanguageLabel}" title="${UI_TEXT.taskPanel.sourceLanguageTitle}" disabled></select>
+    <button type="button" class="task-language-swap" data-action="swapLanguages" title="${UI_TEXT.taskPanel.swapLanguagesTitle}" aria-label="${UI_TEXT.taskPanel.swapLanguagesTitle}" disabled><span aria-hidden="true">⇄</span></button>
+    <select id="task-target-language" class="task-language-select" aria-label="${UI_TEXT.taskPanel.targetLanguageLabel}" title="${UI_TEXT.taskPanel.targetLanguageTitle}" disabled></select>
+  </div>
   <div id="task-content" class="task-content" aria-live="polite"></div>
 </div>
 <script id="mbs-task-text" type="application/json">${text}</script>

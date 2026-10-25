@@ -2,7 +2,7 @@
   "name": "markdown-bilingual-sync",
   "displayName": "Markdown Bilingual Sync",
   "description": "AI-powered bilingual Markdown translation and preview for VS Code: block-anchored cache, translation locking, split views, glossary, and export.",
-  "version": "0.10.1",
+  "version": "0.11.0",
   "publisher": "yxm1122",
   "license": "MIT",
   "repository": {
@@ -429,6 +429,17 @@
           "default": "zh-CN",
           "description": "译文语言（BCP-47，如 zh-CN、ja-JP）。缓存与导出后缀取主语言标签。",
           "order": 31
+        },
+        "markdownBilingualSync.supportedLanguages": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [
+            "zh-CN"
+          ],
+          "description": "任务面板原文/译文语言快捷切换的候选列表（BCP-47，如 en、zh-CN、ja-JP）。两个下拉框按数组顺序显示；空白、非法和大小写重复项会被忽略，当前 sourceLanguage 与 targetLanguage 始终包含在选项中。注意：缓存与导出后缀只取主语言标签，zh-CN 与 zh-TW 会共用 zh 后缀，请避免同时添加。",
+          "order": 32
         },
         "markdownBilingualSync.stableTranslation": {
           "type": "boolean",

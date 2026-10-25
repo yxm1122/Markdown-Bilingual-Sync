@@ -57,8 +57,7 @@ import {
 } from "../translation/types";
 import { estimateTokenCount } from "../translation/batching";
 import { blockHash, newBlockId } from "../util/hash";
-
-const LANGUAGE_TAG = /^[A-Za-z]{2,8}(?:-[A-Za-z0-9]{1,8})*$/;
+import { LANGUAGE_TAG } from "../util/language";
 
 /** 摘要是一个手动触发的单次请求；超过该输入规模时提示手动填写，避免超出模型上下文。 */
 const SUMMARY_MAX_INPUT_TOKENS = 12_000;

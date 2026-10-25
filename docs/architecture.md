@@ -195,6 +195,14 @@ batchTranslateFolder
 - 同步/重译/全部重译/回译可以携带摘要；摘要 token 从每批预算中扣除；不同摘要的请求不会被合并。
 - 稳定翻译：普通同步/重译时把旧译文作为 `previous-target` reference；回译把当前原文作为 `previous-source`。显式 `human` 块通常不会被普通同步选中，但用户手动单块重译时可以带旧译文参考。
 
+### 3.8 任务面板语言快捷切换
+
+- `TaskViewProvider.sendState` 附带 `sourceLanguage`、`targetLanguage` 与 `supportedLanguages`；选项由配置和 `normalizeSupportedLanguages` 派生，列表始终包含当前原文与译文语言，避免设置漏项导致下拉框空白。
+- 原文/译文两个选择器与中间的交换按钮位于任务列表之外的静态骨架中。任务列表每次 state 推送都会重绘 `innerHTML`，语言区只重建 `<option>` 与选中值，因此不会丢失输入焦点；显示名由 `Intl.DisplayNames` 本地化为中文，`option.value` 仍是 BCP-47 标签。
+- webview 发送 `{ type: "setSourceLanguage" | "setTargetLanguage", language }` 或 `{ type: "swapLanguages" }`；宿主只接受当前选项中的值，并拒绝两侧语言相同，非法请求只提示、不写设置。
+- 写回语言设置时沿用各自现有的作用域：`inspect` 显示已有 `workspaceValue` 就写 Workspace，否则写 Global，避免一次快捷切换意外创建工作区设置。交换需要连续写两个设置；第二个写入失败时会回滚第一个，避免只交换一半。
+- 当前实现不自动重译已有缓存；改语言后仍需手动执行同步或重译，缓存与导出后缀按新主语言标签计算。
+
 ## 4. Provider 协议
 
 定义在 [`src/translation/types.ts`](../src/translation/types.ts)。

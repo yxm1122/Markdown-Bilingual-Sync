@@ -13,14 +13,24 @@
  */
 import { randomBytes } from "node:crypto";
 import * as vscode from "vscode";
+import { formatText, UI_TEXT } from "../i18n/zh";
 import { buildTaskViewHtml } from "./taskViewHtml";
 import type {
   TranslationTaskMonitor,
   TranslationTaskView,
 } from "./taskMonitor";
 import type { ConcurrencyLimiter } from "../translation/concurrency";
+import {
+  buildTaskViewLanguages,
+  selectLanguage,
+  swapTaskViewLanguages,
+  type TaskViewLanguages,
+} from "./taskViewState";
 
 // ---- 类型 ----
+
+/** 语言切换的目标侧。 */
+type LanguageRole = "source" | "target";
 
 /** 任务视图“运行状态”区展示的系统信息（不含任何密钥）。 */
 export interface TaskViewSystemInfo {
@@ -68,7 +78,8 @@ function toStateTask(task: TranslationTaskView): TaskViewStateTask {
  * 职责：
  * - 解析 webview（写入 HTML、设置资源根目录、注册消息与可见性监听）；
  * - 订阅任务监控器、并发限制器与扩展配置，100ms 去抖后推送完整快照；
- * - 处理页面按钮：取消全部/单个任务、清空历史、打开输出、打开源文件/预览。
+ * - 处理页面按钮：取消全部/单个任务、清空历史、打开输出、打开源文件/预览；
+ * - 校验并写回任务面板的译文语言切换（选项、源语言冲突与设置作用域）。
  *
  * 生命周期：
  * - 随 activate 注册到 `markdownBilingualSync.tasksView`，并加入 context.subscriptions；
@@ -76,7 +87,7 @@ function toStateTask(task: TranslationTaskView): TaskViewStateTask {
  * - dispose 时清理去抖定时器、webview 监听与外部订阅。
  *
  * 关键不变量：
- * - state 只由 monitor.snapshot() 派生，provider 不自行维护任务状态；
+ * - state 只由 monitor.snapshot() 与当前配置派生，provider 不自行维护任务状态；
  * - webview 消息里的 id 必须为整数，路由按 type 精确匹配，未知消息忽略；
  * - 不向 webview 传递 URI 或密钥，仅传 hasUri 与相对路径标签。
  */
@@ -91,6 +102,8 @@ export class TaskViewProvider
   private viewDisposables: vscode.Disposable[] = [];
   /** 状态推送去抖定时器；避免高频进度更新刷爆 postMessage。 */
   private updateTimer?: ReturnType<typeof setTimeout>;
+  /** 语言切换写入队列；避免快速连续选择时 config.update 乱序落盘。 */
+  private languageUpdateQueue: Promise<void> = Promise.resolve();
 
   /** 订阅任务、并发与配置变化；实际推送由 scheduleUpdate 去抖。 */
   constructor(private readonly options: TaskViewProviderOptions) {
@@ -224,7 +237,23 @@ export class TaskViewProvider
   }
 
   /**
-   * 推送完整状态快照（任务、并发、系统信息）。
+   * 读取任务视图语言状态。
+   * 每次推送都重新读取设置，保证设置页或快捷切换后立即生效；非法配置由纯函数兜底，
+   * 这里不抛错，避免任务面板因语言设置问题整体无法渲染。
+   */
+  private getLanguages(): TaskViewLanguages {
+    const config = vscode.workspace.getConfiguration(
+      "markdownBilingualSync",
+    );
+    return buildTaskViewLanguages(
+      config.get<unknown>("sourceLanguage", "en"),
+      config.get<unknown>("targetLanguage", "zh-CN"),
+      config.get<unknown>("supportedLanguages", ["zh-CN"]),
+    );
+  }
+
+  /**
+   * 推送完整状态快照（任务、并发、系统信息与语言设置）。
    * @sideeffect postMessage；视图已销毁时静默返回
    */
   private sendState(): void {
@@ -237,6 +266,7 @@ export class TaskViewProvider
       type: "state",
       state: {
         generatedAt: Date.now(),
+        ...this.getLanguages(),
         active: snapshot.active.map(toStateTask),
         finished: snapshot.finished.map(toStateTask),
         activeRequests: this.options.limiter.activeCount,
@@ -272,7 +302,8 @@ export class TaskViewProvider
    * 路由 webview 消息。
    *
    * 支持：ready、cancelAll、clearFinished、openOutput、cancelTask、
-   * openSource、openPreview；其余消息忽略。
+   * openSource、openPreview、setSourceLanguage、setTargetLanguage、swapLanguages；
+   * 其余消息忽略。
    * 统一捕获分发过程中的异常（例如源文件已被删除导致 openTextDocument 失败），
    * 写入输出通道并弹出错误提示，避免未处理的 Promise 拒绝。
    */
@@ -317,6 +348,19 @@ export class TaskViewProvider
         this.options.monitor.clearFinished();
         this.sendState();
         return;
+      case "setSourceLanguage":
+        await this.enqueueLanguageUpdate(() =>
+          this.setLanguage("source", message.language),
+        );
+        return;
+      case "setTargetLanguage":
+        await this.enqueueLanguageUpdate(() =>
+          this.setLanguage("target", message.language),
+        );
+        return;
+      case "swapLanguages":
+        await this.enqueueLanguageUpdate(() => this.swapLanguages());
+        return;
       case "openOutput":
         this.options.output.show(true);
         return;
@@ -345,5 +389,175 @@ export class TaskViewProvider
       default:
         return;
     }
+  }
+
+  /**
+   * 串行化语言切换。页面可能连续提交多次选择或点击交换，config.update 是异步的；
+   * 排队可以保证最终写入顺序与用户最后一次操作一致，避免旧请求晚到后把设置改回去。
+   */
+  private enqueueLanguageUpdate(action: () => Promise<void>): Promise<void> {
+    const next = this.languageUpdateQueue.then(action);
+    this.languageUpdateQueue = next.catch(() => {
+      /* 具体操作的错误已在内部处理，不阻塞后续选择。 */
+    });
+    return next;
+  }
+
+  /**
+   * 校验并写回任务面板选择的单侧语言。
+   *
+   * 只接受当前 supportedLanguages 中的值，且不能与另一侧语言相同；写回作用域沿用
+   * 该设置是否已有工作区值：有则 Workspace，否则 Global。非法或写入失败只提示并
+   * 回推当前状态，不修改设置。
+   */
+  private async setLanguage(
+    role: LanguageRole,
+    requested: unknown,
+  ): Promise<void> {
+    const languages = this.getLanguages();
+    const other =
+      role === "source" ? languages.targetLanguage : languages.sourceLanguage;
+    const selection = selectLanguage(
+      requested,
+      languages.supportedLanguages,
+      other,
+    );
+    if (selection.status !== "ok") {
+      const template =
+        selection.status === "invalid"
+          ? role === "source"
+            ? UI_TEXT.taskPanel.sourceLanguageInvalid
+            : UI_TEXT.taskPanel.targetLanguageInvalid
+          : role === "source"
+            ? UI_TEXT.taskPanel.sourceLanguageSameAsTarget
+            : UI_TEXT.taskPanel.targetLanguageSameAsSource;
+      const message = formatText(template, {
+        language: selection.language || "-",
+      });
+      void vscode.window.showErrorMessage(
+        `Markdown Bilingual Sync：${message}`,
+      );
+      // 页面可能已把下拉框切到提交值；回推配置状态以还原选中项。
+      this.sendState();
+      return;
+    }
+
+    try {
+      await this.writeLanguageSetting(
+        role === "source" ? "sourceLanguage" : "targetLanguage",
+        selection.language,
+      );
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.options.output.appendLine(
+        `[${new Date().toISOString()}] set ${role} language failed: ${message}`,
+      );
+      const template =
+        role === "source"
+          ? UI_TEXT.taskPanel.sourceLanguageUpdateFailed
+          : UI_TEXT.taskPanel.targetLanguageUpdateFailed;
+      void vscode.window.showErrorMessage(
+        `Markdown Bilingual Sync：${formatText(template, { message })}`,
+      );
+      this.sendState();
+      return;
+    }
+    this.sendState();
+  }
+
+  /**
+   * 交换原文与译文语言。
+   *
+   * 两次 config.update 没有事务：先写成功的一侧在后续失败时需要回滚，避免留下
+   * “只交换了一半”的配置。回滚失败只记录日志，最终仍回推当前真实配置。
+   */
+  private async swapLanguages(): Promise<void> {
+    const languages = this.getLanguages();
+    const swapped = swapTaskViewLanguages(
+      languages.sourceLanguage,
+      languages.targetLanguage,
+      languages.supportedLanguages,
+    );
+    if (swapped.status !== "ok") {
+      void vscode.window.showErrorMessage(
+        `Markdown Bilingual Sync：${UI_TEXT.taskPanel.swapLanguagesUnavailable}`,
+      );
+      this.sendState();
+      return;
+    }
+
+    const applied: Array<{
+      key: "sourceLanguage" | "targetLanguage";
+      previous: string;
+      target: vscode.ConfigurationTarget;
+    }> = [];
+    try {
+      const sourceTarget = await this.writeLanguageSetting(
+        "sourceLanguage",
+        swapped.sourceLanguage,
+      );
+      applied.push({
+        key: "sourceLanguage",
+        previous: languages.sourceLanguage,
+        target: sourceTarget,
+      });
+      const targetTarget = await this.writeLanguageSetting(
+        "targetLanguage",
+        swapped.targetLanguage,
+      );
+      applied.push({
+        key: "targetLanguage",
+        previous: languages.targetLanguage,
+        target: targetTarget,
+      });
+    } catch (error) {
+      const config = vscode.workspace.getConfiguration("markdownBilingualSync");
+      for (const entry of applied.reverse()) {
+        try {
+          await config.update(entry.key, entry.previous, entry.target);
+        } catch (rollbackError) {
+          const detail =
+            rollbackError instanceof Error
+              ? rollbackError.message
+              : String(rollbackError);
+          this.options.output.appendLine(
+            `[${new Date().toISOString()}] rollback ${entry.key} failed: ${detail}`,
+          );
+        }
+      }
+      const message = error instanceof Error ? error.message : String(error);
+      this.options.output.appendLine(
+        `[${new Date().toISOString()}] swap languages failed: ${message}`,
+      );
+      void vscode.window.showErrorMessage(
+        `Markdown Bilingual Sync：${formatText(
+          UI_TEXT.taskPanel.languageUpdateFailed,
+          { message },
+        )}`,
+      );
+      this.sendState();
+      return;
+    }
+    this.sendState();
+  }
+
+  /**
+   * 写入单个语言设置，保持其现有的用户/工作区作用域。
+   *
+   * 不因一次快捷切换额外创建工作区设置：只有该设置已显式写入工作区时才写 Workspace，
+   * 否则写 Global。返回实际使用的目标，供交换失败时回滚。
+   */
+  private async writeLanguageSetting(
+    key: "sourceLanguage" | "targetLanguage",
+    value: string,
+  ): Promise<vscode.ConfigurationTarget> {
+    const config = vscode.workspace.getConfiguration("markdownBilingualSync");
+    const inspected = config.inspect<string>(key);
+    const target =
+      inspected?.workspaceValue !== undefined
+        ? vscode.ConfigurationTarget.Workspace
+        : vscode.ConfigurationTarget.Global;
+    await config.update(key, value, target);
+    return target;
   }
 }

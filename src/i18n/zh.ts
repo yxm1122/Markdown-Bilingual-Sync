@@ -440,6 +440,26 @@ export const UI_TEXT = {
     modelLabel: "模型 / 模板",
     tokenBudgetLabel: "批次预算",
     batchLimitLabel: "块数上限",
+    languageSection: "语言",
+    targetLanguageLabel: "译文语言",
+    sourceLanguageLabel: "原文语言",
+    targetLanguageTitle:
+      "切换后续翻译与导出的译文语言；下拉选项由 markdownBilingualSync.supportedLanguages 设置控制。",
+    sourceLanguageTitle:
+      "选择原文语言；下拉选项由 markdownBilingualSync.supportedLanguages 设置控制。",
+    targetLanguageInvalid:
+      "无法切换译文语言：“{language}”不在“支持的语言”列表中。",
+    targetLanguageSameAsSource:
+      "无法切换译文语言：不能与原文语言“{language}”相同。",
+    targetLanguageUpdateFailed: "切换译文语言失败：{message}",
+    sourceLanguageInvalid:
+      "无法切换原文语言：“{language}”不在“支持的语言”列表中。",
+    sourceLanguageSameAsTarget:
+      "无法切换原文语言：不能与译文语言“{language}”相同。",
+    sourceLanguageUpdateFailed: "切换原文语言失败：{message}",
+    swapLanguagesTitle: "交换原文与译文语言",
+    swapLanguagesUnavailable: "原文与译文语言必须有效且不同，当前无法交换。",
+    languageUpdateFailed: "切换语言失败：{message}",
     openOutput: "打开输出日志",
     clearFinished: "清除任务历史",
     cancelAll: "取消全部任务",

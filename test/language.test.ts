@@ -32,4 +32,39 @@ describe("supported editor languages", () => {
       expect(when).toContain("editorLangId == skill");
     }
   });
+
+  it("declares the task panel supported languages setting", () => {
+    const manifest = JSON.parse(
+      readFileSync(path.join(process.cwd(), "package.json"), "utf8"),
+    ) as {
+      contributes: {
+        configuration: {
+          properties: Record<
+            string,
+            {
+              type: string;
+              items?: { type: string };
+              default?: unknown;
+              order?: number;
+              scope?: string;
+            }
+          >;
+        };
+      };
+    };
+    const properties = manifest.contributes.configuration.properties;
+    const setting = properties["markdownBilingualSync.supportedLanguages"];
+
+    expect(setting).toMatchObject({
+      type: "array",
+      items: { type: "string" },
+      default: ["zh-CN"],
+      order: 32,
+    });
+    expect(setting.scope).toBeUndefined();
+    const keys = Object.keys(properties);
+    expect(keys.indexOf("markdownBilingualSync.supportedLanguages")).toBe(
+      keys.indexOf("markdownBilingualSync.targetLanguage") + 1,
+    );
+  });
 });

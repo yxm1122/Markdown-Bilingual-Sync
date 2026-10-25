@@ -7,12 +7,16 @@
  *
  * 与扩展主进程的通信：
  * - 上行：{ type: "ready" }、{ type: "cancelAll" | "clearFinished" | "openOutput" }、
- *   { type: "cancelTask" | "openSource" | "openPreview", id }；
- * - 下行：{ type: "state", state }，由 TaskViewProvider.sendState() 在任务/并发变化时
- *   节流推送（约 100ms），本文件只接受这一种消息。
+ *   { type: "cancelTask" | "openSource" | "openPreview", id }、
+ *   { type: "setSourceLanguage" | "setTargetLanguage", language }、
+ *   { type: "swapLanguages" }；
+ * - 下行：{ type: "state", state }，由 TaskViewProvider.sendState() 在任务/并发/语言设置
+ *   变化时节流推送（约 100ms），本文件只接受这一种消息。state 中的 sourceLanguage、
+ *   targetLanguage 与 supportedLanguages 驱动静态语言区。
  *
  * 渲染策略：任务列表由本脚本用字符串模板整体 innerHTML 重绘，因此所有动态文本都必须
- * 经过 escapeHtml()；事件统一委托到 document，避免每次重绘后重新绑定。
+ * 经过 escapeHtml()；事件统一委托到 document，避免每次重绘后重新绑定。语言 <select>
+ * 属于静态骨架，只更新 <option> 与选中值，不参与 innerHTML 重绘，避免输入焦点丢失。
  */
 (function () {
   "use strict";
@@ -32,6 +36,11 @@
   const content = document.getElementById("task-content");
   const cancelAllButton = document.querySelector('[data-action="cancelAll"]');
   const clearButton = document.querySelector('[data-action="clearFinished"]');
+  const sourceLanguageSelect = document.getElementById("task-source-language");
+  const targetLanguageSelect = document.getElementById("task-target-language");
+  const swapLanguagesButton = document.querySelector(
+    '[data-action="swapLanguages"]',
+  );
   let state;
 
   /**
@@ -62,6 +71,108 @@
       .replace(/>/g, "&gt;")
       .replace(/"/g, "&quot;")
       .replace(/'/g, "&#39;");
+  }
+
+  // ---- 语言快捷切换 ----
+  // 任务面板 UI 固定为中文，语言名称也按 zh-CN 展示；不支持 Intl.DisplayNames 时退回标签。
+  const LANGUAGE_NAME_OVERRIDES = {
+    "zh-cn": "中文（简体）",
+    "zh-sg": "中文（简体）",
+    "zh-hans": "中文（简体）",
+    "zh-tw": "中文（繁體）",
+    "zh-hk": "中文（繁體）",
+    "zh-hant": "中文（繁體）",
+  };
+  let displayNames;
+  try {
+    displayNames = new Intl.DisplayNames(["zh-CN"], { type: "language" });
+  } catch {
+    displayNames = undefined;
+  }
+
+  /** 把 BCP-47 标签显示为本地化语言名；失败时原样返回标签。 */
+  function languageName(tag) {
+    const override = LANGUAGE_NAME_OVERRIDES[String(tag).toLowerCase()];
+    if (override) {
+      return override;
+    }
+    if (!displayNames) {
+      return tag;
+    }
+    try {
+      const name = displayNames.of(tag);
+      return name && name !== tag ? name : tag;
+    } catch {
+      return tag;
+    }
+  }
+
+  /** 按大小写不敏感匹配设置选中值；没有匹配时清空选中，避免误显示第一项。 */
+  function setSelectValue(select, value, options) {
+    if (!select) {
+      return;
+    }
+    const selected = options.find(
+      (language) => language.toLowerCase() === String(value).toLowerCase(),
+    );
+    if (selected) {
+      select.value = selected;
+    } else {
+      select.selectedIndex = -1;
+    }
+  }
+
+  /**
+   * 同步静态语言区。只有选项集合变化时才重建 <option>，避免高频 state 推送打断
+   * 已展开的下拉或焦点；选中值用大小写不敏感匹配，兼容设置中与 targetLanguage
+   * 仅大小写不同的写法。原文与译文共用同一组候选语言。
+   */
+  function syncLanguageControls() {
+    if (!state) {
+      return;
+    }
+    const supported = Array.isArray(state.supportedLanguages)
+      ? state.supportedLanguages.filter(
+          (language) => typeof language === "string" && language,
+        )
+      : [];
+    const source =
+      typeof state.sourceLanguage === "string" ? state.sourceLanguage : "";
+    const target =
+      typeof state.targetLanguage === "string" ? state.targetLanguage : "";
+    const signature = supported.join("\n");
+    for (const select of [sourceLanguageSelect, targetLanguageSelect]) {
+      if (!select) {
+        continue;
+      }
+      if (select.dataset.options !== signature) {
+        select.replaceChildren();
+        for (const language of supported) {
+          const option = document.createElement("option");
+          option.value = language;
+          option.textContent = languageName(language);
+          option.title = language;
+          select.appendChild(option);
+        }
+        select.dataset.options = signature;
+      }
+      select.disabled = supported.length === 0;
+    }
+    setSelectValue(sourceLanguageSelect, source, supported);
+    setSelectValue(targetLanguageSelect, target, supported);
+    const sourceOption = supported.find(
+      (language) => language.toLowerCase() === source.toLowerCase(),
+    );
+    const targetOption = supported.find(
+      (language) => language.toLowerCase() === target.toLowerCase(),
+    );
+    if (swapLanguagesButton) {
+      swapLanguagesButton.disabled = !(
+        sourceOption &&
+        targetOption &&
+        sourceOption.toLowerCase() !== targetOption.toLowerCase()
+      );
+    }
   }
 
   // ---- 任务状态、进度与耗时 ----
@@ -332,12 +443,35 @@
       return;
     }
     state = message.state;
+    syncLanguageControls();
     render();
   });
 
   // ---- 事件委托 ----
-  // 卡片会被整体重绘，因此点击统一委托到 document。openOutput/cancelAll/clearFinished
-  // 不带 id 直接发送；其余任务级动作必须带整数 id，由主进程 switch 再做动作白名单校验。
+  // 两个语言选择器是静态元素，直接绑定 change；宿主校验失败时会重新推送 state 还原选中值。
+  if (sourceLanguageSelect) {
+    sourceLanguageSelect.addEventListener("change", function () {
+      if (sourceLanguageSelect.value) {
+        vscode.postMessage({
+          type: "setSourceLanguage",
+          language: sourceLanguageSelect.value,
+        });
+      }
+    });
+  }
+  if (targetLanguageSelect) {
+    targetLanguageSelect.addEventListener("change", function () {
+      if (targetLanguageSelect.value) {
+        vscode.postMessage({
+          type: "setTargetLanguage",
+          language: targetLanguageSelect.value,
+        });
+      }
+    });
+  }
+  // 卡片会被整体重绘，因此点击统一委托到 document。openOutput/cancelAll/clearFinished/
+  // swapLanguages 不带 id 直接发送；其余任务级动作必须带整数 id，由主进程 switch 再做
+  // 动作白名单校验。
   document.addEventListener("click", function (event) {
     const target = event.target;
     if (!(target instanceof Element)) {
@@ -352,7 +486,12 @@
     if (!action) {
       return;
     }
-    if (action === "openOutput" || action === "cancelAll" || action === "clearFinished") {
+    if (
+      action === "openOutput" ||
+      action === "cancelAll" ||
+      action === "clearFinished" ||
+      action === "swapLanguages"
+    ) {
       vscode.postMessage({ type: action });
       return;
     }
