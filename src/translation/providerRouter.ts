@@ -24,6 +24,7 @@ import type {
   TranslationRequest,
   TranslationResultItem,
 } from "./types";
+import { tError } from "../i18n/errors";
 
 /** 可选的翻译服务类型；与 VS Code 配置 provider 的取值一致。 */
 export type ProviderKind = "mock" | "openai" | "http";
@@ -63,7 +64,7 @@ export class TranslationProviderRouter implements TranslationProvider {
     return this.current().supportsSummary === true;
   }
 
-  /** 转发整篇摘要请求；目标 Provider 未实现时给出可操作的中文提示。 */
+  /** 转发整篇摘要请求；目标 Provider 未实现时给出可操作的本地化提示。 */
   async summarize(
     request: SummaryRequest,
     signal?: AbortSignal,
@@ -71,7 +72,7 @@ export class TranslationProviderRouter implements TranslationProvider {
     const provider = this.current();
     if (!provider.summarize || provider.supportsSummary !== true) {
       throw new Error(
-        "当前翻译服务不支持自动生成全文摘要。请在预览中手动填写摘要，或切换到 OpenAI 兼容服务。",
+        tError("translation.routerSummaryUnsupported"),
       );
     }
     return provider.summarize(request, signal);
@@ -88,7 +89,7 @@ export class TranslationProviderRouter implements TranslationProvider {
   }
 
   /**
-   * 转发连接测试；目标 Provider 未实现测试能力时抛出中文提示。
+   * 转发连接测试；目标 Provider 未实现测试能力时抛出本地化提示。
    * @throws 不支持测试、配置错误、网络错误或取消。
    */
   async testConnection(
@@ -99,7 +100,7 @@ export class TranslationProviderRouter implements TranslationProvider {
     const provider = this.current();
     if (!provider.testConnection) {
       throw new Error(
-        "当前翻译服务不支持连接测试，请切换到 OpenAI 兼容或自定义 HTTP 服务。",
+        tError("translation.routerTestUnsupported"),
       );
     }
     return provider.testConnection(sourceLanguage, targetLanguage, signal);

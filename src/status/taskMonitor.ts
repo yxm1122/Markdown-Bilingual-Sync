@@ -13,6 +13,7 @@
  * - 状态只能 queued → running → 终态，finish 幂等。
  */
 import type * as vscode from "vscode";
+import { UI_TEXT } from "../i18n";
 
 // ---- 类型 ----
 
@@ -33,6 +34,19 @@ function isTerminalStatus(status: TranslationTaskStatus): boolean {
     status === "failed" ||
     status === "cancelled"
   );
+}
+
+/**
+ * 构造失败任务的终态 patch。
+ *
+ * 任务卡片会同时渲染 phase（灰色阶段行）和 error（红色详情）；失败详情只放 error，
+ * phase 留空，避免同一条错误消息在卡片里出现两次。
+ */
+export function failedTaskPatch(message: string): {
+  phase: string;
+  error: string;
+} {
+  return { phase: "", error: message };
 }
 
 /**
@@ -123,7 +137,7 @@ export class TranslationTaskMonitor {
       label,
       uri,
       status: "queued",
-      phase: "等待开始",
+      phase: UI_TEXT.taskPanel.phases.waiting,
       completed: 0,
       total: 0,
       failed: 0,
@@ -143,7 +157,7 @@ export class TranslationTaskMonitor {
     }
     task.status = "running";
     task.startedAt = Date.now();
-    task.phase = "准备翻译…";
+    task.phase = UI_TEXT.taskPanel.phases.preparing;
     this.emit();
   }
 
@@ -249,7 +263,7 @@ export class TranslationTaskMonitor {
     if (!task || !task.cancel) {
       return;
     }
-    task.phase = "正在取消…";
+    task.phase = UI_TEXT.taskPanel.phases.cancelling;
     task.cancel();
     this.emit();
   }
@@ -264,7 +278,7 @@ export class TranslationTaskMonitor {
     for (const task of this.tasks.values()) {
       if (task.status === "queued" || task.status === "running") {
         if (task.cancel) {
-          task.phase = "正在取消…";
+          task.phase = UI_TEXT.taskPanel.phases.cancelling;
           task.cancel();
         }
         count += 1;

@@ -198,10 +198,19 @@ batchTranslateFolder
 ### 3.8 任务面板语言快捷切换
 
 - `TaskViewProvider.sendState` 附带 `sourceLanguage`、`targetLanguage` 与 `supportedLanguages`；选项由配置和 `normalizeSupportedLanguages` 派生，列表始终包含当前原文与译文语言，避免设置漏项导致下拉框空白。
-- 原文/译文两个选择器与中间的交换按钮位于任务列表之外的静态骨架中。任务列表每次 state 推送都会重绘 `innerHTML`，语言区只重建 `<option>` 与选中值，因此不会丢失输入焦点；显示名由 `Intl.DisplayNames` 本地化为中文，`option.value` 仍是 BCP-47 标签。
+- 原文/译文两个选择器与中间的交换按钮位于任务列表之外的静态骨架中。任务列表每次 state 推送都会重绘 `innerHTML`，语言区只重建 `<option>` 与选中值，因此不会丢失输入焦点；显示名由 `Intl.DisplayNames` 按页面 locale 展示，`option.value` 仍是 BCP-47 标签。
 - webview 发送 `{ type: "setSourceLanguage" | "setTargetLanguage", language }` 或 `{ type: "swapLanguages" }`；宿主只接受当前选项中的值，并拒绝两侧语言相同，非法请求只提示、不写设置。
 - 写回语言设置时沿用各自现有的作用域：`inspect` 显示已有 `workspaceValue` 就写 Workspace，否则写 Global，避免一次快捷切换意外创建工作区设置。交换需要连续写两个设置；第二个写入失败时会回滚第一个，避免只交换一半。
 - 当前实现不自动重译已有缓存；改语言后仍需手动执行同步或重译，缓存与导出后缀按新主语言标签计算。
+
+### 3.9 本地化架构
+
+- **source 目录**：`src/i18n/en.ts` 是英文 UI 文案，`src/i18n/zh.ts` 保持相同嵌套 key；`src/i18n/errors/<domain>.ts` 以 `{ key, en, zh }` 描述错误/警告。
+- **运行时**：`src/i18n/index.ts` 用 `vscode.l10n.t` 深度本地化 `en.ts`，导出与旧调用方式兼容的 `UI_TEXT`、`formatText` 和 `getLocale`。`tError(key, values)` 先翻译英文模板再插值。
+- **bundle**：`scripts/build-l10n.ts` 校验 key/占位符/重复英文并生成 `l10n/bundle.l10n.json` 与 `bundle.l10n.zh-cn.json`；`compile` / `vscode:prepublish` 自动执行。
+- **清单**：`package.json` 使用 `%key%`，英文值在 `package.nls.json`，中文值在 `package.nls.zh-cn.json`。
+- **Webview**：宿主把本地化后的 `UI_TEXT` 子集序列化进 HTML；`<html lang>`、`Intl.DisplayNames`、`Intl.DateTimeFormat`/`NumberFormat` 使用 `vscode.env.language`。Webview 脚本不直接访问 `vscode.l10n`。
+- **测试**：`vitest.config.ts` 把 `vscode` alias 到 `test/vscodeStub.ts`，默认 locale 为 zh-cn，`l10n.t` 从生成的 zh-cn bundle 取值；需要英文 locale 的用例在重置模块后修改 stub 的 `env.language`。
 
 ## 4. Provider 协议
 

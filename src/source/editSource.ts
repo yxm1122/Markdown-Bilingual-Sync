@@ -16,6 +16,7 @@
  */
 import type { MarkdownIt } from "markdown-it";
 import { parseMarkdownDocument } from "../markdown/segmenter";
+import { tError } from "../i18n/errors";
 
 /** 暂存的原文块修改；`sourceHash` 用于防止覆盖用户之后的手工改动。 */
 export interface SourceEdit {
@@ -91,7 +92,7 @@ function insertionLines(
 /**
  * 将暂存的原文变更合成为完整文本。
  *
- * 失败条件（抛中文错误，不返回部分结果）：删除/修改的块不存在、同一块既改又删、
+ * 失败条件（抛本地化错误，不返回部分结果）：删除/修改的块不存在、同一块既改又删、
  * 修改的哈希与当前原文不符、修改或插入内容为空、插入锚点不存在或已被删除。
  * 无副作用；`changedBlocks` 为三类操作的条目总数。
  */
@@ -109,11 +110,11 @@ export function buildProposedSource(
   // 先整体校验删除目标，避免应用到一半才发现块不存在。
   for (const index of stage.deletions) {
     if (!blocks.has(index)) {
-      throw new Error(`找不到第 ${index + 1} 个原文块。`);
+      throw new Error(tError("common.missingSourceBlock", { index: index + 1 }));
     }
     if (stage.edits.has(index)) {
       throw new Error(
-        `块 ${index + 1} 同时被修改和删除，请先撤销其中一项。`,
+        tError("source.editAndDeleteConflict", { index: index + 1 }),
       );
     }
   }
@@ -122,17 +123,17 @@ export function buildProposedSource(
   for (const [index, edit] of stage.edits) {
     const block = blocks.get(index);
     if (!block) {
-      throw new Error(`找不到第 ${index + 1} 个原文块。`);
+      throw new Error(tError("common.missingSourceBlock", { index: index + 1 }));
     }
     // 哈希不一致说明暂存基于旧原文，继续应用会覆盖用户之后的编辑。
     if (block.hash !== edit.sourceHash) {
       throw new Error(
-        `块 ${index + 1} 的原文已变化，请重新编辑后再应用。`,
+        tError("source.changed", { index: index + 1 }),
       );
     }
     const text = edit.text.replace(/\r\n?/g, "\n").trimEnd();
     if (!text.trim()) {
-      throw new Error(`块 ${index + 1} 不能为空。`);
+      throw new Error(tError("source.emptyBlock", { index: index + 1 }));
     }
     editOps.push({
       position: block.startLine,
@@ -161,16 +162,16 @@ export function buildProposedSource(
   const insertionsByAfter = new Map<number, SourceInsertion[]>();
   for (const insertion of stage.insertions) {
     if (insertion.afterIndex !== -1 && !blocks.has(insertion.afterIndex)) {
-      throw new Error(`找不到要插入到的原文块：${insertion.afterIndex + 1}。`);
+      throw new Error(tError("common.missingInsertedSourceBlock", { index: insertion.afterIndex + 1 }));
     }
     if (stage.deletions.has(insertion.afterIndex)) {
       throw new Error(
-        `块 ${insertion.afterIndex + 1} 已被标记删除，不能在其后插入新块。`,
+        tError("source.insertAfterDeleted", { index: insertion.afterIndex + 1 }),
       );
     }
     const text = insertion.text.replace(/\r\n?/g, "\n").trim();
     if (!text) {
-      throw new Error("插入的原文块不能为空。");
+      throw new Error(tError("source.emptyInsert"));
     }
     // 同一锚点的多次插入保持用户操作顺序。
     const list = insertionsByAfter.get(insertion.afterIndex) ?? [];

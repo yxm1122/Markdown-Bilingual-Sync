@@ -25,9 +25,12 @@ npm run watch     # 增量构建，适合 F5 调试
 
 构建流程：
 
-1. `esbuild.js` 把 `src/extension.ts` 及其依赖打包为 `dist/extension.js`（CJS、Node 20、`vscode` external）。
-2. `scripts/copy-katex.mjs` 把 KaTeX 样式与字体复制到 `media/katex/`。
-3. `media/preview.js`、`media/taskView.js` 是浏览器原生脚本，不经过 esbuild。
+1. `scripts/build-l10n.ts` 校验 `src/i18n/en.ts` / `zh.ts` / `errors/*` 并生成 `l10n/bundle.l10n*.json`。
+2. `esbuild.js` 把 `src/extension.ts` 及其依赖打包为 `dist/extension.js`（CJS、Node 20、`vscode` external）。
+3. `scripts/copy-katex.mjs` 把 KaTeX 样式与字体复制到 `media/katex/`。
+4. `media/preview.js`、`media/taskView.js` 是浏览器原生脚本，不经过 esbuild。
+
+`npm run watch` 只会在启动时执行一次 `l10n:build`，不会监听 `src/i18n/en.ts`、`zh.ts` 或 `errors/*` 的变化；修改文案后请手动运行 `npm run l10n:build` 并重新加载扩展宿主。`npm run test:watch` 通过 `pretest:watch` 在启动前生成 bundle。
 
 调试：
 
@@ -47,10 +50,12 @@ npm run preview:sample
 ## 3. 代码约定
 
 - 使用 TypeScript strict 模式；`npm run typecheck` 必须通过。
-- 纯逻辑模块不要导入 `vscode`，以便在 Node/Vitest 中直接测试。
+- 纯逻辑模块不要直接导入 `vscode`；需要本地化错误时统一走 `tError()`（内部使用 `vscode.l10n`，测试由全局 stub alias 支持）。
 - 每个核心模块顶部保留“职责 / 关键不变量 / 与其他模块关系”的 JSDoc；修改语义时同步更新。
 - 不要写复述代码的注释；只在隐藏约束、非显然的边界或安全原因处注释。
-- 用户可见文案放在 `src/i18n/zh.ts`；`package.json` 的设置描述也属于用户文案。
+- 英文是默认/source 语言：UI 文案放在 `src/i18n/en.ts` 与 `src/i18n/zh.ts`（key 与 `{name}` 占位符必须一致）；错误/警告放在 `src/i18n/errors/*.ts`，通过 `tError(key, values)` 使用。
+- 清单文案放在 `package.nls.json` / `package.nls.zh-cn.json`，`package.json` 用 `%key%` 引用；运行时翻译由 `npm run l10n:build` 生成。
+- `output.appendLine` 的诊断/审计日志保持英文，不进入 l10n 目录。
 - 新增/修改 HTML 时必须转义动态文本；不要关闭 Webview 的 CSP 或 `html: false`。
 - 不要在日志、错误信息、测试夹具中写入 API Key 或完整请求头。
 
@@ -64,9 +69,10 @@ npm run preview:sample
    "(editorLangId == markdown || editorLangId == skill)"
    ```
 3. 在 `src/extension.ts` 的 `activate` 中用 `register("命令 ID", handler)` 注册；统一错误边界使用 `handleErrors`。
-4. 文案放入 `src/i18n/zh.ts` 的 `extension` 区域。
-5. 更新 `README.md` 的命令表。
-6. 如果涉及清单条件，扩展 `test/language.test.ts` 的 manifest 断言。
+4. 在 `package.nls.json` / `package.nls.zh-cn.json` 增加命令标题 key，并把 `package.json` 的 `title` 写成 `%key%`。
+5. 运行时提示放入 `src/i18n/en.ts` 与 `zh.ts` 的 `extension` 区域，然后运行 `npm run l10n:build`。
+6. 更新 `README.md` 的命令表。
+7. 如果涉及清单条件，扩展 `test/language.test.ts` 或 `test/packageNls.test.ts` 的 manifest 断言。
 
 ### 4.2 新增设置
 
@@ -74,7 +80,7 @@ npm run preview:sample
    - `type`、`default`
    - `scope`（网络/密钥相关必须 `application`）
    - `order`（设置页排序）
-   - 中文 `markdownDescription`
+   - `description` 引用 `%configuration.<key>.description%`，并在两个 `package.nls*.json` 中提供英文/中文值
 2. 在读取处使用 `vscode.workspace.getConfiguration("markdownBilingualSync")`，不要缓存配置对象。
 3. 如影响预览/任务面板，确认 `onDidChangeConfiguration` 会刷新（当前扩展对任意 `markdownBilingualSync` 变更全量刷新预览）。
 4. 更新 `README.md` 的设置表。
@@ -95,7 +101,15 @@ npm run preview:sample
 
 见 [预览与 Webview](preview.md#10-新增一个-ui-动作的清单)。
 
-### 4.5 修改缓存/锚点语义
+### 4.5 新增/修改本地化文案
+
+1. UI 文案：同时修改 `src/i18n/en.ts` 与 `src/i18n/zh.ts`，保持嵌套 key 和 `{name}` 占位符完全一致。
+2. 错误/警告：在 `src/i18n/errors/<domain>.ts` 增加 `{ key, en, zh }`，并在 `catalog.ts` 展开；调用 `tError("domain.key", { name })`。不要在业务模块直接拼中文。
+3. 清单文案：更新 `package.nls.json` / `package.nls.zh-cn.json`，保持 key 集合一致；`package.json` 只引用 `%key%`。
+4. Webview：宿主已注入本地化后的 `UI_TEXT`；新增静态文案时优先走目录，`<html lang>` 与 Intl 使用 `getLocale()`。
+5. 运行 `npm run l10n:build`，再执行 `npm run typecheck` 与 `npm test`；构建会拒绝 key 不一致、占位符不一致或同一英文对应不同中文。
+
+### 4.6 修改缓存/锚点语义
 
 先读 [缓存格式](cache-format.md)。锚点是持久化协议，修改时必须：
 

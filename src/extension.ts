@@ -20,7 +20,7 @@
  * 关键不变量：
  * - 同步/导出/批量操作都要求源文件已保存到磁盘（file scheme）；
  * - 同一文件由 SyncService 内部的 inFlight 锁串行化，重复命令会失败而不是并发写缓存；
- * - UI 文案统一来自 i18n/zh（状态层硬编码的中文阶段文案除外）；
+ * - 用户可见文案统一来自 i18n（en/zh 经 vscode.l10n.t 本地化）；
  * - SecretStorage 中的 Key 只在 API Key 命令与读取 Provider 配置时使用，绝不写入日志或设置。
  */
 import * as vscode from "vscode";
@@ -29,7 +29,7 @@ import { runWithConcurrency } from "./batch/concurrency";
 import { CacheStore } from "./cache/cacheStore";
 import { ExportService, type PreparedExport } from "./export/exportService";
 import { GlossaryStore } from "./glossary/glossaryStore";
-import { formatText, UI_TEXT } from "./i18n/zh";
+import { formatText, UI_TEXT } from "./i18n";
 import { PreviewManager } from "./preview/previewManager";
 import { SyncBlockedError } from "./sync/sync";
 import {
@@ -55,9 +55,10 @@ import {
 import { PROVIDER_PRESETS } from "./translation/presets";
 import { ConcurrencyLimiter } from "./translation/concurrency";
 import { BatchTranslationCoordinator } from "./translation/batchCoordinator";
-import { TranslationTaskMonitor } from "./status/taskMonitor";
+import { TranslationTaskMonitor, failedTaskPatch } from "./status/taskMonitor";
 import { TranslationStatusBar } from "./status/statusBar";
 import { TaskViewProvider } from "./status/taskViewProvider";
+import { tError } from "./i18n/errors";
 
 // ---- 常量与小工具 ----
 
@@ -88,6 +89,48 @@ async function readApiKeyWithLegacyFallback(
     return scoped;
   }
   return (await context.secrets.get(LEGACY_API_KEY_SECRET)) ?? "";
+}
+
+/**
+ * 把 Provider 预设的展示文案本地化。
+ *
+ * presets.ts 保持纯数据（品牌名、接口地址与 provider 类型），这里只替换含自然语言的
+ * 字段；deepseek/siliconflow 等纯地址描述沿用原始值。
+ */
+function localizedPresetText(preset: {
+  id: string;
+  label: string;
+  description: string;
+}): { label: string; description: string } {
+  switch (preset.id) {
+    case "openai":
+      return {
+        label: preset.label,
+        description: UI_TEXT.presets.openaiDescription,
+      };
+    case "ollama":
+      return {
+        label: UI_TEXT.presets.ollamaLabel,
+        description: UI_TEXT.presets.ollamaDescription,
+      };
+    case "lmstudio":
+      return {
+        label: UI_TEXT.presets.lmStudioLabel,
+        description: UI_TEXT.presets.lmStudioDescription,
+      };
+    case "http":
+      return {
+        label: UI_TEXT.presets.customHttpLabel,
+        description: UI_TEXT.presets.customHttpDescription,
+      };
+    case "mock":
+      return {
+        label: UI_TEXT.presets.mockLabel,
+        description: UI_TEXT.presets.mockDescription,
+      };
+    default:
+      return { label: preset.label, description: preset.description };
+  }
 }
 
 /**
@@ -275,7 +318,7 @@ async function saveDirtyMarkdownInFolder(
     const saved = await document.save();
     if (!saved) {
       throw new Error(
-        `无法保存 ${vscode.workspace.asRelativePath(document.uri, false)}，批量操作已停止。`,
+        tError("commands.saveDirtyFailed", { file: vscode.workspace.asRelativePath(document.uri, false) }),
       );
     }
   }
@@ -358,8 +401,8 @@ export function activate(context: vscode.ExtensionContext): void {
           kind === "openai"
             ? String(config.get<string>("apiModel", "gpt-4o-mini"))
             : kind === "http"
-              ? "自定义 HTTP"
-              : "Mock",
+              ? UI_TEXT.providers.customHttpModel
+              : UI_TEXT.providers.mockDemo,
         tokenBudget: Number(
           config.get<number>("apiBatchTokenBudget", 2_000),
         ),
@@ -413,7 +456,7 @@ export function activate(context: vscode.ExtensionContext): void {
         `[${new Date().toISOString()}] command failed: ${stack}`,
       );
       void vscode.window.showErrorMessage(
-        `Markdown Bilingual Sync：${message}`,
+        `${UI_TEXT.extension.messagePrefix}${message}`,
       );
     }
   };
@@ -473,15 +516,12 @@ export function activate(context: vscode.ExtensionContext): void {
       // 取消：任务置为 cancelled，已有缓存由 SyncService 决定是否保留。
       if (error instanceof CancelledError) {
         taskMonitor.finish(taskId, "cancelled", {
-          phase: "已取消",
+          phase: UI_TEXT.taskPanel.phases.cancelled,
         });
         return;
       }
       const message = formatError(error);
-      taskMonitor.finish(taskId, "failed", {
-        phase: message,
-        error: message,
-      });
+      taskMonitor.finish(taskId, "failed", failedTaskPatch(message));
       output.appendLine(
         `[${new Date().toISOString()}] sync failed ${vscode.workspace.asRelativePath(sourceUri, false)}: ${message}`,
       );
@@ -491,7 +531,7 @@ export function activate(context: vscode.ExtensionContext): void {
     // 理论上 try 中已赋值；保留防御分支，避免类型收窄遗漏。
     if (!outcome) {
       taskMonitor.finish(taskId, "cancelled", {
-        phase: "已取消",
+        phase: UI_TEXT.taskPanel.phases.cancelled,
       });
       return;
     }
@@ -505,7 +545,9 @@ export function activate(context: vscode.ExtensionContext): void {
         completed: result.translatedCount,
         total: result.translatedCount + result.failedTaskCount,
         failed: result.failedTaskCount,
-        phase: result.partial ? "部分成功" : "完成",
+        phase: result.partial
+          ? UI_TEXT.taskPanel.phases.partial
+          : UI_TEXT.taskPanel.phases.completed,
         error:
           result.partial && result.failures.length > 0
             ? result.failures.join("\n")
@@ -808,7 +850,9 @@ export function activate(context: vscode.ExtensionContext): void {
           // 排队期间被取消的任务不再启动；直接收尾为 cancelled。
           if (!controller || controller.signal.aborted) {
             if (taskId !== undefined && taskMonitor.isActive(taskId)) {
-              taskMonitor.finish(taskId, "cancelled", { phase: "已取消" });
+              taskMonitor.finish(taskId, "cancelled", {
+                phase: UI_TEXT.taskPanel.phases.cancelled,
+              });
             }
             if (controller?.signal.aborted) {
               cancelled = true;
@@ -853,8 +897,8 @@ export function activate(context: vscode.ExtensionContext): void {
                     outcome.result.failedTaskCount,
                   failed: outcome.result.failedTaskCount,
                   phase: outcome.result.partial
-                    ? "部分成功"
-                    : "完成",
+                    ? UI_TEXT.taskPanel.phases.partial
+                    : UI_TEXT.taskPanel.phases.completed,
                   error:
                     outcome.result.partial &&
                     outcome.result.failures.length > 0
@@ -875,7 +919,7 @@ export function activate(context: vscode.ExtensionContext): void {
               cancelled = true;
               if (taskId !== undefined) {
                 taskMonitor.finish(taskId, "cancelled", {
-                  phase: "已取消",
+                  phase: UI_TEXT.taskPanel.phases.cancelled,
                 });
               }
               return;
@@ -884,10 +928,7 @@ export function activate(context: vscode.ExtensionContext): void {
             summary.failed += 1;
             const message = formatError(error);
             if (taskId !== undefined) {
-              taskMonitor.finish(taskId, "failed", {
-                phase: message,
-                error: message,
-              });
+              taskMonitor.finish(taskId, "failed", failedTaskPatch(message));
             }
             output.appendLine(
               `[${new Date().toISOString()}] batch translate failed ${relative}: ${message}`,
@@ -904,7 +945,7 @@ export function activate(context: vscode.ExtensionContext): void {
       for (const taskId of taskIds.values()) {
         if (taskMonitor.isActive(taskId)) {
           taskMonitor.finish(taskId, "cancelled", {
-            phase: "已取消",
+            phase: UI_TEXT.taskPanel.phases.cancelled,
           });
         }
       }
@@ -1076,12 +1117,15 @@ export function activate(context: vscode.ExtensionContext): void {
   register("markdownBilingualSync.applyProviderPreset", () =>
     handleErrors(async () => {
       const picked = await vscode.window.showQuickPick(
-        PROVIDER_PRESETS.map((preset) => ({
-          label: preset.label,
-          description: preset.description,
-          detail: `provider: ${preset.provider}`,
-          preset,
-        })),
+        PROVIDER_PRESETS.map((preset) => {
+          const text = localizedPresetText(preset);
+          return {
+            label: text.label,
+            description: text.description,
+            detail: `provider: ${preset.provider}`,
+            preset,
+          };
+        }),
         {
           title: UI_TEXT.extension.providerPresetTitle,
           placeHolder: UI_TEXT.extension.providerPresetPlaceholder,

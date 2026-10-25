@@ -26,6 +26,7 @@ import type {
   TranslationRequest,
   TranslationResultItem,
 } from "./types";
+import { tError } from "../i18n/errors";
 
 // ---- 内部数据结构 ----
 
@@ -111,11 +112,11 @@ export class BatchTranslationCoordinator implements TranslationProvider {
     signal?: AbortSignal,
   ): Promise<string> {
     if (signal?.aborted) {
-      return Promise.reject(new Error("翻译已取消"));
+      return Promise.reject(new Error(tError("common.translationCancelled")));
     }
     if (!this.delegate.summarize || this.delegate.supportsSummary !== true) {
       return Promise.reject(
-        new Error("当前翻译服务不支持自动生成全文摘要，请手动填写。"),
+        new Error(tError("translation.batchSummaryUnsupported")),
       );
     }
     return this.delegate.summarize(request, signal);
@@ -137,7 +138,7 @@ export class BatchTranslationCoordinator implements TranslationProvider {
     onChunk?: TranslationChunkHandler,
   ): Promise<TranslationResultItem[]> {
     if (signal?.aborted) {
-      return Promise.reject(new Error("翻译已取消"));
+      return Promise.reject(new Error(tError("common.translationCancelled")));
     }
     return new Promise<TranslationResultItem[]>((resolve, reject) => {
       const call: PendingCall = {
@@ -168,7 +169,7 @@ export class BatchTranslationCoordinator implements TranslationProvider {
               this.pending.splice(index, 1);
             }
           }
-          this.settle(call, false, new Error("翻译已取消"));
+          this.settle(call, false, new Error(tError("common.translationCancelled")));
           // 组内没有“仍在进行且未取消”的调用时，才中止共享请求，避免误伤其他文件。
           const group = call.group;
           if (
@@ -268,7 +269,7 @@ export class BatchTranslationCoordinator implements TranslationProvider {
       call.group = group;
       if (call.signal?.aborted) {
         call.aborted = true;
-        this.settle(call, false, new Error("翻译已取消"));
+        this.settle(call, false, new Error(tError("common.translationCancelled")));
       }
     }
     if (calls.every((call) => call.phase === "settled")) {
@@ -322,7 +323,7 @@ export class BatchTranslationCoordinator implements TranslationProvider {
       for (const result of results) {
         const entry = mapping.get(result.id);
         if (!entry) {
-          throw new Error(`翻译服务返回了未请求的块：${result.id}`);
+          throw new Error(tError("translation.unexpectedBlock", { id: result.id }));
         }
         if (entry.call.aborted) {
           // 该文件已取消：结果直接丢弃，但不影响同组其他调用。
@@ -330,7 +331,7 @@ export class BatchTranslationCoordinator implements TranslationProvider {
         }
         if (entry.call.delivered.has(entry.originalId)) {
           throw new Error(
-            `翻译服务重复返回了块：${entry.originalId}`,
+            tError("translation.duplicateBlock", { id: entry.originalId }),
           );
         }
         entry.call.delivered.set(entry.originalId, result.text);
@@ -422,7 +423,7 @@ export class BatchTranslationCoordinator implements TranslationProvider {
       this.settle(
         call,
         false,
-        failure ?? new Error("翻译服务没有返回全部块。"),
+        failure ?? new Error(tError("translation.missingAllBlocks")),
       );
     }
   }

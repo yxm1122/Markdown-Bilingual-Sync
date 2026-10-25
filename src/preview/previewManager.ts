@@ -38,7 +38,7 @@ import type {
   PreparedExport,
 } from "../export/exportService";
 import { summarySourceHash } from "../cache/summaryMarker";
-import { formatText, UI_TEXT } from "../i18n/zh";
+import { formatText, getLocale, UI_TEXT } from "../i18n";
 import { createMarkdownRuntime } from "../markdown/markdown";
 import { parseMarkdownDocument } from "../markdown/segmenter";
 import {
@@ -58,7 +58,8 @@ import {
   type PreviewLayout,
 } from "./layout";
 import { buildWebviewHtml } from "./webviewHtml";
-import type { TranslationTaskMonitor } from "../status/taskMonitor";
+import { failedTaskPatch, type TranslationTaskMonitor } from "../status/taskMonitor";
+import { tError } from "../i18n/errors";
 
 // ---- 模块级辅助 ----
 
@@ -1057,7 +1058,9 @@ class PreviewPanelSession implements vscode.Disposable {
       this.manager.logError(`preview action ${type}`, error);
       this.setBusy(false);
       this.showToast(formatError(error), "error");
-      await vscode.window.showErrorMessage(`Markdown Bilingual Sync：${formatError(error)}`);
+      await vscode.window.showErrorMessage(
+        `${UI_TEXT.extension.messagePrefix}${formatError(error)}`,
+      );
     }
   }
 
@@ -1126,7 +1129,7 @@ class PreviewPanelSession implements vscode.Disposable {
     const parsed = parseMarkdownDocument(state.sourceText, this.md);
     const block = parsed.blocks.find((item) => item.index === blockIndex);
     if (!block) {
-      throw new Error(`找不到第 ${blockIndex + 1} 个原文块。`);
+      throw new Error(tError("common.missingSourceBlock", { index: blockIndex + 1 }));
     }
     const normalized = text.replace(/\r\n?/g, "\n");
     // 用户手动改写后不再沿用回译锁：避免写回时把译文锁到用户改过的文本上。
@@ -1395,7 +1398,7 @@ class PreviewPanelSession implements vscode.Disposable {
     const parsed = parseMarkdownDocument(state.sourceText, this.md);
     const block = parsed.blocks.find((item) => item.index === blockIndex);
     if (!block) {
-      throw new Error(`找不到第 ${blockIndex + 1} 个原文块。`);
+      throw new Error(tError("common.missingSourceBlock", { index: blockIndex + 1 }));
     }
     this.pendingSourceEdits.delete(blockIndex);
     this.pendingPairedLocks.delete(blockIndex);
@@ -1456,7 +1459,7 @@ class PreviewPanelSession implements vscode.Disposable {
       const parsed = parseMarkdownDocument(state.sourceText, this.md);
       if (!parsed.blocks.some((item) => item.index === afterBlockIndex)) {
         throw new Error(
-          `找不到要插入到的原文块：${afterBlockIndex + 1}。`,
+          tError("common.missingInsertedSourceBlock", { index: afterBlockIndex + 1 }),
         );
       }
       // 向已删除块之后插入会造成写回顺序歧义。
@@ -1493,7 +1496,7 @@ class PreviewPanelSession implements vscode.Disposable {
       (item) => item.id === pendingId,
     );
     if (!insertion) {
-      throw new Error("这个待插入块已不存在。");
+      throw new Error(tError("preview.pendingInsertMissing"));
     }
     const state = await this.syncService.loadPreviewState(this.sourceUri);
     this.ensureSourceBase(state.sourceText);
@@ -1785,7 +1788,7 @@ class PreviewPanelSession implements vscode.Disposable {
       if (!(await vscode.workspace.applyEdit(restore))) {
         this.manager.logError(
           `restore source after failed save ${this.sourceUri.fsPath}`,
-          new Error("工作区拒绝恢复原文缓冲区"),
+          new Error(tError("preview.restoreBufferRejected")),
         );
       }
     } catch (error) {
@@ -2017,7 +2020,7 @@ class PreviewPanelSession implements vscode.Disposable {
       const source = parseMarkdownDocument(state.sourceText, this.md);
       const block = source.blocks.find((item) => item.index === blockIndex);
       if (!block) {
-        throw new Error(`找不到第 ${blockIndex + 1} 个原文块。`);
+        throw new Error(tError("common.missingSourceBlock", { index: blockIndex + 1 }));
       }
       const normalized = result.backText.replace(/\r\n?/g, "\n").trimEnd();
       // 回译结果与原文相同：视为无需修改，清掉该块的暂存与锁定。
@@ -2205,7 +2208,9 @@ class PreviewPanelSession implements vscode.Disposable {
           completed: result.translatedCount,
           total: result.translatedCount + result.failedTaskCount,
           failed: result.failedTaskCount,
-          phase: result.partial ? "部分成功" : "完成",
+          phase: result.partial
+            ? UI_TEXT.taskPanel.phases.partial
+            : UI_TEXT.taskPanel.phases.completed,
           error:
             result.partial && result.failures.length > 0
               ? result.failures.join("\n")
@@ -2221,15 +2226,12 @@ class PreviewPanelSession implements vscode.Disposable {
     } catch (error) {
       if (error instanceof CancelledError) {
         this.taskMonitor.finish(taskId, "cancelled", {
-          phase: "已取消",
+          phase: UI_TEXT.taskPanel.phases.cancelled,
         });
         return;
       }
       const message = formatError(error);
-      this.taskMonitor.finish(taskId, "failed", {
-        phase: message,
-        error: message,
-      });
+      this.taskMonitor.finish(taskId, "failed", failedTaskPatch(message));
       this.output.appendLine(
         `[${new Date().toISOString()}] sync failed ${this.sourceUri.fsPath}: ${message}`,
       );
@@ -2375,7 +2377,7 @@ class PreviewPanelSession implements vscode.Disposable {
   private renderError(message: string): void {
     const text = UI_TEXT.preview.errorPage;
     this.panel.webview.html = `<!DOCTYPE html>
-<html lang="zh-CN">
+<html lang="${escapeHtml(getLocale())}">
 <head>
 <meta charset="UTF-8">
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline';">

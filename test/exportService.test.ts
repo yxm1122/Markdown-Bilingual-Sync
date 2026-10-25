@@ -105,7 +105,11 @@ const mocks = vi.hoisted(() => {
   };
 });
 
-vi.mock("vscode", () => mocks.vscode);
+// 展开全局 stub 保留 l10n/env；FakeUri 等本文件所需 API 覆盖 stub 实现。
+vi.mock("vscode", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./vscodeStub")>();
+  return { ...actual.vscodeStub, ...mocks.vscode };
+});
 
 function expectReady(preparation: ExportPreparation): PreparedExport {
   if (preparation.status !== "ready") {

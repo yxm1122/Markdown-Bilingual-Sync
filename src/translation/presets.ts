@@ -38,7 +38,7 @@ export const PROVIDER_PRESETS: readonly ProviderPreset[] = [
   {
     id: "openai",
     label: "OpenAI",
-    description: "官方 API · gpt-4o-mini",
+    description: "Official API · gpt-4o-mini",
     provider: "openai",
     settings: {
       apiBaseUrl: "https://api.openai.com/v1",
@@ -67,7 +67,7 @@ export const PROVIDER_PRESETS: readonly ProviderPreset[] = [
   },
   {
     id: "ollama",
-    label: "Ollama（本机）",
+    label: "Ollama (local)",
     description: "127.0.0.1:11434 · qwen2.5:7b",
     provider: "openai",
     settings: {
@@ -77,7 +77,7 @@ export const PROVIDER_PRESETS: readonly ProviderPreset[] = [
   },
   {
     id: "lmstudio",
-    label: "LM Studio（本机）",
+    label: "LM Studio (local)",
     description: "127.0.0.1:1234 · local-model",
     provider: "openai",
     settings: {
@@ -87,14 +87,14 @@ export const PROVIDER_PRESETS: readonly ProviderPreset[] = [
   },
   {
     id: "http",
-    label: "自定义 HTTP 模板",
-    description: "保留现有请求模板，仅切换 provider",
+    label: "Custom HTTP template",
+    description: "Keep the current request templates and only switch provider",
     provider: "http",
   },
   {
     id: "mock",
-    label: "Mock 演示",
-    description: "不发起网络请求，仅用于本地演示",
+    label: "Mock demo",
+    description: "No network requests; for local demos only",
     provider: "mock",
   },
 ];

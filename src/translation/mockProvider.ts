@@ -25,6 +25,8 @@ import {
   type TranslationRequest,
   type TranslationResultItem,
 } from "./types";
+import { tError } from "../i18n/errors";
+import { UI_TEXT } from "../i18n";
 
 // ---- 静态词典 ----
 // 词组优先于单词，且都按源词长度降序，减少“短词先替换掉长词的一部分”的几率。
@@ -269,7 +271,9 @@ function mockTranslate(
  */
 export class MockTranslationProvider implements TranslationProvider {
   readonly id = "mock";
-  readonly label = "演示翻译（Mock）";
+  get label(): string {
+    return UI_TEXT.providers.mockTranslation;
+  }
   readonly supportsSummary = true;
 
   /**
@@ -281,7 +285,7 @@ export class MockTranslationProvider implements TranslationProvider {
     signal?: AbortSignal,
   ): Promise<string> {
     if (signal?.aborted) {
-      throw new Error("翻译已取消");
+      throw new Error(tError("common.translationCancelled"));
     }
     const lines = request.text
       .split(/\r?\n/)
@@ -311,7 +315,7 @@ export class MockTranslationProvider implements TranslationProvider {
     onChunk?: TranslationChunkHandler,
   ): Promise<TranslationResultItem[]> {
     if (signal?.aborted) {
-      throw new Error("翻译已取消");
+      throw new Error(tError("common.translationCancelled"));
     }
     const results: TranslationResultItem[] = request.items.map((item) => ({
       id: item.id,

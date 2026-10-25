@@ -24,7 +24,7 @@ import type {
   ExportConfirmationView,
   SourceConfirmationView,
 } from "../export/diffPreview";
-import { formatText, UI_TEXT } from "../i18n/zh";
+import { formatDateTime, formatText, getLocale, UI_TEXT } from "../i18n";
 import type { BlockKind } from "../markdown/types";
 import type {
   PreviewLayout,
@@ -75,44 +75,44 @@ function renderBlock(block: PreviewBlockView): string {
   if (isStandalone) {
     // 译文独占块：可回译生成新原文，或直接删除该译文。
     actions.push(
-      `<button type="button" class="mbs-action" data-action="backTranslateTargetOnly" data-standalone-id="${escapeHtml(block.standaloneTargetId ?? "")}" title="${escapeHtml(T.actions.backTranslateTargetTitle)}">${T.actions.backTranslateTarget}</button>`,
-      `<button type="button" class="mbs-action mbs-action-quiet" data-action="deleteTargetOnlyBlock" data-standalone-id="${escapeHtml(block.standaloneTargetId ?? "")}" title="${escapeHtml(T.actions.removeStandaloneTitle)}">${T.actions.removeStandalone}</button>`,
+      `<button type="button" class="mbs-action" data-action="backTranslateTargetOnly" data-standalone-id="${escapeHtml(block.standaloneTargetId ?? "")}" title="${escapeHtml(T.actions.backTranslateTargetTitle)}">${escapeHtml(T.actions.backTranslateTarget)}</button>`,
+      `<button type="button" class="mbs-action mbs-action-quiet" data-action="deleteTargetOnlyBlock" data-standalone-id="${escapeHtml(block.standaloneTargetId ?? "")}" title="${escapeHtml(T.actions.removeStandaloneTitle)}">${escapeHtml(T.actions.removeStandalone)}</button>`,
     );
   } else if (!isPendingInsert && !isDeleted) {
     // 正常双语块：撤销译文删除 / 重译 / 标记已同步 / 回译 / 定位原文 / 插入删除。
     if (block.status === "deleted") {
       actions.push(
-        `<button type="button" class="mbs-action" data-action="undoDeleteTargetBlock" data-block="${block.blockIndex}" title="${escapeHtml(T.actions.undoDeleteTitle)}">${T.actions.undoDelete}</button>`,
+        `<button type="button" class="mbs-action" data-action="undoDeleteTargetBlock" data-block="${block.blockIndex}" title="${escapeHtml(T.actions.undoDeleteTitle)}">${escapeHtml(T.actions.undoDelete)}</button>`,
       );
     } else if (block.canRetranslate) {
       actions.push(
-        `<button type="button" class="mbs-action" data-action="retranslateBlock" data-block="${block.blockIndex}" title="${escapeHtml(T.actions.retranslateTitle)}">${block.hasCache ? T.actions.retranslate : T.actions.translate}</button>`,
+        `<button type="button" class="mbs-action" data-action="retranslateBlock" data-block="${block.blockIndex}" title="${escapeHtml(T.actions.retranslateTitle)}">${escapeHtml(block.hasCache ? T.actions.retranslate : T.actions.translate)}</button>`,
       );
     }
     if (block.canMarkSynced) {
       actions.push(
-        `<button type="button" class="mbs-action" data-action="markSynced" data-block="${block.blockIndex}" title="${escapeHtml(T.actions.markSyncedTitle)}">${T.actions.markSynced}</button>`,
+        `<button type="button" class="mbs-action" data-action="markSynced" data-block="${block.blockIndex}" title="${escapeHtml(T.actions.markSyncedTitle)}">${escapeHtml(T.actions.markSynced)}</button>`,
       );
     }
     if (block.canBackTranslate) {
       actions.push(
-        `<button type="button" class="mbs-action" data-action="backTranslate" data-block="${block.blockIndex}" title="${escapeHtml(T.actions.backTranslateTitle)}">${T.actions.backTranslate}</button>`,
+        `<button type="button" class="mbs-action" data-action="backTranslate" data-block="${block.blockIndex}" title="${escapeHtml(T.actions.backTranslateTitle)}">${escapeHtml(T.actions.backTranslate)}</button>`,
       );
     }
     actions.push(
-      `<button type="button" class="mbs-action mbs-action-quiet" data-action="revealSource" data-block="${block.blockIndex}" title="${escapeHtml(T.actions.revealSourceTitle)}">${T.actions.revealSource}</button>`,
+      `<button type="button" class="mbs-action mbs-action-quiet" data-action="revealSource" data-block="${block.blockIndex}" title="${escapeHtml(T.actions.revealSourceTitle)}">${escapeHtml(T.actions.revealSource)}</button>`,
       ...insertDeleteActions(block),
     );
   } else if (isDeleted) {
     // 源块已暂存删除：只能撤销删除或定位原文，等写回后再同步缓存。
     actions.push(
-      `<button type="button" class="mbs-action" data-action="undoDeleteSourceBlock" data-block="${block.blockIndex}" title="${escapeHtml(T.actions.undoDeleteTitle)}">${T.actions.undoDelete}</button>`,
-      `<button type="button" class="mbs-action mbs-action-quiet" data-action="revealSource" data-block="${block.blockIndex}" title="${escapeHtml(T.actions.revealSourceTitle)}">${T.actions.revealSource}</button>`,
+      `<button type="button" class="mbs-action" data-action="undoDeleteSourceBlock" data-block="${block.blockIndex}" title="${escapeHtml(T.actions.undoDeleteTitle)}">${escapeHtml(T.actions.undoDelete)}</button>`,
+      `<button type="button" class="mbs-action mbs-action-quiet" data-action="revealSource" data-block="${block.blockIndex}" title="${escapeHtml(T.actions.revealSourceTitle)}">${escapeHtml(T.actions.revealSource)}</button>`,
     );
   } else {
     // 待插入的原文块：只允许移除。
     actions.push(
-      `<button type="button" class="mbs-action" data-action="removeSourceInsert" data-pending-id="${escapeHtml(block.pendingInsertId ?? "")}" title="${escapeHtml(T.actions.removeInsertTitle)}">${T.actions.removeInsert}</button>`,
+      `<button type="button" class="mbs-action" data-action="removeSourceInsert" data-pending-id="${escapeHtml(block.pendingInsertId ?? "")}" title="${escapeHtml(T.actions.removeInsertTitle)}">${escapeHtml(T.actions.removeInsert)}</button>`,
     );
   }
 
@@ -123,26 +123,26 @@ function renderBlock(block: PreviewBlockView): string {
   // 译文为空时按状态给出不同占位：已删除 / 有缓存但空 / 待复制 / 未翻译。
   const placeholder =
     block.status === "deleted"
-      ? `<div class="mbs-placeholder">${T.placeholders.skipped}</div>`
+      ? `<div class="mbs-placeholder">${escapeHtml(T.placeholders.skipped)}</div>`
       : block.hasCache
-        ? `<div class="mbs-placeholder">${T.placeholders.targetEmpty}</div>`
+        ? `<div class="mbs-placeholder">${escapeHtml(T.placeholders.targetEmpty)}</div>`
         : block.status === "copy-pending"
-          ? `<div class="mbs-placeholder">${T.placeholders.copyPending}</div>`
-          : `<div class="mbs-placeholder">${T.placeholders.untranslated}</div>`;
+          ? `<div class="mbs-placeholder">${escapeHtml(T.placeholders.copyPending)}</div>`
+          : `<div class="mbs-placeholder">${escapeHtml(T.placeholders.untranslated)}</div>`;
   // 源块可编辑的前提：既不是删除标记，也不是独占块。
   const sourceEdit =
     isDeleted || isStandalone
       ? ""
-      : `<button type="button" class="mbs-pane-edit" data-edit-pane="source" data-block="${block.blockIndex}" title="${escapeHtml(T.actions.editSourceTitle)}">${T.actions.editSource}</button>`;
+      : `<button type="button" class="mbs-pane-edit" data-edit-pane="source" data-block="${block.blockIndex}" title="${escapeHtml(T.actions.editSourceTitle)}">${escapeHtml(T.actions.editSource)}</button>`;
   const targetEdit =
     block.canEditTarget && !isDeleted
-      ? `<button type="button" class="mbs-pane-edit" data-edit-pane="target" data-block="${block.blockIndex}" title="${escapeHtml(T.actions.editTargetTitle)}">${T.actions.editTarget}</button>`
+      ? `<button type="button" class="mbs-pane-edit" data-edit-pane="target" data-block="${block.blockIndex}" title="${escapeHtml(T.actions.editTargetTitle)}">${escapeHtml(T.actions.editTarget)}</button>`
       : "";
   // 「原文待应用 / 原文待删除」徽标；与 renderSplitCellHeader 共用同一规则。
   const pendingBadge = isDeleted
-    ? `<span class="mbs-badge mbs-badge-pending-delete">${T.actions.sourceDeletePendingLabel}</span>`
+    ? `<span class="mbs-badge mbs-badge-pending-delete">${escapeHtml(T.actions.sourceDeletePendingLabel)}</span>`
     : block.sourcePending && !isPendingInsert
-      ? `<span class="mbs-badge mbs-badge-pending-source">${T.actions.sourcePendingBadge}</span>`
+      ? `<span class="mbs-badge mbs-badge-pending-source">${escapeHtml(T.actions.sourcePendingBadge)}</span>`
       : "";
   // 把虚拟块身份写进 section，媒体脚本据此回传 pendingId / standaloneId。
   const pendingAttributes = block.pendingInsertId
@@ -152,13 +152,15 @@ function renderBlock(block: PreviewBlockView): string {
       : "";
   const deletedAttribute = isDeleted ? ' data-source-deleted="true"' : "";
   // 源侧占位：独占块没有真实原文可显示。
-  const sourcePlaceholder = isStandalone
-    ? T.actions.standaloneSourceEmpty
-    : T.placeholders.sourceEmpty;
+  const sourcePlaceholder = escapeHtml(
+    isStandalone
+      ? T.actions.standaloneSourceEmpty
+      : T.placeholders.sourceEmpty,
+  );
 
   return `<section class="mbs-block${isPendingInsert ? " mbs-block-pending-insert" : ""}${isDeleted ? " mbs-block-pending-delete" : ""}${isStandalone ? " mbs-block-standalone" : ""}" data-status="${block.status}" data-block="${block.blockIndex}" data-source-hash="${escapeHtml(block.sourceHash)}"${block.cacheId ? ` data-cache-id="${escapeHtml(block.cacheId)}"` : ""}${block.sourcePending ? ' data-source-pending="true"' : ""}${deletedAttribute}${pendingAttributes}>
   <header class="mbs-block-head">
-    <span class="mbs-kind">${KIND_LABELS[block.kind]}</span>
+    <span class="mbs-kind">${escapeHtml(KIND_LABELS[block.kind])}</span>
     <span class="mbs-badge mbs-badge-${block.status}">${escapeHtml(block.statusLabel)}</span>
     ${pendingBadge}
     ${headingPath}
@@ -167,12 +169,12 @@ function renderBlock(block: PreviewBlockView): string {
   </header>
   <div class="mbs-pair">
     <div class="mbs-pane mbs-pane-source" data-pane="source">
-      <div class="mbs-pane-label">${T.panes.source}${sourceEdit}</div>
+      <div class="mbs-pane-label">${escapeHtml(T.panes.source)}${sourceEdit}</div>
       <div class="mbs-markdown"${isDeleted || isStandalone ? "" : ' data-edit-content="source"'} title="${isDeleted || isStandalone ? "" : escapeHtml(T.actions.editHint)}">${block.sourceHtml || `<div class="mbs-placeholder">${sourcePlaceholder}</div>`}</div>
       ${isStandalone ? "" : `<textarea class="mbs-raw" data-raw="source" hidden>${escapeHtml(block.sourceRaw)}</textarea>`}
     </div>
     <div class="mbs-pane mbs-pane-target" data-pane="target">
-      <div class="mbs-pane-label">${T.panes.target}${targetEdit}</div>
+      <div class="mbs-pane-label">${escapeHtml(T.panes.target)}${targetEdit}</div>
       <div class="mbs-markdown" data-edit-content="target"${block.canEditTarget && !isDeleted ? ` title="${escapeHtml(T.actions.editHint)}"` : ""}>${block.targetHtml || placeholder}</div>
       ${block.canEditTarget && !isDeleted ? `<textarea class="mbs-raw" data-raw="target" hidden>${escapeHtml(block.targetRaw)}</textarea>` : ""}
     </div>
@@ -191,10 +193,10 @@ function renderPendingBadge(block: PreviewBlockView): string {
   const isDeleted = block.sourceDeleted;
   const isPendingInsert = Boolean(block.pendingInsertId);
   if (isDeleted) {
-    return `<span class="mbs-badge mbs-badge-pending-delete">${T.actions.sourceDeletePendingLabel}</span>`;
+    return `<span class="mbs-badge mbs-badge-pending-delete">${escapeHtml(T.actions.sourceDeletePendingLabel)}</span>`;
   }
   if (block.sourcePending && !isPendingInsert) {
-    return `<span class="mbs-badge mbs-badge-pending-source">${T.actions.sourcePendingBadge}</span>`;
+    return `<span class="mbs-badge mbs-badge-pending-source">${escapeHtml(T.actions.sourcePendingBadge)}</span>`;
   }
   return "";
 }
@@ -214,17 +216,17 @@ function insertDeleteActions(block: PreviewBlockView): string[] {
     block.status === "deleted" || block.sourceDeleted;
   return [
     `<span class="mbs-split-action" data-split="insert">
-      <button type="button" class="mbs-action mbs-action-quiet" data-split-toggle="insert" title="${escapeHtml(T.actions.insertBlockTitle)}">${T.actions.insertBlock}</button>
+      <button type="button" class="mbs-action mbs-action-quiet" data-split-toggle="insert" title="${escapeHtml(T.actions.insertBlockTitle)}">${escapeHtml(T.actions.insertBlock)}</button>
       <span class="mbs-split-options" hidden>
-        <button type="button" class="mbs-action" data-action="insertSourceBlock" data-block="${block.blockIndex}">${T.actions.sourceChoice}</button>
-        <button type="button" class="mbs-action" data-action="insertTargetBlock" data-block="${block.blockIndex}" title="${escapeHtml(T.actions.insertTargetTitle)}">${T.actions.targetChoice}</button>
+        <button type="button" class="mbs-action" data-action="insertSourceBlock" data-block="${block.blockIndex}">${escapeHtml(T.actions.sourceChoice)}</button>
+        <button type="button" class="mbs-action" data-action="insertTargetBlock" data-block="${block.blockIndex}" title="${escapeHtml(T.actions.insertTargetTitle)}">${escapeHtml(T.actions.targetChoice)}</button>
       </span>
     </span>`,
     `<span class="mbs-split-action" data-split="delete">
-      <button type="button" class="mbs-action mbs-action-quiet" data-split-toggle="delete" title="${escapeHtml(T.actions.deleteBlockTitle)}">${T.actions.deleteBlock}</button>
+      <button type="button" class="mbs-action mbs-action-quiet" data-split-toggle="delete" title="${escapeHtml(T.actions.deleteBlockTitle)}">${escapeHtml(T.actions.deleteBlock)}</button>
       <span class="mbs-split-options" hidden>
-        <button type="button" class="mbs-action" data-action="deleteSourceBlock" data-block="${block.blockIndex}">${T.actions.sourceChoice}</button>
-        <button type="button" class="mbs-action" data-action="deleteTargetBlock" data-block="${block.blockIndex}" title="${escapeHtml(T.actions.deleteTargetTitle)}"${targetDeleteDisabled ? " disabled" : ""}>${T.actions.targetChoice}</button>
+        <button type="button" class="mbs-action" data-action="deleteSourceBlock" data-block="${block.blockIndex}">${escapeHtml(T.actions.sourceChoice)}</button>
+        <button type="button" class="mbs-action" data-action="deleteTargetBlock" data-block="${block.blockIndex}" title="${escapeHtml(T.actions.deleteTargetTitle)}"${targetDeleteDisabled ? " disabled" : ""}>${escapeHtml(T.actions.targetChoice)}</button>
       </span>
     </span>`,
   ];
@@ -257,7 +259,7 @@ function renderSplitCellHeader(
       : "";
   return `<header class="mbs-block-head mbs-split-cell-head">
     <span class="mbs-cell-meta">
-      <span class="mbs-kind">${KIND_LABELS[block.kind]}</span>
+      <span class="mbs-kind">${escapeHtml(KIND_LABELS[block.kind])}</span>
       <span class="mbs-badge mbs-badge-${block.status}">${escapeHtml(block.statusLabel)}</span>
       ${renderPendingBadge(block)}
       ${headingPath}
@@ -297,7 +299,7 @@ function renderSplitPlaceholderCell(
   return `<section class="mbs-block mbs-split-cell mbs-split-cell-${kind} mbs-split-cell-placeholder" data-status="${block.status}" data-block="${block.blockIndex}"${pendingAttributes} data-sync-key="${escapeHtml(block.key)}">
   ${renderSplitCellHeader(block, [], false)}
   <div class="mbs-pane mbs-pane-${kind}" data-pane="${kind}">
-    <div class="mbs-pane-label">${kind === "source" ? T.panes.source : T.panes.target}</div>
+    <div class="mbs-pane-label">${escapeHtml(kind === "source" ? T.panes.source : T.panes.target)}</div>
     <div class="mbs-markdown"><div class="mbs-placeholder">${placeholder}</div></div>
   </div>
 </section>`;
@@ -316,11 +318,11 @@ function renderSplitSourceCell(block: PreviewBlockView): string {
   const actions: string[] = [];
   if (isPendingInsert) {
     actions.push(
-      `<button type="button" class="mbs-action" data-action="removeSourceInsert" data-pending-id="${escapeHtml(block.pendingInsertId ?? "")}" title="${escapeHtml(T.actions.removeInsertTitle)}">${T.actions.removeInsert}</button>`,
+      `<button type="button" class="mbs-action" data-action="removeSourceInsert" data-pending-id="${escapeHtml(block.pendingInsertId ?? "")}" title="${escapeHtml(T.actions.removeInsertTitle)}">${escapeHtml(T.actions.removeInsert)}</button>`,
     );
   } else if (isDeleted) {
     actions.push(
-      `<button type="button" class="mbs-action" data-action="undoDeleteSourceBlock" data-block="${block.blockIndex}" title="${escapeHtml(T.actions.undoDeleteTitle)}">${T.actions.undoDelete}</button>`,
+      `<button type="button" class="mbs-action" data-action="undoDeleteSourceBlock" data-block="${block.blockIndex}" title="${escapeHtml(T.actions.undoDeleteTitle)}">${escapeHtml(T.actions.undoDelete)}</button>`,
     );
   } else {
     // 有缓存时是「重新翻译」，无缓存时是「翻译此块」，已删除译文时是「恢复翻译」。
@@ -332,7 +334,7 @@ function renderSplitSourceCell(block: PreviewBlockView): string {
             ? T.actions.retranslate
             : T.actions.translate;
       actions.push(
-        `<button type="button" class="mbs-action" data-action="retranslateBlock" data-block="${block.blockIndex}" title="${escapeHtml(T.actions.retranslateTitle)}">${label}</button>`,
+        `<button type="button" class="mbs-action" data-action="retranslateBlock" data-block="${block.blockIndex}" title="${escapeHtml(T.actions.retranslateTitle)}">${escapeHtml(label)}</button>`,
       );
     }
     actions.push(...insertDeleteActions(block));
@@ -340,7 +342,7 @@ function renderSplitSourceCell(block: PreviewBlockView): string {
 
   const sourceEdit = isDeleted
     ? ""
-    : `<button type="button" class="mbs-pane-edit" data-edit-pane="source" data-block="${block.blockIndex}" title="${escapeHtml(T.actions.editSourceTitle)}">${T.actions.editSource}</button>`;
+    : `<button type="button" class="mbs-pane-edit" data-edit-pane="source" data-block="${block.blockIndex}" title="${escapeHtml(T.actions.editSourceTitle)}">${escapeHtml(T.actions.editSource)}</button>`;
   // 待插入块用 pendingId 标识；真实块靠 data-block。
   const pendingAttributes = block.pendingInsertId
     ? ` data-pending-id="${escapeHtml(block.pendingInsertId)}" data-pending-insert="true"`
@@ -349,8 +351,8 @@ function renderSplitSourceCell(block: PreviewBlockView): string {
   return `<section class="mbs-block mbs-split-cell mbs-split-cell-source${isPendingInsert ? " mbs-block-pending-insert" : ""}${isDeleted ? " mbs-block-pending-delete" : ""}" data-status="${block.status}" data-block="${block.blockIndex}" data-source-hash="${escapeHtml(block.sourceHash)}"${block.cacheId ? ` data-cache-id="${escapeHtml(block.cacheId)}"` : ""}${block.sourcePending ? ' data-source-pending="true"' : ""}${isDeleted ? ' data-source-deleted="true"' : ""}${pendingAttributes} data-sync-key="${escapeHtml(block.key)}">
   ${renderSplitCellHeader(block, actions, isPendingInsert)}
   <div class="mbs-pane mbs-pane-source" data-pane="source">
-    <div class="mbs-pane-label">${T.panes.source}${sourceEdit}</div>
-    <div class="mbs-markdown"${isDeleted ? "" : ' data-edit-content="source"'} title="${isDeleted ? "" : escapeHtml(T.actions.editHint)}">${block.sourceHtml || `<div class="mbs-placeholder">${T.placeholders.sourceEmpty}</div>`}</div>
+    <div class="mbs-pane-label">${escapeHtml(T.panes.source)}${sourceEdit}</div>
+    <div class="mbs-markdown"${isDeleted ? "" : ' data-edit-content="source"'} title="${isDeleted ? "" : escapeHtml(T.actions.editHint)}">${block.sourceHtml || `<div class="mbs-placeholder">${escapeHtml(T.placeholders.sourceEmpty)}</div>`}</div>
     ${isDeleted ? "" : `<textarea class="mbs-raw" data-raw="source" hidden>${escapeHtml(block.sourceRaw)}</textarea>`}
   </div>
 </section>`;
@@ -370,31 +372,31 @@ function renderSplitTargetCell(block: PreviewBlockView): string {
   const actions: string[] = [];
   if (isStandalone) {
     actions.push(
-      `<button type="button" class="mbs-action" data-action="backTranslateTargetOnly" data-standalone-id="${escapeHtml(block.standaloneTargetId ?? "")}" title="${escapeHtml(T.actions.backTranslateTargetTitle)}">${T.actions.backTranslateTarget}</button>`,
-      `<button type="button" class="mbs-action mbs-action-quiet" data-action="deleteTargetOnlyBlock" data-standalone-id="${escapeHtml(block.standaloneTargetId ?? "")}" title="${escapeHtml(T.actions.removeStandaloneTitle)}">${T.actions.removeStandalone}</button>`,
+      `<button type="button" class="mbs-action" data-action="backTranslateTargetOnly" data-standalone-id="${escapeHtml(block.standaloneTargetId ?? "")}" title="${escapeHtml(T.actions.backTranslateTargetTitle)}">${escapeHtml(T.actions.backTranslateTarget)}</button>`,
+      `<button type="button" class="mbs-action mbs-action-quiet" data-action="deleteTargetOnlyBlock" data-standalone-id="${escapeHtml(block.standaloneTargetId ?? "")}" title="${escapeHtml(T.actions.removeStandaloneTitle)}">${escapeHtml(T.actions.removeStandalone)}</button>`,
     );
   } else if (isSourceDeleted) {
     // 源块待删除：译文只能定位原文或撤销源块删除，避免同时暂存两侧修改。
     actions.push(
-      `<button type="button" class="mbs-action mbs-action-quiet" data-action="revealSource" data-block="${block.blockIndex}" title="${escapeHtml(T.actions.revealSourceTitle)}">${T.actions.revealSource}</button>`,
+      `<button type="button" class="mbs-action mbs-action-quiet" data-action="revealSource" data-block="${block.blockIndex}" title="${escapeHtml(T.actions.revealSourceTitle)}">${escapeHtml(T.actions.revealSource)}</button>`,
     );
   } else {
     actions.push(
-      `<button type="button" class="mbs-action mbs-action-quiet" data-action="revealSource" data-block="${block.blockIndex}" title="${escapeHtml(T.actions.revealSourceTitle)}">${T.actions.revealSource}</button>`,
+      `<button type="button" class="mbs-action mbs-action-quiet" data-action="revealSource" data-block="${block.blockIndex}" title="${escapeHtml(T.actions.revealSourceTitle)}">${escapeHtml(T.actions.revealSource)}</button>`,
     );
     if (isTargetDeleted) {
       actions.push(
-        `<button type="button" class="mbs-action" data-action="undoDeleteTargetBlock" data-block="${block.blockIndex}" title="${escapeHtml(T.actions.undoDeleteTitle)}">${T.actions.undoDelete}</button>`,
+        `<button type="button" class="mbs-action" data-action="undoDeleteTargetBlock" data-block="${block.blockIndex}" title="${escapeHtml(T.actions.undoDeleteTitle)}">${escapeHtml(T.actions.undoDelete)}</button>`,
       );
     } else {
       if (block.canMarkSynced) {
         actions.push(
-          `<button type="button" class="mbs-action" data-action="markSynced" data-block="${block.blockIndex}" title="${escapeHtml(T.actions.markSyncedTitle)}">${T.actions.markSynced}</button>`,
+          `<button type="button" class="mbs-action" data-action="markSynced" data-block="${block.blockIndex}" title="${escapeHtml(T.actions.markSyncedTitle)}">${escapeHtml(T.actions.markSynced)}</button>`,
         );
       }
       if (block.canBackTranslate) {
         actions.push(
-          `<button type="button" class="mbs-action" data-action="backTranslate" data-block="${block.blockIndex}" title="${escapeHtml(T.actions.backTranslateTitle)}">${T.actions.backTranslate}</button>`,
+          `<button type="button" class="mbs-action" data-action="backTranslate" data-block="${block.blockIndex}" title="${escapeHtml(T.actions.backTranslateTitle)}">${escapeHtml(T.actions.backTranslate)}</button>`,
         );
       }
     }
@@ -403,16 +405,16 @@ function renderSplitTargetCell(block: PreviewBlockView): string {
 
   const canEditTarget = block.canEditTarget && !isSourceDeleted;
   const targetEdit = canEditTarget
-    ? `<button type="button" class="mbs-pane-edit" data-edit-pane="target" data-block="${block.blockIndex}" title="${escapeHtml(T.actions.editTargetTitle)}">${T.actions.editTarget}</button>`
+    ? `<button type="button" class="mbs-pane-edit" data-edit-pane="target" data-block="${block.blockIndex}" title="${escapeHtml(T.actions.editTargetTitle)}">${escapeHtml(T.actions.editTarget)}</button>`
     : "";
   const placeholder =
     block.status === "deleted"
-      ? `<div class="mbs-placeholder">${T.placeholders.skipped}</div>`
+      ? `<div class="mbs-placeholder">${escapeHtml(T.placeholders.skipped)}</div>`
       : block.hasCache
-        ? `<div class="mbs-placeholder">${T.placeholders.targetEmpty}</div>`
+        ? `<div class="mbs-placeholder">${escapeHtml(T.placeholders.targetEmpty)}</div>`
         : block.status === "copy-pending"
-          ? `<div class="mbs-placeholder">${T.placeholders.copyPending}</div>`
-          : `<div class="mbs-placeholder">${T.placeholders.untranslated}</div>`;
+          ? `<div class="mbs-placeholder">${escapeHtml(T.placeholders.copyPending)}</div>`
+          : `<div class="mbs-placeholder">${escapeHtml(T.placeholders.untranslated)}</div>`;
   const pendingAttributes = isStandalone
     ? ` data-standalone-id="${escapeHtml(block.standaloneTargetId ?? "")}" data-standalone="true"`
     : "";
@@ -420,7 +422,7 @@ function renderSplitTargetCell(block: PreviewBlockView): string {
   return `<section class="mbs-block mbs-split-cell mbs-split-cell-target${isStandalone ? " mbs-block-standalone" : ""}${isSourceDeleted ? " mbs-block-pending-delete" : ""}" data-status="${block.status}" data-block="${block.blockIndex}"${block.sourceHash ? ` data-source-hash="${escapeHtml(block.sourceHash)}"` : ""}${block.cacheId ? ` data-cache-id="${escapeHtml(block.cacheId)}"` : ""}${block.sourcePending ? ' data-source-pending="true"' : ""}${isSourceDeleted ? ' data-source-deleted="true"' : ""}${pendingAttributes} data-sync-key="${escapeHtml(block.key)}">
   ${renderSplitCellHeader(block, actions, false)}
   <div class="mbs-pane mbs-pane-target" data-pane="target">
-    <div class="mbs-pane-label">${T.panes.target}${targetEdit}</div>
+    <div class="mbs-pane-label">${escapeHtml(T.panes.target)}${targetEdit}</div>
     <div class="mbs-markdown" data-edit-content="target"${canEditTarget ? ` title="${escapeHtml(T.actions.editHint)}"` : ""}>${block.targetHtml || placeholder}</div>
     ${canEditTarget ? `<textarea class="mbs-raw" data-raw="target" hidden>${escapeHtml(block.targetRaw)}</textarea>` : ""}
   </div>
@@ -436,8 +438,8 @@ function renderSplitTargetCell(block: PreviewBlockView): string {
 function renderSplitFootnoteCell(html: string, label: string): string {
   return `<section class="mbs-block mbs-split-cell mbs-split-cell-footnotes">
   <div class="mbs-pane">
-    <div class="mbs-pane-label">${label}</div>
-    <div class="mbs-markdown">${html || `<div class="mbs-placeholder">${T.placeholders.noFootnotes}</div>`}</div>
+    <div class="mbs-pane-label">${escapeHtml(label)}</div>
+    <div class="mbs-markdown">${html || `<div class="mbs-placeholder">${escapeHtml(T.placeholders.noFootnotes)}</div>`}</div>
   </div>
 </section>`;
 }
@@ -527,7 +529,7 @@ function renderSplitPane(
     : T.actions.readonlyPreviewTitle;
   return `<section class="mbs-split-pane${readonly ? " mbs-split-pane-readonly" : ""}" data-split-pane="${kind}" data-readonly="${readonly}">
     <header class="mbs-split-head">
-      <span>${label}</span>
+      <span>${escapeHtml(label)}</span>
       <span class="mbs-split-tools">
         <span class="mbs-split-lang">${escapeHtml(language)}</span>
         <button type="button" class="mbs-pane-mode${readonly ? " is-active" : ""}" data-action="togglePaneReadonly" data-pane="${kind}" aria-pressed="${readonly}" title="${escapeHtml(title)}">${escapeHtml(labelText)}</button>
@@ -575,7 +577,7 @@ function renderSplitLayout(
   }
   // 空文档：两栏各给一个空占位（只读栏由 renderReadonlyDocument 自行处理）。
   if (model.blocks.length === 0) {
-    const empty = `<div class="mbs-empty">${T.placeholders.emptyDocument}</div>`;
+    const empty = `<div class="mbs-empty">${escapeHtml(T.placeholders.emptyDocument)}</div>`;
     if (!readonly.source) {
       sourceCells.push(empty);
     }
@@ -635,7 +637,7 @@ function renderStats(model: PreviewModel): string {  const items: string[] = [];
   const add = (label: string, value: number, className: string) => {
     if (value > 0) {
       items.push(
-        `<span class="mbs-stat ${className}"><strong>${value}</strong> ${label}</span>`,
+        `<span class="mbs-stat ${className}"><strong>${value}</strong> ${escapeHtml(label)}</span>`,
       );
     }
   };
@@ -645,9 +647,9 @@ function renderStats(model: PreviewModel): string {  const items: string[] = [];
   add(T.stats.untranslated, model.counts.untranslated, "mbs-stat-missing");
   add(T.stats.copy, model.counts.copy, "mbs-stat-copy");
   if (items.length === 0) {
-    items.push(`<span class="mbs-stat">${T.stats.empty}</span>`);
+    items.push(`<span class="mbs-stat">${escapeHtml(T.stats.empty)}</span>`);
   }
-  return `<div class="mbs-stats">${items.join("")}<span class="mbs-stat mbs-stat-total">${formatText(T.stats.total, { count: model.counts.total })}</span></div>`;
+  return `<div class="mbs-stats">${items.join("")}<span class="mbs-stat mbs-stat-total">${escapeHtml(formatText(T.stats.total, { count: model.counts.total }))}</span></div>`;
 }
 
 /**
@@ -660,7 +662,7 @@ function renderWarnings(model: PreviewModel): string {
     return "";
   }
   return `<details class="mbs-warnings" open>
-  <summary>${formatText(T.warnings.summary, { count: model.warnings.length })}</summary>
+  <summary>${escapeHtml(formatText(T.warnings.summary, { count: model.warnings.length }))}</summary>
   <ul>${model.warnings.map((warning) => `<li>${escapeHtml(warning)}</li>`).join("")}</ul>
 </details>`;
 }
@@ -676,12 +678,12 @@ function renderFootnotes(model: PreviewModel): string {
   }
   return `<section class="mbs-footnotes">
   <div class="mbs-pane mbs-pane-source">
-    <div class="mbs-pane-label">${T.panes.sourceFootnotes}</div>
-    <div class="mbs-markdown">${model.sourceFootnotesHtml || `<div class="mbs-placeholder">${T.placeholders.noFootnotes}</div>`}</div>
+    <div class="mbs-pane-label">${escapeHtml(T.panes.sourceFootnotes)}</div>
+    <div class="mbs-markdown">${model.sourceFootnotesHtml || `<div class="mbs-placeholder">${escapeHtml(T.placeholders.noFootnotes)}</div>`}</div>
   </div>
   <div class="mbs-pane mbs-pane-target">
-    <div class="mbs-pane-label">${T.panes.targetFootnotes}</div>
-    <div class="mbs-markdown">${model.targetFootnotesHtml || `<div class="mbs-placeholder">${T.placeholders.noFootnotes}</div>`}</div>
+    <div class="mbs-pane-label">${escapeHtml(T.panes.targetFootnotes)}</div>
+    <div class="mbs-markdown">${model.targetFootnotesHtml || `<div class="mbs-placeholder">${escapeHtml(T.placeholders.noFootnotes)}</div>`}</div>
   </div>
 </section>`;
 }
@@ -722,6 +724,27 @@ export interface PreviewHtmlInput {
  * - 内联 JSON 会把 `<` 转成 `\u003c`，避免 `</script>` 截断脚本标签。
  */
 /**
+ * 把摘要缓存中持久化的 Provider id 映射为当前 locale 的显示名。
+ * @param model `mock` / `openai` / `http` / `manual`；也兼容旧缓存里的 `batch:` 前缀。
+ * 未知值（含旧缓存中的本地化标签）原样展示。
+ */
+function summaryModelLabel(model: string): string {
+  const id = model.startsWith("batch:") ? model.slice("batch:".length) : model;
+  switch (id) {
+    case "mock":
+      return UI_TEXT.providers.mockTranslation;
+    case "openai":
+      return UI_TEXT.providers.openaiCompatible;
+    case "http":
+      return UI_TEXT.providers.customHttp;
+    case "manual":
+      return T.summary.manual;
+    default:
+      return model;
+  }
+}
+
+/**
  * 渲染全文摘要面板：手动生成/保存/清除、编辑文本与两个会话级开关。
  * 摘要位于文档级，不随分栏/只读状态变化。
  */
@@ -740,28 +763,26 @@ function renderSummaryPanel(model: PreviewModel): string {
     if (summary.updatedAt) {
       meta.push(
         formatText(T.summary.generatedAt, {
-          time: summary.updatedAt,
+          time: formatDateTime(summary.updatedAt, getLocale()),
         }),
       );
     }
     if (summary.model) {
-      meta.push(
-        `${T.summary.manual === summary.model ? T.summary.manual : summary.model}`,
-      );
+      meta.push(summaryModelLabel(summary.model));
     }
   }
   return `<details class="mbs-summary-panel" data-summary-panel${hasSummary ? " open" : ""}>
   <summary>
-    <span class="mbs-summary-title">${T.summary.title}</span>
+    <span class="mbs-summary-title">${escapeHtml(T.summary.title)}</span>
     <span class="mbs-summary-state${summary.stale ? " is-stale" : ""}">${escapeHtml(status)}</span>
   </summary>
   <div class="mbs-summary-body">
     <div class="mbs-summary-actions">
-      <button type="button" class="mbs-button mbs-button-primary" data-action="generateSummary"${summary.canGenerate ? "" : ` disabled title="${escapeHtml(T.summary.unsupported)}"`}>${T.summary.generate}</button>
-      <button type="button" class="mbs-button" data-action="saveSummary">${T.summary.save}</button>
-      <button type="button" class="mbs-button" data-action="clearSummary"${hasSummary ? "" : " disabled"}>${T.summary.clear}</button>
-      <label class="mbs-assist-toggle" title="${escapeHtml(T.summary.stableTranslationTitle)}"><input type="checkbox" data-assist-toggle="stableTranslation"${assist.stableTranslation ? " checked" : ""}> ${T.summary.stableTranslation}</label>
-      <label class="mbs-assist-toggle" title="${escapeHtml(T.summary.useSummaryTitle)}"><input type="checkbox" data-assist-toggle="summaryContext"${assist.summaryContext ? " checked" : ""}${hasSummary ? "" : " disabled"}> ${T.summary.useSummary}</label>
+      <button type="button" class="mbs-button mbs-button-primary" data-action="generateSummary"${summary.canGenerate ? "" : ` disabled title="${escapeHtml(T.summary.unsupported)}"`}>${escapeHtml(T.summary.generate)}</button>
+      <button type="button" class="mbs-button" data-action="saveSummary">${escapeHtml(T.summary.save)}</button>
+      <button type="button" class="mbs-button" data-action="clearSummary"${hasSummary ? "" : " disabled"}>${escapeHtml(T.summary.clear)}</button>
+      <label class="mbs-assist-toggle" title="${escapeHtml(T.summary.stableTranslationTitle)}"><input type="checkbox" data-assist-toggle="stableTranslation"${assist.stableTranslation ? " checked" : ""}> ${escapeHtml(T.summary.stableTranslation)}</label>
+      <label class="mbs-assist-toggle" title="${escapeHtml(T.summary.useSummaryTitle)}"><input type="checkbox" data-assist-toggle="summaryContext"${assist.summaryContext ? " checked" : ""}${hasSummary ? "" : " disabled"}> ${escapeHtml(T.summary.useSummary)}</label>
     </div>
     <textarea class="mbs-summary-text" data-summary-text spellcheck="false" rows="8" placeholder="${escapeHtml(T.summary.placeholder)}">${escapeHtml(summary.text)}</textarea>
     <p class="mbs-summary-meta">${escapeHtml(meta.join(" · "))}${summary.stale ? ` · ${escapeHtml(T.summary.staleHint)}` : ""}</p>
@@ -834,7 +855,7 @@ export function buildPreviewHtml(input: PreviewHtmlInput): string {
   const body =
     model.blocks.length > 0
       ? model.blocks.map(renderBlock).join("\n")
-      : `<div class="mbs-empty">${T.placeholders.emptyDocument}</div>`;
+      : `<div class="mbs-empty">${escapeHtml(T.placeholders.emptyDocument)}</div>`;
   // split 走左右双栏；columns / stacked 走「正文 + 脚注区」。
   const content =
     layout === "split"
@@ -846,12 +867,12 @@ export function buildPreviewHtml(input: PreviewHtmlInput): string {
 
   // 页面骨架：CSP 通过 meta 注入，样式/脚本均带 nonce 或来自 webview 资源根。
   return `<!DOCTYPE html>
-<html lang="zh-CN">
+<html lang="${escapeHtml(getLocale())}">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <meta http-equiv="Content-Security-Policy" content="${csp}">
-<title>${escapeHtml(model.fileLabel)} · ${T.titleSuffix}</title>
+<title>${escapeHtml(model.fileLabel)} · ${escapeHtml(T.titleSuffix)}</title>
 <link rel="stylesheet" href="${katexHref}">
 <link rel="stylesheet" href="${cssHref}">
 </head>
@@ -859,23 +880,23 @@ export function buildPreviewHtml(input: PreviewHtmlInput): string {
 <div class="mbs-root" data-mode="bilingual" data-layout="${layout}">
   <header class="mbs-toolbar">
     <div class="mbs-title-group">
-      <div class="mbs-mark">${T.mark}</div>
+      <div class="mbs-mark">${escapeHtml(T.mark)}</div>
       <div class="mbs-title-text">
         <h1>${escapeHtml(model.fileLabel)}</h1>
         <p>${escapeHtml(model.sourceLanguage)} → ${escapeHtml(model.targetLanguage)} · ${escapeHtml(model.providerLabel)}</p>
       </div>
     </div>
     <div class="mbs-mode-switch" role="group" aria-label="${escapeHtml(T.toolbar.previewMode)}">
-      <button type="button" data-mode="bilingual" aria-pressed="true">${T.toolbar.bilingual}</button>
-      <button type="button" data-mode="source" aria-pressed="false">${T.toolbar.sourceOnly}</button>
-      <button type="button" data-mode="target" aria-pressed="false">${T.toolbar.targetOnly}</button>
+      <button type="button" data-mode="bilingual" aria-pressed="true">${escapeHtml(T.toolbar.bilingual)}</button>
+      <button type="button" data-mode="source" aria-pressed="false">${escapeHtml(T.toolbar.sourceOnly)}</button>
+      <button type="button" data-mode="target" aria-pressed="false">${escapeHtml(T.toolbar.targetOnly)}</button>
     </div>
     <div class="mbs-toolbar-actions">
-      <button type="button" class="mbs-button mbs-button-primary" data-action="sync">${T.toolbar.sync}</button>
-      <button type="button" class="mbs-button" data-action="importTranslation" title="${escapeHtml(T.toolbar.importTranslationTitle)}">${T.toolbar.importTranslation}</button>
-      <button type="button" class="mbs-button" data-action="refresh">${T.toolbar.refresh}</button>
-      <button type="button" class="mbs-button" data-action="editCache">${T.toolbar.editCache}</button>
-      <button type="button" class="mbs-button" data-action="export"${model.cacheExists ? "" : ` disabled title="${escapeHtml(T.toolbar.exportDisabledTitle)}"`}>${T.toolbar.export}</button>
+      <button type="button" class="mbs-button mbs-button-primary" data-action="sync">${escapeHtml(T.toolbar.sync)}</button>
+      <button type="button" class="mbs-button" data-action="importTranslation" title="${escapeHtml(T.toolbar.importTranslationTitle)}">${escapeHtml(T.toolbar.importTranslation)}</button>
+      <button type="button" class="mbs-button" data-action="refresh">${escapeHtml(T.toolbar.refresh)}</button>
+      <button type="button" class="mbs-button" data-action="editCache">${escapeHtml(T.toolbar.editCache)}</button>
+      <button type="button" class="mbs-button" data-action="export"${model.cacheExists ? "" : ` disabled title="${escapeHtml(T.toolbar.exportDisabledTitle)}"`}>${escapeHtml(T.toolbar.export)}</button>
       <button type="button" class="mbs-icon-button" data-action="openCacheFolder" title="${escapeHtml(T.toolbar.openCacheFolder)}" aria-label="${escapeHtml(T.toolbar.openCacheFolder)}">⋯</button>
     </div>
   </header>
@@ -883,34 +904,34 @@ export function buildPreviewHtml(input: PreviewHtmlInput): string {
     ${renderStats(model)}
     ${
       model.pendingSourceCount > 0
-        ? `<button type="button" class="mbs-inline-action mbs-inline-action-primary" data-action="applySourceEdits" title="${escapeHtml(T.actions.applySourceTitle)}">${formatText(T.actions.applySource, { count: model.pendingSourceCount })}</button>
-    <button type="button" class="mbs-inline-action" data-action="discardSourceEdits" title="${escapeHtml(T.actions.resetSourceTitle)}">${T.actions.resetSource}</button>`
+        ? `<button type="button" class="mbs-inline-action mbs-inline-action-primary" data-action="applySourceEdits" title="${escapeHtml(T.actions.applySourceTitle)}">${escapeHtml(formatText(T.actions.applySource, { count: model.pendingSourceCount }))}</button>
+    <button type="button" class="mbs-inline-action" data-action="discardSourceEdits" title="${escapeHtml(T.actions.resetSourceTitle)}">${escapeHtml(T.actions.resetSource)}</button>`
         : ""
     }
-    <button type="button" class="mbs-inline-action" data-action="insertSourceBlockStart" title="${escapeHtml(T.actions.insertAtStartTitle)}">${T.actions.insertAtStart}</button>
+    <button type="button" class="mbs-inline-action" data-action="insertSourceBlockStart" title="${escapeHtml(T.actions.insertAtStartTitle)}">${escapeHtml(T.actions.insertAtStart)}</button>
     ${
       model.cacheExists
-        ? `<button type="button" class="mbs-inline-action" data-action="retranslateAll" title="${escapeHtml(T.subbar.retranslateAllTitle)}">${T.subbar.retranslateAll}</button>`
+        ? `<button type="button" class="mbs-inline-action" data-action="retranslateAll" title="${escapeHtml(T.subbar.retranslateAllTitle)}">${escapeHtml(T.subbar.retranslateAll)}</button>`
         : ""
     }
     ${
       model.counts.stale > 0
-        ? `<button type="button" class="mbs-inline-action" data-action="retranslateStale" title="${escapeHtml(T.subbar.retranslateStaleTitle)}">${formatText(T.subbar.retranslateStale, { count: model.counts.stale })}</button>`
+        ? `<button type="button" class="mbs-inline-action" data-action="retranslateStale" title="${escapeHtml(T.subbar.retranslateStaleTitle)}">${escapeHtml(formatText(T.subbar.retranslateStale, { count: model.counts.stale }))}</button>`
         : ""
     }
     <div class="mbs-layout-switch" role="group" aria-label="${escapeHtml(T.subbar.layout)}">
-      <button type="button" data-layout="columns" aria-pressed="${layout === "columns"}">${T.subbar.columns}</button>
-      <button type="button" data-layout="stacked" aria-pressed="${layout === "stacked"}">${T.subbar.stacked}</button>
-      <button type="button" data-layout="split" aria-pressed="${layout === "split"}">${T.subbar.split}</button>
+      <button type="button" data-layout="columns" aria-pressed="${layout === "columns"}">${escapeHtml(T.subbar.columns)}</button>
+      <button type="button" data-layout="stacked" aria-pressed="${layout === "stacked"}">${escapeHtml(T.subbar.stacked)}</button>
+      <button type="button" data-layout="split" aria-pressed="${layout === "split"}">${escapeHtml(T.subbar.split)}</button>
     </div>
-    <span class="mbs-hint">${T.subbar.hint}</span>
+    <span class="mbs-hint">${escapeHtml(T.subbar.hint)}</span>
   </div>
   ${renderWarnings(model)}
   ${renderSummaryPanel(model)}
   ${content}
   <footer class="mbs-footer">
-    <span>${T.footer.phase}</span>
-    <span>${T.footer.note}</span>
+    <span>${escapeHtml(T.footer.phase)}</span>
+    <span>${escapeHtml(T.footer.note)}</span>
   </footer>
   <div class="mbs-toast" role="status" aria-live="polite"${noticeAttrs}></div>
 </div>
@@ -919,8 +940,8 @@ export function buildPreviewHtml(input: PreviewHtmlInput): string {
   <div class="mbs-modal-dialog" role="dialog" aria-modal="true" aria-labelledby="mbs-export-title">
     <header class="mbs-modal-head">
       <div>
-        <p class="mbs-modal-eyebrow">${T.modal.eyebrow}</p>
-        <h2 id="mbs-export-title">${T.modal.title}</h2>
+        <p class="mbs-modal-eyebrow">${escapeHtml(T.modal.eyebrow)}</p>
+        <h2 id="mbs-export-title">${escapeHtml(T.modal.title)}</h2>
       </div>
       <button type="button" class="mbs-icon-button" data-export-dismiss aria-label="${escapeHtml(T.modal.close)}">×</button>
     </header>
@@ -930,9 +951,9 @@ export function buildPreviewHtml(input: PreviewHtmlInput): string {
     <div class="mbs-diff">
       <div class="mbs-diff-head">
         <span></span>
-        <span id="mbs-diff-left-label">${T.modal.currentFile}</span>
+        <span id="mbs-diff-left-label">${escapeHtml(T.modal.currentFile)}</span>
         <span></span>
-        <span id="mbs-diff-right-label">${T.modal.exportContent}</span>
+        <span id="mbs-diff-right-label">${escapeHtml(T.modal.exportContent)}</span>
       </div>
       <div class="mbs-diff-scroll">
         <div class="mbs-diff-table" id="mbs-diff-table"></div>
@@ -940,8 +961,8 @@ export function buildPreviewHtml(input: PreviewHtmlInput): string {
     </div>
     <p class="mbs-export-note" id="mbs-export-note" hidden></p>
     <footer class="mbs-modal-actions">
-      <button type="button" class="mbs-button" data-export-cancel>${T.modal.cancel}</button>
-      <button type="button" class="mbs-button mbs-button-primary" data-export-write>${T.modal.write}</button>
+      <button type="button" class="mbs-button" data-export-cancel>${escapeHtml(T.modal.cancel)}</button>
+      <button type="button" class="mbs-button mbs-button-primary" data-export-write>${escapeHtml(T.modal.write)}</button>
     </footer>
   </div>
 </div>
@@ -950,8 +971,8 @@ export function buildPreviewHtml(input: PreviewHtmlInput): string {
   <div class="mbs-modal-dialog" role="dialog" aria-modal="true" aria-labelledby="mbs-source-title">
     <header class="mbs-modal-head">
       <div>
-        <p class="mbs-modal-eyebrow">${T.sourceModal.eyebrow}</p>
-        <h2 id="mbs-source-title">${T.sourceModal.title}</h2>
+        <p class="mbs-modal-eyebrow">${escapeHtml(T.sourceModal.eyebrow)}</p>
+        <h2 id="mbs-source-title">${escapeHtml(T.sourceModal.title)}</h2>
       </div>
       <button type="button" class="mbs-icon-button" data-source-dismiss aria-label="${escapeHtml(T.sourceModal.close)}">×</button>
     </header>
@@ -960,18 +981,18 @@ export function buildPreviewHtml(input: PreviewHtmlInput): string {
     <div class="mbs-diff">
       <div class="mbs-diff-head">
         <span></span>
-        <span id="mbs-source-diff-left-label">${T.sourceModal.currentFile}</span>
+        <span id="mbs-source-diff-left-label">${escapeHtml(T.sourceModal.currentFile)}</span>
         <span></span>
-        <span id="mbs-source-diff-right-label">${T.sourceModal.updatedFile}</span>
+        <span id="mbs-source-diff-right-label">${escapeHtml(T.sourceModal.updatedFile)}</span>
       </div>
       <div class="mbs-diff-scroll">
         <div class="mbs-diff-table" id="mbs-source-diff-table"></div>
       </div>
     </div>
-    <p class="mbs-export-note">${T.sourceModal.note}</p>
+    <p class="mbs-export-note">${escapeHtml(T.sourceModal.note)}</p>
     <footer class="mbs-modal-actions">
-      <button type="button" class="mbs-button" data-source-cancel>${T.sourceModal.cancel}</button>
-      <button type="button" class="mbs-button mbs-button-primary" data-source-write>${T.sourceModal.write}</button>
+      <button type="button" class="mbs-button" data-source-cancel>${escapeHtml(T.sourceModal.cancel)}</button>
+      <button type="button" class="mbs-button mbs-button-primary" data-source-write>${escapeHtml(T.sourceModal.write)}</button>
     </footer>
   </div>
 </div>

@@ -1,13 +1,13 @@
 /**
  * 同步结果的摘要文案。
  *
- * 职责：把 `SyncResult` 的计数套进 i18n 模板，生成一行可直接展示的中文摘要。
+ * 职责：把 `SyncResult` 的计数套进 i18n 模板，生成一行可直接展示的本地化摘要。
  * 不变量：所有占位符都在 `UI_TEXT.extension.syncSummary` 中定义；没有保留过期块时
  * 不追加后缀。纯函数、无副作用；模板缺失占位符时由 `formatText` 原样保留。
  *
  * 与其他模块的关系：`extension.ts` 在同步成功后调用，预览/任务视图不依赖它。
  */
-import { formatText, UI_TEXT } from "../i18n/zh";
+import { formatText, UI_TEXT } from "../i18n";
 import type { SyncResult } from "./sync";
 
 /**

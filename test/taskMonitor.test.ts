@@ -1,6 +1,6 @@
 /** 测试：翻译任务状态机、取消与历史快照。 */
 import { describe, expect, it } from "vitest";
-import { TranslationTaskMonitor } from "../src/status/taskMonitor";
+import { TranslationTaskMonitor, failedTaskPatch } from "../src/status/taskMonitor";
 
 describe("TranslationTaskMonitor", () => {
   it("tracks queued, running and finished tasks", () => {
@@ -28,6 +28,18 @@ describe("TranslationTaskMonitor", () => {
     expect(snapshot.activeCount).toBe(0);
     expect(snapshot.finished[0].status).toBe("success");
     expect(snapshot.finished[0].finishedAt).toBeTypeOf("number");
+  });
+
+  it("keeps failure detail only in error, not phase", () => {
+    const monitor = new TranslationTaskMonitor();
+    const id = monitor.create("docs/a.md");
+    monitor.start(id);
+    monitor.finish(id, "failed", failedTaskPatch("boom"));
+
+    const task = monitor.snapshot().finished[0];
+    expect(task.status).toBe("failed");
+    expect(task.error).toBe("boom");
+    expect(task.phase).toBe("");
   });
 
   it("cancels active tasks and ignores duplicate finish", () => {

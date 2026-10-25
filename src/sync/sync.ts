@@ -48,6 +48,8 @@ import {
   type TranslationItem,
   type TranslationProvider,
 } from "../translation/types";
+import { tError } from "../i18n/errors";
+import { formatText, UI_TEXT } from "../i18n";
 
 // ---- 公共类型 ----
 
@@ -194,15 +196,15 @@ function assertCacheWritable(alignment: AlignmentResult, cache: CacheDocument): 
   const reasons: string[] = [];
   if (cache.untracked.length > 0) {
     reasons.push(
-      `译文缓存中有 ${cache.untracked.length} 个未加锚点的块。请先在缓存中删除这些内容或确认来源后重试。`,
+      tError("sync.untrackedCacheWarning", { count: cache.untracked.length }),
     );
   }
   const humanOrphans = alignment.orphanCaches.filter(isHumanAnchoredBlock);
   if (humanOrphans.length > 0) {
     reasons.push(
-      `有 ${humanOrphans.length} 个译文锁定块找不到对应原文（锚点：${humanOrphans
+      tError("sync.humanOrphanWarning", { count: humanOrphans.length, ids: humanOrphans
         .map((item) => item.anchor.id)
-        .join(", ")}）。为避免丢失锁定译文内容，已停止同步。`,
+        .join(", ") }),
     );
   }
   if (reasons.length > 0) {
@@ -241,7 +243,7 @@ function collectEntries(
     const cached = aligned.cache;
     const id = finalIds.get(source.index);
     if (!id) {
-      throw new Error(`块 ${source.index + 1} 缺少稳定的锚点 id。`);
+      throw new Error(tError("sync.missingStableAnchor", { index: source.index + 1 }));
     }
     let content: string;
     let mode: BlockAnchor["mode"];
@@ -273,7 +275,7 @@ function collectEntries(
       if (allowMissing) {
         continue;
       }
-      throw new Error(`块 ${source.index} 缺少译文，且未生成翻译任务。`);
+      throw new Error(tError("sync.missingTranslationTask", { index: source.index }));
     }
 
     const anchor: BlockAnchor = {
@@ -287,7 +289,7 @@ function collectEntries(
   }
 
   if (!allowMissing && entries.length !== sourceBlocks.length) {
-    throw new Error("译文块数量与原文不一致，已停止写入。");
+    throw new Error(tError("sync.blockCountMismatch"));
   }
   return { entries, copiedCount, humanLockedCount };
 }
@@ -433,7 +435,7 @@ export async function syncDocument(options: SyncOptions): Promise<SyncResult> {
   if (initialAlignment.orphanCaches.length > 0) {
     // 机器孤儿没有人工成果，允许丢弃以保持缓存干净；人工孤儿已在上面阻断。
     warnings.push(
-      `已丢弃 ${initialAlignment.orphanCaches.length} 个无法对应的机器译文锚点。`,
+      tError("sync.droppedOrphanAnchors", { count: initialAlignment.orphanCaches.length }),
     );
   }
 
@@ -479,14 +481,14 @@ export async function syncDocument(options: SyncOptions): Promise<SyncResult> {
     if (!needsTranslation) {
       if (aligned.status === "stale") {
         warnings.push(
-          `块 ${sourceBlock.index + 1} 的原文已变更，按当前设置保留了旧机器译文。`,
+          tError("sync.staleKept", { index: sourceBlock.index + 1 }),
         );
       }
       continue;
     }
     const anchorId = finalIds.get(sourceBlock.index);
     if (!anchorId) {
-      throw new Error(`块 ${sourceBlock.index + 1} 缺少锚点 id。`);
+      throw new Error(tError("sync.missingAnchor", { index: sourceBlock.index + 1 }));
     }
     const reference =
       options.assist?.stableTranslation === true &&
@@ -537,7 +539,9 @@ export async function syncDocument(options: SyncOptions): Promise<SyncResult> {
     // 译文正文若意外包含块级结构或空行，会在这里裂出未跟踪块。
     if (draft.untracked.length > 0) {
       throw new SyncBlockedError([
-        `翻译结果被解析为 ${draft.untracked.length} 个额外块。可能是译文中出现了多余的空行或 Markdown 结构变化。`,
+        tError("sync.draftUntrackedBlocks", {
+          count: draft.untracked.length,
+        }),
       ]);
     }
     const parsedById = new Map(
@@ -551,12 +555,12 @@ export async function syncDocument(options: SyncOptions): Promise<SyncResult> {
       const parsed = parsedById.get(entry.anchor.id);
       if (!parsed) {
         throw new SyncBlockedError([
-          `无法在草稿缓存中定位锚点 ${entry.anchor.id} 对应的译文块。`,
+          tError("sync.draftAnchorMissing", { id: entry.anchor.id }),
         ]);
       }
       if (parsed.kind !== entry.anchor.kind) {
         entryWarnings.push(
-          `块 ${index + 1} 的 Markdown 类型从 ${entry.anchor.kind} 变为 ${parsed.kind}，请检查译文结构。`,
+          tError("sync.kindChangedWarning", { index: index + 1, from: entry.anchor.kind, to: parsed.kind }),
         );
       }
       return {
@@ -627,13 +631,13 @@ export async function syncDocument(options: SyncOptions): Promise<SyncResult> {
     const candidate = new Map(outputs);
     for (const item of items) {
       if (!taskIds.has(item.id)) {
-        throw new Error(`翻译服务返回了未请求的块：${item.id}`);
+        throw new Error(tError("translation.unexpectedBlock", { id: item.id }));
       }
       if (candidate.has(item.id)) {
-        throw new Error(`翻译服务重复返回了块：${item.id}`);
+        throw new Error(tError("translation.duplicateBlock", { id: item.id }));
       }
       if (typeof item.text !== "string" || !item.text.trim()) {
-        throw new Error(`翻译服务返回了空译文：${item.id}`);
+        throw new Error(tError("translation.emptyBlock", { id: item.id }));
       }
       candidate.set(item.id, item.text);
     }
@@ -656,10 +660,15 @@ export async function syncDocument(options: SyncOptions): Promise<SyncResult> {
   };
 
   if (tasks.length > 0) {
-    onProgress?.(`正在翻译 ${tasks.length} 个块…`, {
-      completed: 0,
-      total: tasks.length,
-    });
+    onProgress?.(
+      formatText(UI_TEXT.taskPanel.phases.translatingBlocks, {
+        count: tasks.length,
+      }),
+      {
+        completed: 0,
+        total: tasks.length,
+      },
+    );
     try {
       const rawResult = await provider.translate(
         {
@@ -673,10 +682,16 @@ export async function syncDocument(options: SyncOptions): Promise<SyncResult> {
         },
         signal,
         (completed, total) => {
-          onProgress?.(`正在翻译 ${completed}/${total} 个块…`, {
-            completed,
-            total,
-          });
+          onProgress?.(
+            formatText(UI_TEXT.taskPanel.phases.translatingProgress, {
+              completed,
+              total,
+            }),
+            {
+              completed,
+              total,
+            },
+          );
         },
         handleChunk,
       );
@@ -710,7 +725,7 @@ export async function syncDocument(options: SyncOptions): Promise<SyncResult> {
         await commitIfNeeded(true);
       } catch (commitError) {
         failures.push(
-          `写入部分译文失败：${commitError instanceof Error ? commitError.message : String(commitError)}`,
+          tError("sync.partialWriteFailed", { message: commitError instanceof Error ? commitError.message : String(commitError) }),
         );
       }
     }
@@ -729,7 +744,7 @@ export async function syncDocument(options: SyncOptions): Promise<SyncResult> {
   const built = buildCache(outputs);
   warnings.push(...built.entryWarnings);
   if (providerFailure) {
-    warnings.push(`翻译未全部完成：${providerFailure}`);
+    warnings.push(tError("sync.providerIncomplete", { message: providerFailure }));
   }
   // 只统计本次任务；复用的旧译文不计入 translatedCount。
   const translatedCount = tasks.reduce(
@@ -739,7 +754,7 @@ export async function syncDocument(options: SyncOptions): Promise<SyncResult> {
   const failedTaskCount = tasks.length - translatedCount;
   if (failedTaskCount > 0) {
     warnings.push(
-      `有 ${failedTaskCount} 个块翻译失败，已保留其余译文；下次同步会重试缺失块。`,
+      tError("sync.blocksFailed", { count: failedTaskCount }),
     );
   }
 

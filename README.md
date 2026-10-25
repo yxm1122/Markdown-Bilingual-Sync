@@ -5,7 +5,7 @@
 
 在 VS Code 中翻译 Markdown，并以双语预览阅读；原文是唯一事实源，手动修改的译文会自动锁定，不会被静默覆盖。
 
-当前版本为 Phase 3 完成版本，UI 为中文，支持本地 VSIX 安装与从源码构建。
+当前版本 **0.12.0**：完成 Phase 3 能力，并加入全插件本地化（英文默认、内置 zh-cn）；支持本地 VSIX 安装与从源码构建。
 
 ## 功能
 
@@ -27,6 +27,7 @@
 - 全局术语表与标题上下文增强。
 - 导出到同目录语言后缀文件，写入前显示分栏差异确认。
 - 导出/重译前可发现结构问题；AI 返回提示词、请求回显或未翻译原文时拒绝写入缓存。
+- 全插件本地化：英文为默认 source，VS Code 显示语言为 `zh-cn` 时加载中文；命令/设置清单与运行时文案同步切换。
 
 ## 安装
 
@@ -53,13 +54,13 @@ npm run package
 
 1. 打开一个已保存到磁盘的 `.md` 文件。
 2. 在设置中确认语言对，默认 `en` → `zh-CN`。
-3. 执行命令 **Markdown Bilingual Sync: 设置 AI 翻译 API Key**，粘贴密钥。
+3. 执行命令 **Markdown 双语同步: 设置 AI 翻译 API Key**，粘贴密钥。
 4. 在设置中选择翻译服务，或执行 **应用翻译服务预设…**：
    - `markdownBilingualSync.provider` 设为 `openai`
    - `markdownBilingualSync.apiBaseUrl` 如 `https://api.openai.com/v1`
    - `markdownBilingualSync.apiModel` 如 `gpt-4o-mini`
    - 或设为 `http`，配置 `httpEndpoint`、`httpHeaders`、`httpBody`、`httpResponsePath`
-5. 执行 **Markdown Bilingual Sync: 测试 AI 翻译连接**，确认接口、模型/模板和密钥可用。
+5. 执行 **Markdown 双语同步: 测试 AI 翻译连接**，确认接口、模型/模板和密钥可用。
 6. 执行 **翻译当前文件**，双语预览会在当前编辑器组中以新标签页打开，不会自动切开编辑器窗口。
 7. 之后修改原文并保存，执行 **同步译文** 只翻译缺失或过期块。
 8. 已有译稿可点击预览工具栏 **导入译文**（或命令面板 **导入已有译文…**）导入为译文锁定块。
@@ -213,6 +214,8 @@ npm run package
 
 ## 命令
 
+> 命令标题随 VS Code 显示语言变化；下表为 zh-cn 文案，英文界面会显示对应英文标题。
+
 | 命令 | 说明 |
 | --- | --- |
 | 翻译当前文件 | 首次翻译缺失块并打开预览 |
@@ -274,6 +277,15 @@ npm run package
 - 项目移动、清理扩展存储或卸载扩展会丢失缓存与锁定状态；需要长期保留的内容请导出。
 - 术语表是用户级资源，不随仓库共享。
 
+## 本地化
+
+- **英文是默认/source 语言**；当 VS Code 显示语言为 `zh-cn` 时加载中文翻译，其他语言回退英文。
+- 清单（扩展显示名/描述、命令标题与 category、视图名、设置描述与 enum 描述）使用 `package.nls.json` / `package.nls.zh-cn.json`；运行时文案使用 `l10n/bundle.l10n.json` / `l10n/bundle.l10n.zh-cn.json`。
+- 运行时文案目录：`src/i18n/en.ts`（英文 source）与 `src/i18n/zh.ts`（中文）；错误/警告按领域放在 `src/i18n/errors/*.ts`，通过 `tError()` 取当前 locale 文案。
+- Webview 文案由宿主把本地化后的 `UI_TEXT` 注入页面；`<html lang>`、语言名与日期/耗时格式使用 `vscode.env.language` 与 `Intl`。
+- 新增或修改文案后运行 `npm run l10n:build`（`npm run compile`、`vscode:prepublish`、`typecheck`、`test` 与 `test:watch` 会自动执行），再运行 `npm run typecheck` 与 `npm test`。
+- `npm run watch` 启动前会生成一次 bundle，但不会监听 `en.ts` / `zh.ts` / `errors/*` 的变化；修改文案后需手动重跑 `npm run l10n:build` 并重新加载扩展宿主。
+
 ## 已知限制
 
 - 仅支持本地文件流程；没有云端任务队列或多用户协作。
@@ -294,7 +306,8 @@ npm run package
 - 摘要和稳定参考会增加每次翻译的输入 token；摘要上下文按每批固定开销计入预算。
 - 不支持 Mermaid、原始 HTML、自定义提示词和流式输出。
 - 术语表是全局的，不支持项目级覆盖。
-- UI 目前仅提供中文；界面、预览和通知文案集中在 `src/i18n/zh.ts`，领域诊断文案仍随模块内联。
+- UI 提供英文（默认 source）与 zh-cn 两种语言；其他 VS Code 语言回退英文。界面、预览与通知文案来自 `src/i18n/en.ts` / `src/i18n/zh.ts`，错误与警告来自 `src/i18n/errors/*`，清单文案来自 `package.nls*.json`。
+- README 与 Marketplace 列表目前仍为中文；运行时与扩展清单文案支持英文/zh-cn，未单独维护英文 README。
 - 非实时同步：保存只标记状态，翻译由手动命令触发。
 
 ## 许可证
@@ -304,13 +317,15 @@ npm run package
 ## 开发
 
 ```bash
-npm install
+npm ci
 npm run typecheck
 npm test
 npm run compile
 npm run preview:sample
 npm run package
 ```
+
+`typecheck`、`test`、`compile`、`test:watch` 和 `package` 会自动生成 l10n bundle；只修改文案时可单独运行 `npm run l10n:build`。`watch` 启动前生成一次 bundle，但不会监听文案目录变化。
 
 打包产物位于 `artifacts/vsix/markdown-bilingual-sync.vsix`。示例文档为 `samples/demo.md`。
 
@@ -331,4 +346,5 @@ CI 配置位于 `.github/workflows/ci.yml`：每次推送和拉取请求会执�
 
 - 目录/批量翻译与导出队列。
 - Provider 预设与缓存清理（缓存路径按源文件哈希确定性生成，不需要额外索引）。
-- CI/集成测试与发布准备（当前 UI 仅中文）。
+- CI/集成测试与发布准备（UI 默认英文，提供 zh-cn 本地化）。
+- 全插件本地化：`package.nls*` 清单文案 + `l10n/*` 运行时文案，Webview 语言名与日期/耗时格式化使用当前 locale。

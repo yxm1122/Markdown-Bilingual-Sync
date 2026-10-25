@@ -1,12 +1,12 @@
 /**
- * 中文 UI 文案表（扩展主进程与 Webview 共用的文案来源）。
+ * 中文 UI 文案目录（默认英文目录的 zh-cn 翻译源）。
  *
- * 运行环境：Node / 扩展宿主。本文件被打包进 dist/extension.js；Webview 不能直接 import，
- * 而是由 src/preview/html.ts 与 src/status/taskViewHtml.ts 取出需要的子集，序列化为
- * `<script type="application/json">` 注入页面（见 media/preview.js、media/taskView.js）。
- * 因此这些值必须是纯文本：不含 HTML 标签，也不依赖运行环境。
+ * 运行环境：Node / 扩展宿主。本文件不直接参与运行时渲染：src/i18n/index.ts 对
+ * src/i18n/en.ts 做 vscode.l10n.t 深度本地化，scripts/build-l10n.ts 用本文件生成
+ * l10n/bundle.l10n.zh-cn.json。本文件保持为纯数据模块，不调用 vscode API、不访问 DOM。
  *
- * 与扩展主进程的通信：无。本模块只导出常量与纯函数，不调用 vscode API、不访问 DOM。
+ * 结构约束：与 en.ts 的嵌套 key 必须完全一致，占位符集合也必须一致；新增文案时
+ * 同时修改两个目录，再运行 npm run l10n:build。
  *
  * 文本分类：
  * - extension：命令、输入框、确认框、批量操作等扩展宿主侧文案；
@@ -22,25 +22,6 @@
  */
 
 /**
- * 按 `{name}` 占位符替换模板中的值。
- *
- * 使用函数式 replace，避免值中的 `$&`、`$1` 等被当作替换模式解释。
- * 未在 values 中提供的占位符保持原样，便于发现漏传参数。
- *
- * @param template 含 `{name}` 占位符的文案。
- * @param values 占位符到字符串/数字的映射。
- * @returns 替换后的文案。
- */
-export function formatText(
-  template: string,
-  values: Record<string, string | number>,
-): string {
-  return template.replace(/\{(\w+)\}/g, (match, key: string) =>
-    Object.hasOwn(values, key) ? String(values[key]) : match,
-  );
-}
-
-/**
  * 全量中文文案。`as const` 让键与值保持只读字面量类型，便于类型推导和防止误赋值；
  * 它只作用于编译期，不会冻结运行时对象，因此仍约定不要修改这个常量。
  */
@@ -49,6 +30,7 @@ export const UI_TEXT = {
   extension: {
     openMarkdownFirst:
       "请先打开一个 Markdown 或 Skill 文件，再运行 Markdown Bilingual Sync 命令。",
+    messagePrefix: "Markdown Bilingual Sync：",
     syncPreparing: "正在准备同步…",
     syncTitleAll: "全部重译完成",
     syncTitleStale: "批量重译完成",
@@ -221,7 +203,6 @@ export const UI_TEXT = {
       title: "全文摘要",
       placeholder: "尚未生成全文摘要。可点击“AI 生成”，也可以直接手动填写。",
       generate: "AI 生成",
-      generating: "生成中…",
       save: "保存摘要",
       clear: "清除摘要",
       stale: "可能过期",
@@ -266,6 +247,17 @@ export const UI_TEXT = {
       empty: "空文档",
       total: "共 {count} 块",
     },
+    // 导出确认弹窗的统计摘要（ExportService.formatStats）。
+    exportStats: {
+      translated: "已翻译",
+      stale: "过期",
+      human: "译文锁定",
+      copied: "复制",
+      deleted: "已删除",
+      missing: "缺少译文",
+      empty: "共 0 块",
+      separator: "，",
+    },
     // 同步提示折叠区；noCache 在尚未生成缓存时显示。
     warnings: {
       summary: "{count} 条同步提示",
@@ -298,7 +290,7 @@ export const UI_TEXT = {
       hint: "保存原文或缓存后自动刷新 · 修改译文缓存会在保存后锁定该块 · 更换模型后请点“全部重译”",
     },
     footer: {
-      phase: "Markdown Bilingual Sync · Phase 3",
+      phase: "Markdown 双语同步 · 第 3 阶段",
       note: "机器译文保存在扩展全局存储；导出会生成同目录语言后缀文件。",
     },
     // 导出确认模态框；其中静态字段会注入 media/preview.js 的 #mbs-ui-text。
@@ -424,7 +416,6 @@ export const UI_TEXT = {
   // 翻译任务侧边栏与状态栏共用；statusLabels 供任务视图按状态动态查表。
   taskPanel: {
     title: "翻译任务",
-    placeholder: "选择任务可打开源文件；使用右上角按钮管理任务",
     empty: "暂无翻译任务",
     emptyHint: "运行批量翻译或同步后会显示在这里。",
     activeSection: "活动任务",
@@ -459,23 +450,32 @@ export const UI_TEXT = {
     sourceLanguageUpdateFailed: "切换原文语言失败：{message}",
     swapLanguagesTitle: "交换原文与译文语言",
     swapLanguagesUnavailable: "原文与译文语言必须有效且不同，当前无法交换。",
+    activeTaskCount: "{count} 个任务",
+    activeTaskBadgeTooltip: "活动的翻译任务",
     languageUpdateFailed: "切换语言失败：{message}",
     openOutput: "打开输出日志",
     clearFinished: "清除任务历史",
     cancelAll: "取消全部任务",
     cancelTask: "取消",
-    cancelRequested: "已请求取消所有翻译任务。",
-    cleared: "已清除完成记录。",
-    noTasksToCancel: "没有可取消的任务。",
     openSource: "打开源文件",
     openPreview: "打开双语预览",
     progress: "{completed}/{total} 块",
     noBlocks: "无待翻译块",
     failedSuffix: " · {failed} 块失败",
-    elapsed: "耗时 {seconds}s",
+    elapsed: "耗时 {duration}",
     noActive: "当前没有运行中的任务",
-    historyEmpty: "暂无历史任务",
     moveHint: "如果视图在左侧，可将“翻译任务”拖到右侧辅助侧边栏，之后会保留布局。",
+    // 任务阶段文案：TaskMonitor 的初始态、取消态与命令层的终态。
+    phases: {
+      waiting: "等待开始",
+      preparing: "准备翻译…",
+      cancelling: "正在取消…",
+      cancelled: "已取消",
+      partial: "部分成功",
+      completed: "完成",
+      translatingBlocks: "正在翻译 {count} 个块…",
+      translatingProgress: "正在翻译 {completed}/{total} 个块…",
+    },
     statusLabels: {
       queued: "排队中",
       running: "运行中",
@@ -489,10 +489,32 @@ export const UI_TEXT = {
   statusBar: {
     idle: "翻译任务",
     active: "翻译 {tasks} 项 · {active}/{limit}",
-    waiting: "翻译任务 · 等待 {waiting}",
     failed: "翻译任务 · {failed} 失败",
     tooltipTitle: "翻译任务",
     tooltipHint: "点击打开任务面板",
+    // 单条任务提示：{label} 文件、{status} 状态、{progress} 进度、{failed} 失败后缀。
+    taskLine: "{label}：{status} · {progress}{failed}",
+    moreTasks: "… 另有 {count} 个任务",
+  },
+  // 翻译服务显示名：Provider 实例与任务面板“运行状态”共用。
+  providers: {
+    mockDemo: "Mock 演示",
+    mockTranslation: "演示翻译（Mock）",
+    openaiCompatible: "AI 翻译（OpenAI 兼容）",
+    customHttp: "AI 翻译（自定义 HTTP）",
+    customHttpModel: "自定义 HTTP",
+  },
+  // Provider 预设的 QuickPick 文案；品牌名与接口地址保持原样。
+  presets: {
+    openaiDescription: "官方 API · gpt-4o-mini",
+    ollamaLabel: "Ollama（本机）",
+    ollamaDescription: "127.0.0.1:11434 · qwen2.5:7b",
+    lmStudioLabel: "LM Studio（本机）",
+    lmStudioDescription: "127.0.0.1:1234 · local-model",
+    customHttpLabel: "自定义 HTTP 模板",
+    customHttpDescription: "保留现有请求模板，仅切换 provider",
+    mockLabel: "Mock 演示",
+    mockDescription: "不发起网络请求，仅用于本地演示",
   },
 } as const;
 

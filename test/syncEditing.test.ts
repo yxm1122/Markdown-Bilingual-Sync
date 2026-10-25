@@ -72,7 +72,11 @@ const mocks = vi.hoisted(() => {
   return { vscode, FakeUri, documentState };
 });
 
-vi.mock("vscode", () => mocks.vscode);
+// 展开全局 stub 保留 l10n/env；FakeUri 等本文件所需 API 覆盖 stub 实现。
+vi.mock("vscode", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./vscodeStub")>();
+  return { ...actual.vscodeStub, ...mocks.vscode };
+});
 
 class FakeCacheStore {
   text?: string;
@@ -110,7 +114,7 @@ describe("SyncService block editing and back-translation", () => {
     cacheStore.text = result.cacheText;
     requests = [];
     const provider: TranslationProvider = {
-      id: "test",
+      id: "batch:test",
       label: "Test",
       supportsSummary: true,
       async translate(request) {
@@ -648,6 +652,7 @@ describe("SyncService block editing and back-translation", () => {
     const cacheText = await service.saveSummary(uri, "本文介绍翻译流程。");
     const cache = parseCacheDocument(cacheText, makeMd());
     expect(cache.summary?.text).toBe("本文介绍翻译流程。");
+    expect(cache.summary?.model).toBe("manual");
     expect(inspect(SOURCE, cacheText).alignment.blocks).toHaveLength(4);
 
     requests = [];
@@ -673,9 +678,10 @@ describe("SyncService block editing and back-translation", () => {
   it("generates a summary through the provider and keeps it across sync", async () => {
     const uri = mocks.FakeUri.file("/project/demo.md") as unknown as Uri;
     const cacheText = await service.generateSummary(uri);
-    expect(parseCacheDocument(cacheText, makeMd()).summary?.text).toContain(
-      "摘要：",
-    );
+    const generated = parseCacheDocument(cacheText, makeMd()).summary;
+    expect(generated?.text).toContain("摘要：");
+    // 缓存持久化稳定 provider id，而不是随界面语言变化的显示名。
+    expect(generated?.model).toBe("test");
 
     requests = [];
     await service.retranslateAll(uri);

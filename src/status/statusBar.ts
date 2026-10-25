@@ -13,7 +13,7 @@
  * - 并发上限来自 ConcurrencyLimiter，不在此重复解析配置。
  */
 import * as vscode from "vscode";
-import { formatText, UI_TEXT } from "../i18n/zh";
+import { formatText, UI_TEXT } from "../i18n";
 import type { ConcurrencyLimiter } from "../translation/concurrency";
 import type {
   TranslationTaskView,
@@ -40,7 +40,12 @@ function taskLine(task: TranslationTaskView): string {
     task.failed > 0
       ? formatText(PANEL.failedSuffix, { failed: task.failed })
       : "";
-  return `${task.label}：${status} · ${progress}${failed}`;
+  return formatText(T.taskLine, {
+    label: task.label,
+    status,
+    progress,
+    failed,
+  });
 }
 
 /**
@@ -56,7 +61,7 @@ function taskLine(task: TranslationTaskView): string {
  *   因此调用方不需要保存引用；dispose 时移除定时器、监听并销毁 item。
  *
  * 关键不变量：
- * - 任务与并发文案来自 UI_TEXT，另有少量字面量拼接（如“个任务”）；
+ * - 任务与并发文案全部来自 UI_TEXT，不在本文件拼接中文；
  * - tooltip 中的任务标签/阶段一律用 appendText 追加，避免 Markdown 注入；
  * - 失败数统计 failed 与 partial（partial 表示有块失败），只统计任务监控器仍保留的历史（最多 40 条），不是全局累计。
  */
@@ -167,7 +172,11 @@ export class TranslationStatusBar implements vscode.Disposable {
         tooltip.appendMarkdown("\n");
       }
       if (snapshot.active.length > 8) {
-        tooltip.appendText(`… 另有 ${snapshot.active.length - 8} 个任务`);
+        tooltip.appendText(
+          formatText(T.moreTasks, {
+            count: snapshot.active.length - 8,
+          }),
+        );
         tooltip.appendMarkdown("\n");
       }
     }

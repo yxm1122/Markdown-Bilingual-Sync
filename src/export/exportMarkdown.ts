@@ -25,6 +25,7 @@ import type { AnchoredBlock, CacheDocument } from "../markdown/types";
 import { normalizeNewlines } from "../util/hash";
 import { languageSuffix } from "../util/language";
 import { isDeletedMarker } from "../cache/deletedMarker";
+import { tError } from "../i18n/errors";
 
 /**
  * 导出统计。各项互斥计数（同一块只归入一类）：
@@ -116,7 +117,7 @@ export function buildExportMarkdown(
 
   if (cache && cache.untracked.length > 0) {
     throw new Error(
-      "译文缓存中存在未加锚点的内容，无法确定导出位置。请先修复缓存后再导出。",
+      tError("export.untrackedCache"),
     );
   }
 
@@ -133,7 +134,7 @@ export function buildExportMarkdown(
   const warnings = new Set<string>();
 
   if (!cache) {
-    warnings.add("尚未生成译文缓存，导出内容与原文相同。");
+    warnings.add(tError("export.noCacheSameAsSource"));
   } else {
     for (const warning of cache.warnings) {
       warnings.add(warning);
@@ -144,17 +145,17 @@ export function buildExportMarkdown(
     const machineOrphans = alignment.orphanCaches.length - humanOrphans;
     if (humanOrphans > 0) {
       warnings.add(
-        `有 ${humanOrphans} 个译文锁定块无法对应原文，未写入导出文件。`,
+        tError("export.humanOrphansWarning", { count: humanOrphans }),
       );
     }
     if (machineOrphans > 0) {
       warnings.add(
-        `有 ${machineOrphans} 个机器译文块无法对应原文，未写入导出文件。`,
+        tError("export.machineOrphansWarning", { count: machineOrphans }),
       );
     }
     if (cache.orphanAnchors.length > 0) {
       warnings.add(
-        `有 ${cache.orphanAnchors.length} 个译文锚点没有对应内容，已忽略。`,
+        tError("export.orphanAnchorsWarning", { count: cache.orphanAnchors.length }),
       );
     }
   }
@@ -255,7 +256,7 @@ export function buildExportMarkdown(
         parts.push(content);
         stats.human += 1;
         warnings.add(
-          "有译文块找不到锚定的原文块，已放在导出文件末尾。",
+          tError("export.unmatchedTargetAtEnd"),
         );
       }
     }
@@ -263,21 +264,21 @@ export function buildExportMarkdown(
 
   // 最终警告汇总：这些状态不阻断导出，但必须让用户在确认页看到。
   if (stats.stale > 0) {
-    warnings.add(`有 ${stats.stale} 个块使用过期的机器译文。`);
+    warnings.add(tError("export.staleWarning", { count: stats.stale }));
   }
   if (stats.humanStale > 0) {
     warnings.add(
-      `有 ${stats.humanStale} 个译文锁定块对应的原文已更新，导出的是当前译文。`,
+      tError("export.humanStaleWarning", { count: stats.humanStale }),
     );
   }
   if (stats.missing > 0 && cache) {
     warnings.add(
-      `有 ${stats.missing} 个块缺少译文，已保留原文。`,
+      tError("export.missingWarning", { count: stats.missing }),
     );
   }
   if (stats.deleted > 0) {
     warnings.add(
-      `有 ${stats.deleted} 个块译文已删除，未写入导出文件。`,
+      tError("export.deletedWarning", { count: stats.deleted }),
     );
   }
 

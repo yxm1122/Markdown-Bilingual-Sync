@@ -32,6 +32,8 @@ import {
   type SummaryRequest,
   type TranslationResultItem,
 } from "./types";
+import { tError } from "../i18n/errors";
+import { UI_TEXT } from "../i18n";
 
 /** OpenAI 兼容服务配置；数值项会在 normalizeConfig 中裁剪到安全范围。 */
 export interface OpenAIProviderConfig {
@@ -102,10 +104,10 @@ const PROMPT_ECHO_MARKERS = [
 ];
 
 const ECHOED_REQUEST_ERROR =
-  "AI 返回了请求内容而不是译文，未写入任何译文。请检查接口地址、模型输出，或先运行“测试 AI 翻译连接”。";
+  tError("translation.echoedRequest");
 
 const ECHOED_PROMPT_ERROR =
-  "AI 返回了翻译提示词而不是译文，未写入任何译文。请检查 apiBaseUrl 是否指向 Chat Completions 接口，并确认模型支持指令跟随。";
+  tError("translation.echoedPrompt");
 
 // 校验失败后追加到系统提示的重试提示；每个批次最多使用一次。
 const RETRY_HINT =
@@ -166,33 +168,33 @@ function clampInteger(
 
 /**
  * 校验并归一化配置：密钥/模型必填，长度与数值范围受限。
- * 纯函数，不读取外部状态；校验失败抛出中文错误（不含密钥内容）。
+ * 纯函数，不读取外部状态；校验失败抛出本地化错误（不含密钥内容）。
  */
 function normalizeConfig(config: OpenAIProviderConfig): OpenAIProviderConfig {
   const apiKey =
     typeof config.apiKey === "string" ? config.apiKey.trim() : "";
   if (!apiKey) {
     throw new Error(
-      "尚未设置 AI 翻译 API Key。请运行“Markdown Bilingual Sync: 设置 AI 翻译 API Key”。",
+      tError("translation.missingApiKey"),
     );
   }
   if (apiKey.length > 20_000) {
-    throw new Error("AI 翻译 API Key 过长，已拒绝使用。");
+    throw new Error(tError("translation.apiKeyTooLong"));
   }
 
   const model =
     typeof config.model === "string" ? config.model.trim() : "";
   if (!model) {
-    throw new Error("请设置 markdownBilingualSync.apiModel（例如 gpt-4o-mini）。");
+    throw new Error(tError("translation.missingModel"));
   }
   if (model.length > 200) {
-    throw new Error("apiModel 过长，请检查设置。");
+    throw new Error(tError("translation.modelTooLong"));
   }
 
   const baseUrl =
     typeof config.baseUrl === "string" ? config.baseUrl.trim() : "";
   if (baseUrl.length > 2048) {
-    throw new Error("apiBaseUrl 过长，请检查设置。");
+    throw new Error(tError("translation.baseUrlTooLong"));
   }
 
   return {
@@ -245,19 +247,19 @@ function isLoopbackHost(hostname: string): boolean {
  * - 自动补齐 `/chat/completions`，并去掉多余尾斜杠。
  *
  * @returns 规范化后的绝对 URL。
- * @throws 地址为空、不是合法 URL 或违反上述规则时抛出中文错误。纯函数。
+ * @throws 地址为空、不是合法 URL 或违反上述规则时抛出本地化错误。纯函数。
  */
 export function resolveChatCompletionsUrl(baseUrl: string): string {
   const trimmed = baseUrl.trim();
   if (!trimmed) {
-    throw new Error("请设置 markdownBilingualSync.apiBaseUrl。");
+    throw new Error(tError("translation.missingBaseUrl"));
   }
 
   let url: URL;
   try {
     url = new URL(trimmed);
   } catch {
-    throw new Error("apiBaseUrl 不是有效的 URL。");
+    throw new Error(tError("translation.invalidBaseUrl"));
   }
 
   const protocol = url.protocol.toLowerCase();
@@ -266,16 +268,16 @@ export function resolveChatCompletionsUrl(baseUrl: string): string {
     !(protocol === "http:" && isLoopbackHost(url.hostname))
   ) {
     throw new Error(
-      "AI 翻译接口必须使用 HTTPS；仅 localhost、127.0.0.1 或 [::1] 允许使用 HTTP。",
+      tError("translation.httpsRequired"),
     );
   }
   if (url.username || url.password) {
     throw new Error(
-      "apiBaseUrl 不能包含用户名或密码，请使用“设置 AI 翻译 API Key”命令保存密钥。",
+      tError("translation.baseUrlCredentials"),
     );
   }
   if (url.search || url.hash) {
-    throw new Error("apiBaseUrl 不能包含查询参数或片段。");
+    throw new Error(tError("translation.baseUrlQuery"));
   }
 
   let pathname = url.pathname.replace(/\/+$/, "");
@@ -343,17 +345,22 @@ function createHttpError(status: number, body: string): ProviderRequestError {
   const detail = extractRemoteError(body);
   const hint =
     status === 401 || status === 403
-      ? "请检查 API Key 与访问权限。"
+      ? tError("translation.httpHintAuth")
       : status === 404
-        ? "请检查 apiBaseUrl 和 apiModel。"
+        ? tError("translation.httpHintOpenAiNotFound")
         : status === 429
-          ? "请求过于频繁或额度不足，请稍后重试。"
+          ? tError("translation.httpHintRateLimit")
           : "";
-  const message = [
-    `AI 翻译请求失败（HTTP ${status}）`,
-    hint ? `：${hint}` : "",
-    detail ? ` ${detail}` : "",
-  ].join("");
+  let message = tError("translation.openAiErrorBase", { status });
+  if (hint) {
+    message = tError("translation.httpErrorWithHint", { base: message, hint });
+  }
+  if (detail) {
+    message = tError("translation.httpErrorWithDetail", {
+      base: message,
+      detail,
+    });
+  }
   return new ProviderRequestError(
     message,
     RETRYABLE_STATUS.has(status),
@@ -373,29 +380,29 @@ function extractAssistantContent(body: string): string {
     parsed = JSON.parse(body);
   } catch {
     throw new ProviderRequestError(
-      "AI 翻译服务返回了非 JSON 响应，请检查 apiBaseUrl 是否指向 Chat Completions 接口。",
+      tError("translation.nonJsonResponse"),
       false,
     );
   }
   if (!isRecord(parsed)) {
-    throw new ProviderRequestError("AI 翻译服务返回的结构无效。", false);
+    throw new ProviderRequestError(tError("translation.invalidResponseStructure"), false);
   }
   if (isRecord(parsed.error) && typeof parsed.error.message === "string") {
     throw new ProviderRequestError(
-      `AI 服务返回错误：${sanitizeRemoteMessage(parsed.error.message)}`,
+      tError("translation.remoteError", { message: sanitizeRemoteMessage(parsed.error.message) }),
       false,
     );
   }
   const choices = parsed.choices;
   if (!Array.isArray(choices) || choices.length === 0) {
     throw new ProviderRequestError(
-      "AI 翻译服务没有返回 choices，请检查模型与接口配置。",
+      tError("translation.noChoices"),
       false,
     );
   }
   const first: unknown = choices[0];
   if (!isRecord(first)) {
-    throw new ProviderRequestError("AI 翻译服务返回的 choices 结构无效。", false);
+    throw new ProviderRequestError(tError("translation.invalidChoices"), false);
   }
   const message = first.message;
   if (isRecord(message)) {
@@ -417,7 +424,7 @@ function extractAssistantContent(body: string): string {
     return first.text;
   }
   throw new ProviderRequestError(
-    "AI 翻译服务返回了空内容，请检查模型配置。",
+    tError("translation.emptyContent"),
     false,
     true,
   );
@@ -455,7 +462,7 @@ function parseJsonPayload(content: string): unknown {
     }
   }
   throw new ProviderRequestError(
-    "AI 返回的内容不是有效 JSON，未写入任何译文。",
+    tError("translation.invalidJsonContent"),
     false,
     true,
   );
@@ -489,7 +496,7 @@ function assertNoUntranslatedSentences(
       const spaces = (sentence.match(/ /g) ?? []).length;
       if (sentence.length >= 30 && spaces >= 4 && entry.text.includes(sentence)) {
         throw new ProviderRequestError(
-          "AI 译文仍包含未翻译的原文句子，已拒绝写入。请更换模型或重试；若该句本应保留原文，请手动编辑并锁定该块。",
+          tError("translation.untranslatedSentences"),
           false,
           true,
         );
@@ -526,7 +533,7 @@ function parseResultItems(content: string): TranslationResultItem[] {
       : undefined;
   if (!rawItems) {
     throw new ProviderRequestError(
-      'AI 返回的 JSON 缺少 items 数组，期望 {"items":[...]}。',
+      tError("translation.missingItems"),
       false,
       true,
     );
@@ -540,7 +547,7 @@ function parseResultItems(content: string): TranslationResultItem[] {
       typeof raw.text !== "string"
     ) {
       throw new ProviderRequestError(
-        "AI 返回的 items 结构无效，每一项都需要 id 和 text 字符串。",
+        tError("translation.invalidItems"),
         false,
         true,
       );
@@ -581,7 +588,7 @@ function assertTranslationsChanged(
   }
   if (substantialUnchanged > 0) {
     throw new ProviderRequestError(
-      `AI 对 ${substantialUnchanged} 个长文本块返回了原文，未执行翻译或只回显了请求内容。未写入任何译文，请更换模型或调整提示，再运行“全部重译”。`,
+      tError("translation.echoedSource", { count: substantialUnchanged }),
       false,
       true,
     );
@@ -635,13 +642,13 @@ function delay(milliseconds: number, signal?: AbortSignal): Promise<void> {
   }
   return new Promise((resolve, reject) => {
     if (signal?.aborted) {
-      reject(new Error("翻译已取消"));
+      reject(new Error(tError("common.translationCancelled")));
       return;
     }
     let timer: ReturnType<typeof setTimeout>;
     const onAbort = () => {
       clearTimeout(timer);
-      reject(new Error("翻译已取消"));
+      reject(new Error(tError("common.translationCancelled")));
     };
     timer = setTimeout(() => {
       signal?.removeEventListener("abort", onAbort);
@@ -707,7 +714,9 @@ function buildRequestBody(
  */
 export class OpenAITranslationProvider implements TranslationProvider {
   readonly id = "openai";
-  readonly label = "AI 翻译（OpenAI 兼容）";
+  get label(): string {
+    return UI_TEXT.providers.openaiCompatible;
+  }
   readonly supportsSummary = true;
 
   private readonly fetchImpl: typeof fetch;
@@ -741,7 +750,7 @@ export class OpenAITranslationProvider implements TranslationProvider {
     onChunk?: TranslationChunkHandler,
   ): Promise<TranslationResultItem[]> {
     if (signal?.aborted) {
-      throw new Error("翻译已取消");
+      throw new Error(tError("common.translationCancelled"));
     }
     if (request.items.length === 0) {
       return [];
@@ -806,7 +815,7 @@ export class OpenAITranslationProvider implements TranslationProvider {
       Array.from({ length: workerCount }, () => runWorker()),
     );
     if (signal?.aborted) {
-      throw new Error("翻译已取消");
+      throw new Error(tError("common.translationCancelled"));
     }
     if (failure) {
       throw failure;
@@ -823,7 +832,7 @@ export class OpenAITranslationProvider implements TranslationProvider {
     signal?: AbortSignal,
   ): Promise<string> {
     if (signal?.aborted) {
-      throw new Error("翻译已取消");
+      throw new Error(tError("common.translationCancelled"));
     }
     const config = normalizeConfig(await this.options.getConfig());
     const endpoint = resolveChatCompletionsUrl(config.baseUrl);
@@ -879,24 +888,24 @@ export class OpenAITranslationProvider implements TranslationProvider {
       const content = extractAssistantContent(responseText).trim();
       if (!content) {
         throw new ProviderRequestError(
-          "AI 返回了空摘要，请重试或手动填写。",
+          tError("sync.aiEmptySummary"),
           false,
         );
       }
       if (content.length > MAX_SUMMARY_OUTPUT) {
         throw new ProviderRequestError(
-          `AI 摘要过长（超过 ${MAX_SUMMARY_OUTPUT} 字符），请更换模型或手动填写。`,
+          tError("translation.summaryTooLong", { max: MAX_SUMMARY_OUTPUT }),
           false,
         );
       }
       return content;
     } catch (error) {
       if (signal?.aborted) {
-        throw new Error("翻译已取消");
+        throw new Error(tError("common.translationCancelled"));
       }
       if (timedOut) {
         throw new ProviderRequestError(
-          `AI 摘要请求超时（${Math.round(config.timeoutMs / 1000)} 秒），请检查网络或增大 apiTimeoutMs。`,
+          tError("translation.summaryTimeout", { seconds: Math.round(config.timeoutMs / 1000) }),
           true,
         );
       }
@@ -906,7 +915,7 @@ export class OpenAITranslationProvider implements TranslationProvider {
       const message =
         error instanceof Error ? error.message : String(error);
       throw new ProviderRequestError(
-        `无法连接 AI 翻译服务生成摘要：${sanitizeRemoteMessage(message)}`,
+        tError("translation.summaryConnectionFailed", { message: sanitizeRemoteMessage(message) }),
         true,
       );
     } finally {
@@ -926,7 +935,7 @@ export class OpenAITranslationProvider implements TranslationProvider {
     signal?: AbortSignal,
   ): Promise<ConnectionTestResult> {
     if (signal?.aborted) {
-      throw new Error("翻译已取消");
+      throw new Error(tError("common.translationCancelled"));
     }
 
     const config = normalizeConfig(await this.options.getConfig());
@@ -966,7 +975,7 @@ export class OpenAITranslationProvider implements TranslationProvider {
       normalizeForComparison(testItem.text)
     ) {
       throw new ProviderRequestError(
-        "测试请求返回了原文，服务可能没有执行翻译。请检查接口地址和模型配置。",
+        tError("translation.testEchoedSource"),
         false,
       );
     }
@@ -1018,7 +1027,7 @@ export class OpenAITranslationProvider implements TranslationProvider {
         );
       } catch (error) {
         if (signal?.aborted) {
-          throw new Error("翻译已取消");
+          throw new Error(tError("common.translationCancelled"));
         }
         if (
           error instanceof ProviderRequestError &&
@@ -1047,7 +1056,7 @@ export class OpenAITranslationProvider implements TranslationProvider {
         return batchResults;
       } catch (error) {
         if (signal?.aborted) {
-          throw new Error("翻译已取消");
+          throw new Error(tError("common.translationCancelled"));
         }
         if (!hintAttempt) {
           hintAttempt = true;
@@ -1106,11 +1115,11 @@ export class OpenAITranslationProvider implements TranslationProvider {
       return parseResultItems(extractAssistantContent(responseText));
     } catch (error) {
       if (signal?.aborted) {
-        throw new Error("翻译已取消");
+        throw new Error(tError("common.translationCancelled"));
       }
       if (timedOut) {
         throw new ProviderRequestError(
-          `AI 翻译请求超时（${Math.round(config.timeoutMs / 1000)} 秒），请检查网络或在设置中增大 apiTimeoutMs。`,
+          tError("translation.requestTimeout", { seconds: Math.round(config.timeoutMs / 1000) }),
           true,
         );
       }
@@ -1120,7 +1129,7 @@ export class OpenAITranslationProvider implements TranslationProvider {
       const message =
         error instanceof Error ? error.message : String(error);
       throw new ProviderRequestError(
-        `无法连接 AI 翻译服务：${sanitizeRemoteMessage(message)}`,
+        tError("translation.connectionFailed", { message: sanitizeRemoteMessage(message) }),
         true,
       );
     } finally {

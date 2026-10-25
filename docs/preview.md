@@ -210,7 +210,7 @@ Webview 只通过 `vscode.postMessage` 与宿主通信。宿主在 `PreviewManag
 
 ## 10. 新增一个 UI 动作的清单
 
-1. 在 `src/i18n/zh.ts` 增加文案（按钮、title、toast）。
+1. 同时修改 `src/i18n/en.ts` 与 `src/i18n/zh.ts` 增加文案（按钮、title、toast），保持 key 与占位符一致，然后运行 `npm run l10n:build`。
 2. 在 `src/preview/html.ts` 渲染按钮，设置唯一的 `data-action` 和必要的数据属性。
 3. 如果动作需要先就地编辑/特殊交互，在 `media/preview.js` 处理；否则点击事件会按 `data-action` 自动构造 `{ type }` 消息。
 4. 在 `src/preview/previewManager.ts` 的 `onMessage` 增加 `case`，校验字段，调用对应服务。

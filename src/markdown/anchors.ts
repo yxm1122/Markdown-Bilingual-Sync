@@ -30,6 +30,7 @@ import {
   type CacheDocument,
   type MarkdownBlock,
 } from "./types";
+import { tError } from "../i18n/errors";
 
 const ANCHOR_LINE = /^\s*<!--\s*mbs:(\{.*\})\s*-->\s*$/;
 const ANCHOR_PREFIX = /^\s*<!--\s*mbs:/;
@@ -160,18 +161,14 @@ export function parseCacheDocument(
     const parsedSummary = parseSummaryMarker(lines[i]);
     if (parsedSummary) {
       if (summary) {
-        warnings.push(
-          `第 ${i + 1} 行出现了重复的全文摘要标记，已采用最后一条。`,
-        );
+        warnings.push(tError("cache.summaryDuplicate", { line: i + 1 }));
       }
       summary = parsedSummary;
       cleanedLines[i] = "";
       continue;
     }
     if (looksLikeSummaryMarker(lines[i])) {
-      warnings.push(
-        `第 ${i + 1} 行的全文摘要标记格式无效，已忽略该行。`,
-      );
+      warnings.push(tError("cache.summaryInvalid", { line: i + 1 }));
       cleanedLines[i] = "";
       continue;
     }
@@ -180,7 +177,10 @@ export function parseCacheDocument(
       // id 重复说明缓存被手工复制/拼接；第二条不能再参与归属，否则会指向同一个块。
       if (seenIds.has(anchor.id)) {
         warnings.push(
-          `第 ${i + 1} 行出现重复的锚点 id（${anchor.id}），该行已按普通内容保留。`,
+          tError("cache.duplicateAnchorId", {
+            line: i + 1,
+            id: anchor.id,
+          }),
         );
         continue;
       }
@@ -190,9 +190,7 @@ export function parseCacheDocument(
       continue;
     }
     if (looksLikeAnchorLine(lines[i])) {
-      warnings.push(
-        `第 ${i + 1} 行的锚点格式无效，该行已按普通内容保留。`,
-      );
+      warnings.push(tError("cache.invalidAnchorLine", { line: i + 1 }));
     }
   }
 
@@ -230,7 +228,11 @@ export function parseCacheDocument(
     ) {
       // 墓碑内容是标记文本，解析出的块类型与原文无关，故豁免类型一致性检查。
       warnings.push(
-        `锚点 ${chosen.anchor.id} 记录的类型为 ${chosen.anchor.kind}，实际译文块为 ${block.kind}。`,
+        tError("cache.anchorKindMismatch", {
+          id: chosen.anchor.id,
+          anchorKind: chosen.anchor.kind,
+          blockKind: block.kind,
+        }),
       );
     }
     const entry = {
@@ -255,12 +257,12 @@ export function parseCacheDocument(
 
   if (untracked.length > 0) {
     warnings.push(
-      `译文缓存中有 ${untracked.length} 个未带锚点的块，已标记为未跟踪内容。`,
+      tError("cache.untrackedBlocks", { count: untracked.length }),
     );
   }
   if (orphanAnchors.length > 0) {
     warnings.push(
-      `译文缓存中有 ${orphanAnchors.length} 个锚点找不到对应译文块。`,
+      tError("cache.orphanAnchors", { count: orphanAnchors.length }),
     );
   }
 

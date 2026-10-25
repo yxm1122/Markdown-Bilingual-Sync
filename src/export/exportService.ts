@@ -23,6 +23,8 @@ import {
   buildExportMarkdown,
   type ExportStats,
 } from "./exportMarkdown";
+import { tError } from "../i18n/errors";
+import { UI_TEXT } from "../i18n";
 
 /** 已准备好的导出：existingText 为确认时的磁盘内容（undefined 表示新建）。 */
 export interface PreparedExport {
@@ -43,19 +45,20 @@ export type ExportPreparation =
 
 // ---- 统计格式化 ----
 
-/** 把非零统计项拼成中文摘要；全为 0 时返回“共 0 块”。纯函数。 */
+/** 把非零统计项拼成本地化摘要；全为 0 时返回“共 0 块”。纯函数。 */
 function formatStats(stats: ExportStats): string {
+  const text = UI_TEXT.preview.exportStats;
   const parts = [
-    ["已翻译", stats.translated],
-    ["过期", stats.stale],
-    ["译文锁定", stats.human + stats.humanStale],
-    ["复制", stats.copied],
-    ["已删除", stats.deleted],
-    ["缺少译文", stats.missing],
+    [text.translated, stats.translated],
+    [text.stale, stats.stale],
+    [text.human, stats.human + stats.humanStale],
+    [text.copied, stats.copied],
+    [text.deleted, stats.deleted],
+    [text.missing, stats.missing],
   ]
     .filter(([, value]) => Number(value) > 0)
     .map(([label, value]) => `${label} ${value}`);
-  return parts.length > 0 ? parts.join("，") : "共 0 块";
+  return parts.length > 0 ? parts.join(text.separator) : text.empty;
 }
 
 // ---- 服务实现 ----
@@ -83,11 +86,11 @@ export class ExportService {
     const state = await this.syncService.loadState(
       sourceUri,
       true,
-      "导出",
+      tError("sync.purposeExport"),
     );
     if (!state.cacheText?.trim()) {
       throw new Error(
-        "尚未生成译文缓存，请先运行“翻译当前文件”或“同步译文”。",
+        tError("export.noCache"),
       );
     }
 
@@ -97,7 +100,7 @@ export class ExportService {
       cacheText: state.cacheText,
     });
     if (!result.text.trim()) {
-      throw new Error("导出内容为空，未写入文件。");
+      throw new Error(tError("export.empty"));
     }
 
     const target = this.getExportUri(
@@ -105,7 +108,7 @@ export class ExportService {
       state.targetLanguage,
     );
     if (target.toString() === sourceUri.toString()) {
-      throw new Error("导出路径与当前原文相同，已停止导出。");
+      throw new Error(tError("export.sameAsSource"));
     }
 
     this.logWarnings(result.warnings);
@@ -120,7 +123,7 @@ export class ExportService {
     );
     if (openDocument?.isDirty) {
       throw new Error(
-        "导出目标正在编辑且有未保存修改。请先保存或关闭该文件，再执行导出。",
+        tError("export.targetDirty"),
       );
     }
 
@@ -149,7 +152,7 @@ export class ExportService {
     const current = await this.readIfExists(prepared.target);
     if (current !== prepared.existingText) {
       throw new Error(
-        "导出目标在确认期间已被修改。请取消本次导出并重新生成差异预览。",
+        tError("export.changedDuringConfirmation"),
       );
     }
 
@@ -210,7 +213,7 @@ export class ExportService {
     if (openDocument) {
       if (openDocument.isDirty) {
         throw new Error(
-          "导出目标正在编辑且有未保存修改，已停止写入。",
+          tError("export.targetDirtyStop"),
         );
       }
       const edit = new vscode.WorkspaceEdit();
@@ -222,11 +225,11 @@ export class ExportService {
       );
       const applied = await vscode.workspace.applyEdit(edit);
       if (!applied) {
-        throw new Error("无法更新已打开的导出文件。");
+        throw new Error(tError("export.updateOpenFailed"));
       }
       const saved = await openDocument.save();
       if (!saved) {
-        throw new Error("导出文件保存失败。");
+        throw new Error(tError("export.saveFailed"));
       }
       return;
     }

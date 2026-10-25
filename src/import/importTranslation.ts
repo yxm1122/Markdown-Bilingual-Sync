@@ -18,7 +18,7 @@
  * 不访问网络、不写磁盘（落盘由调用方完成）。
  */
 import type { MarkdownIt } from "markdown-it";
-import { UI_TEXT } from "../i18n/zh";
+import { UI_TEXT } from "../i18n";
 import { parseCacheDocument } from "../markdown/anchors";
 import { parseMarkdownDocument } from "../markdown/segmenter";
 import type { BlockAnchor } from "../markdown/types";
@@ -28,6 +28,7 @@ import {
 } from "../sync/sync";
 import { normalizeBlockContent } from "../util/text";
 import { blockHash, newBlockId } from "../util/hash";
+import { tError } from "../i18n/errors";
 
 /** 导入结果：可直接写入缓存文件的文本与两类块计数（仅用于提示）。 */
 export interface ImportTranslationResult {
@@ -76,19 +77,19 @@ export function buildImportedCache(
 ): ImportTranslationResult {
   if (translationText.includes("<!-- mbs:")) {
     throw new ImportTranslationError(
-      "选择的文件包含扩展锚点，看起来是译文缓存文件。请选择不含锚点的译文 Markdown。",
+      tError("import.cacheFile"),
     );
   }
 
   const source = parseMarkdownDocument(sourceText, md);
   const translation = parseMarkdownDocument(translationText, md);
   if (source.blocks.length === 0) {
-    throw new ImportTranslationError("原文没有可导入的块。");
+    throw new ImportTranslationError(tError("import.noSourceBlocks"));
   }
   // 块数必须一致：少一块/多一块都会让后续按位置对齐发生错位。
   if (translation.blocks.length !== source.blocks.length) {
     throw new ImportTranslationError(
-      `原文有 ${source.blocks.length} 个顶层块，译文文件有 ${translation.blocks.length} 个。导入要求两边结构一致，以避免译文错位。`,
+      tError("import.blockCountMismatch", { sourceCount: source.blocks.length, targetCount: translation.blocks.length }),
     );
   }
 
@@ -101,7 +102,7 @@ export function buildImportedCache(
     // kind 一致是最低结构保证（标题级别、列表项数等更细的差异本函数不校验）。
     if (sourceBlock.kind !== targetBlock.kind) {
       throw new ImportTranslationError(
-        `第 ${index + 1} 个块结构不一致：原文是${kindLabel(sourceBlock.kind)}，译文是${kindLabel(targetBlock.kind)}。导入要求结构逐块一致。`,
+        tError("import.kindMismatch", { index: index + 1, sourceKind: kindLabel(sourceBlock.kind), targetKind: kindLabel(targetBlock.kind) }),
       );
     }
 
@@ -111,7 +112,7 @@ export function buildImportedCache(
       : normalizeBlockContent(sourceBlock.raw);
     if (!content) {
       throw new ImportTranslationError(
-        `第 ${index + 1} 个块的译文为空，无法导入。`,
+        tError("import.emptyBlock", { index: index + 1 }),
       );
     }
     if (sourceBlock.translatable) {
@@ -140,7 +141,7 @@ export function buildImportedCache(
     parsed.targetBlocks.length > 0
   ) {
     throw new ImportTranslationError(
-      "导入后的缓存结构校验失败，未写入任何内容。请检查译文文件的 Markdown 结构。",
+      tError("import.invalidCacheStructure"),
     );
   }
 

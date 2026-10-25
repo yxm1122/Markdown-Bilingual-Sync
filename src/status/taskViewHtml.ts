@@ -15,7 +15,17 @@
  * - 所有插值都必须来自静态文案或已转义数据，避免 HTML 注入。
  */
 import * as vscode from "vscode";
-import { UI_TEXT } from "../i18n/zh";
+import { getLocale, UI_TEXT } from "../i18n";
+
+/** 转义插入 HTML 文本/属性中的本地化文案。 */
+function escapeHtml(value: string): string {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
 
 /** buildTaskViewHtml 的输入参数。 */
 export interface TaskViewHtmlInput {
@@ -37,6 +47,8 @@ export interface TaskViewHtmlInput {
  */
 export function buildTaskViewHtml(input: TaskViewHtmlInput): string {
   const { webview, extensionUri, nonce } = input;
+  // locale 来自 VS Code，仅保留 BCP-47 允许字符后再写入属性，避免任何注入面。
+  const htmlLang = getLocale().replace(/[^A-Za-z0-9-]/g, "") || "en";
   const mediaRoot = vscode.Uri.joinPath(extensionUri, "media");
   const cssUri = webview.asWebviewUri(
     vscode.Uri.joinPath(mediaRoot, "taskView.css"),
@@ -59,28 +71,28 @@ export function buildTaskViewHtml(input: TaskViewHtmlInput): string {
   const text = JSON.stringify(UI_TEXT.taskPanel).replaceAll("<", "\\u003c");
 
   return `<!DOCTYPE html>
-<html lang="zh-CN">
+<html lang="${htmlLang}">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <meta http-equiv="Content-Security-Policy" content="${csp}">
 <link rel="stylesheet" href="${cssUri}">
-<title>${UI_TEXT.taskPanel.title}</title>
+<title>${escapeHtml(UI_TEXT.taskPanel.title)}</title>
 </head>
 <body>
 <div class="task-root">
   <div class="task-toolbar">
-    <span class="task-toolbar-title">${UI_TEXT.taskPanel.title}</span>
+    <span class="task-toolbar-title">${escapeHtml(UI_TEXT.taskPanel.title)}</span>
     <span class="task-toolbar-actions">
-      <button type="button" data-action="cancelAll" disabled>${UI_TEXT.taskPanel.cancelAll}</button>
-      <button type="button" data-action="clearFinished" disabled>${UI_TEXT.taskPanel.clearFinished}</button>
-      <button type="button" data-action="openOutput">${UI_TEXT.taskPanel.openOutput}</button>
+      <button type="button" data-action="cancelAll" disabled>${escapeHtml(UI_TEXT.taskPanel.cancelAll)}</button>
+      <button type="button" data-action="clearFinished" disabled>${escapeHtml(UI_TEXT.taskPanel.clearFinished)}</button>
+      <button type="button" data-action="openOutput">${escapeHtml(UI_TEXT.taskPanel.openOutput)}</button>
     </span>
   </div>
-  <div class="task-language" role="group" aria-label="${UI_TEXT.taskPanel.languageSection}">
-    <select id="task-source-language" class="task-language-select" aria-label="${UI_TEXT.taskPanel.sourceLanguageLabel}" title="${UI_TEXT.taskPanel.sourceLanguageTitle}" disabled></select>
-    <button type="button" class="task-language-swap" data-action="swapLanguages" title="${UI_TEXT.taskPanel.swapLanguagesTitle}" aria-label="${UI_TEXT.taskPanel.swapLanguagesTitle}" disabled><span aria-hidden="true">⇄</span></button>
-    <select id="task-target-language" class="task-language-select" aria-label="${UI_TEXT.taskPanel.targetLanguageLabel}" title="${UI_TEXT.taskPanel.targetLanguageTitle}" disabled></select>
+  <div class="task-language" role="group" aria-label="${escapeHtml(UI_TEXT.taskPanel.languageSection)}">
+    <select id="task-source-language" class="task-language-select" aria-label="${escapeHtml(UI_TEXT.taskPanel.sourceLanguageLabel)}" title="${escapeHtml(UI_TEXT.taskPanel.sourceLanguageTitle)}" disabled></select>
+    <button type="button" class="task-language-swap" data-action="swapLanguages" title="${escapeHtml(UI_TEXT.taskPanel.swapLanguagesTitle)}" aria-label="${escapeHtml(UI_TEXT.taskPanel.swapLanguagesTitle)}" disabled><span aria-hidden="true">⇄</span></button>
+    <select id="task-target-language" class="task-language-select" aria-label="${escapeHtml(UI_TEXT.taskPanel.targetLanguageLabel)}" title="${escapeHtml(UI_TEXT.taskPanel.targetLanguageTitle)}" disabled></select>
   </div>
   <div id="task-content" class="task-content" aria-live="polite"></div>
 </div>

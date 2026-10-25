@@ -31,6 +31,8 @@ import {
   type TranslationRequest,
   type TranslationResultItem,
 } from "./types";
+import { tError } from "../i18n/errors";
+import { UI_TEXT } from "../i18n";
 
 /** 原始 HTTP Provider 配置；模板字段均为用户设置中的字符串。 */
 export interface GenericHttpProviderConfig {
@@ -104,7 +106,7 @@ const HEADER_NAME = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/;
 
 /** 内部错误类型：retryable 决定是否在单块请求层重试一次。message 已脱敏。 */
 class GenericHttpError extends Error {
-  /** @param message 可直接展示的中文错误；@param retryable 是否可原样重试。 */
+  /** @param message 可直接展示的本地化错误；@param retryable 是否可原样重试。 */
   constructor(
     message: string,
     readonly retryable = false,
@@ -152,8 +154,15 @@ function isLoopbackHost(hostname: string): boolean {
 function assertPlaceholders(template: string, setting: string): void {
   for (const match of template.matchAll(PLACEHOLDER)) {
     if (!ALLOWED_PLACEHOLDERS.has(match[1])) {
+      const allowed = [...ALLOWED_PLACEHOLDERS]
+        .map((name) => `{{${name}}}`)
+        .join(", ");
       throw new Error(
-        `${setting} 包含未知模板变量 {{${match[1]}}}。允许的变量：${[...ALLOWED_PLACEHOLDERS].map((name) => `{{${name}}}`).join("、")}。`,
+        tError("translation.unknownPlaceholder", {
+          setting,
+          variable: match[1],
+          allowed,
+        }),
       );
     }
   }
@@ -173,10 +182,10 @@ function parseJsonObject(
   try {
     parsed = JSON.parse(template);
   } catch {
-    throw new Error(`${setting} 必须是有效的 JSON 对象。`);
+    throw new Error(tError("translation.invalidJsonObject", { setting: setting }));
   }
   if (!isRecord(parsed)) {
-    throw new Error(`${setting} 必须是 JSON 对象。`);
+    throw new Error(tError("translation.jsonObjectExpected", { setting: setting }));
   }
   return parsed;
 }
@@ -186,21 +195,21 @@ function parseJsonBody(template: string): unknown {
   try {
     return JSON.parse(template);
   } catch {
-    throw new Error("httpBody 必须是有效的 JSON。");
+    throw new Error(tError("translation.invalidJsonBody"));
   }
 }
 
 /**
  * 校验并解析配置：端点/方法/模板必填，变量合法，模板可解析，密钥长度受限。
- * 若模板引用 {{apiKey}} 则密钥必填。纯函数，失败时抛出中文错误（不含密钥）。
+ * 若模板引用 {{apiKey}} 则密钥必填。纯函数，失败时抛出本地化错误（不含密钥）。
  */
 function normalizeConfig(config: GenericHttpProviderConfig): NormalizedConfig {
   const endpoint = String(config.endpoint ?? "").trim();
   if (!endpoint) {
-    throw new Error("请设置 markdownBilingualSync.httpEndpoint。");
+    throw new Error(tError("translation.missingHttpEndpoint"));
   }
   if (endpoint.length > 4096) {
-    throw new Error("httpEndpoint 过长，请检查设置。");
+    throw new Error(tError("translation.httpEndpointTooLong"));
   }
   const methodValue = String(config.method ?? "POST").trim().toUpperCase();
   if (
@@ -208,15 +217,15 @@ function normalizeConfig(config: GenericHttpProviderConfig): NormalizedConfig {
     methodValue !== "PUT" &&
     methodValue !== "PATCH"
   ) {
-    throw new Error("httpMethod 仅支持 POST、PUT 或 PATCH。");
+    throw new Error(tError("translation.invalidHttpMethod"));
   }
   const headersTemplate = String(config.headersTemplate ?? "").trim();
   const bodyTemplate = String(config.bodyTemplate ?? "").trim();
   if (!headersTemplate) {
-    throw new Error("请设置 markdownBilingualSync.httpHeaders（可为 {}）。");
+    throw new Error(tError("translation.missingHttpHeaders"));
   }
   if (!bodyTemplate) {
-    throw new Error("请设置 markdownBilingualSync.httpBody。");
+    throw new Error(tError("translation.missingHttpBody"));
   }
   assertPlaceholders(endpoint, "httpEndpoint");
   assertPlaceholders(headersTemplate, "httpHeaders");
@@ -225,7 +234,7 @@ function normalizeConfig(config: GenericHttpProviderConfig): NormalizedConfig {
   const body = parseJsonBody(bodyTemplate);
   const apiKey = String(config.apiKey ?? "").trim();
   if (apiKey.length > 20_000) {
-    throw new Error("API Key 过长，已拒绝使用。");
+    throw new Error(tError("translation.genericApiKeyTooLong"));
   }
   const usesApiKey =
     usesPlaceholder(endpoint, "apiKey") ||
@@ -233,7 +242,7 @@ function normalizeConfig(config: GenericHttpProviderConfig): NormalizedConfig {
     usesPlaceholder(bodyTemplate, "apiKey");
   if (usesApiKey && !apiKey) {
     throw new Error(
-      "HTTP 模板使用了 {{apiKey}}，但尚未设置 API Key。请运行“设置 AI 翻译 API Key”。",
+      tError("translation.apiKeyRequired"),
     );
   }
 
@@ -322,13 +331,13 @@ function renderEndpoint(
     apiKey: encodeURIComponent(apiKey),
   }).trim();
   if (rendered.length > 4096) {
-    throw new GenericHttpError("HTTP 接口地址过长，请检查 httpEndpoint。");
+    throw new GenericHttpError(tError("translation.renderedEndpointTooLong"));
   }
   let url: URL;
   try {
     url = new URL(rendered);
   } catch {
-    throw new GenericHttpError("httpEndpoint 不是有效的 URL。");
+    throw new GenericHttpError(tError("translation.httpEndpointInvalid"));
   }
   const protocol = url.protocol.toLowerCase();
   if (
@@ -336,16 +345,16 @@ function renderEndpoint(
     !(protocol === "http:" && isLoopbackHost(url.hostname))
   ) {
     throw new GenericHttpError(
-      "HTTP 翻译接口必须使用 HTTPS；仅 localhost、127.0.0.1 或 [::1] 允许使用 HTTP。",
+      tError("translation.httpHttpsRequired"),
     );
   }
   if (url.username || url.password) {
     throw new GenericHttpError(
-      "httpEndpoint 不能包含用户名或密码，请通过 {{apiKey}} 模板变量传递密钥。",
+      tError("translation.httpCredentials"),
     );
   }
   if (url.hash) {
-    throw new GenericHttpError("httpEndpoint 不能包含片段（#）。");
+    throw new GenericHttpError(tError("translation.httpFragment"));
   }
   return url.toString();
 }
@@ -362,20 +371,20 @@ function renderHeaders(
   const rendered: Record<string, string> = {};
   for (const [name, value] of Object.entries(headers)) {
     if (!HEADER_NAME.test(name)) {
-      throw new GenericHttpError(`httpHeaders 包含无效的请求头名称：${name}`);
+      throw new GenericHttpError(tError("translation.invalidHeaderName", { name: name }));
     }
     if (/^(host|content-length)$/i.test(name)) {
-      throw new GenericHttpError(`httpHeaders 不允许设置 ${name}。`);
+      throw new GenericHttpError(tError("translation.forbiddenHeader", { name: name }));
     }
     if (typeof value !== "string") {
       throw new GenericHttpError(
-        `httpHeaders 的 ${name} 必须是字符串。`,
+        tError("translation.headerNotString", { name: name }),
       );
     }
     const renderedValue = renderString(value, values);
     if (/[\r\n]/.test(renderedValue)) {
       throw new GenericHttpError(
-        `httpHeaders 的 ${name} 包含换行符，已拒绝发送。`,
+        tError("translation.headerNewline", { name: name }),
       );
     }
     rendered[name] = renderedValue;
@@ -416,17 +425,22 @@ function createHttpError(
   const detail = extractRemoteDetail(body, apiKey);
   const hint =
     status === 401 || status === 403
-      ? "请检查 API Key、请求头模板与访问权限。"
+      ? tError("translation.httpHintGenericAuth")
       : status === 404
-        ? "请检查 httpEndpoint 与请求方法。"
+        ? tError("translation.httpHintGenericNotFound")
         : status === 429
-          ? "请求过于频繁或额度不足，请稍后重试。"
+          ? tError("translation.httpHintRateLimit")
           : "";
-  const message = [
-    `HTTP 翻译请求失败（HTTP ${status}）`,
-    hint ? `：${hint}` : "",
-    detail ? ` ${detail}` : "",
-  ].join("");
+  let message = tError("translation.httpErrorBase", { status });
+  if (hint) {
+    message = tError("translation.httpErrorWithHint", { base: message, hint });
+  }
+  if (detail) {
+    message = tError("translation.httpErrorWithDetail", {
+      base: message,
+      detail,
+    });
+  }
   return new GenericHttpError(message, RETRYABLE_STATUS.has(status));
 }
 
@@ -491,7 +505,7 @@ function assertTranslated(
   const spaces = (normalizedSource.match(/ /g) ?? []).length;
   if (normalizedSource.length >= 40 && spaces >= 4) {
     throw new GenericHttpError(
-      "HTTP 翻译服务返回了原文，未执行翻译。请检查请求模板、响应路径与目标语言参数。",
+      tError("translation.httpEchoedSource"),
     );
   }
 }
@@ -506,13 +520,13 @@ function delay(milliseconds: number, signal?: AbortSignal): Promise<void> {
   }
   return new Promise((resolve, reject) => {
     if (signal?.aborted) {
-      reject(new Error("翻译已取消"));
+      reject(new Error(tError("common.translationCancelled")));
       return;
     }
     let timer: ReturnType<typeof setTimeout>;
     const onAbort = () => {
       clearTimeout(timer);
-      reject(new Error("翻译已取消"));
+      reject(new Error(tError("common.translationCancelled")));
     };
     timer = setTimeout(() => {
       signal?.removeEventListener("abort", onAbort);
@@ -534,12 +548,12 @@ function extractTranslation(
   config: NormalizedConfig,
 ): string {
   if (body.length > MAX_RESPONSE_BYTES) {
-    throw new GenericHttpError("HTTP 翻译响应过大，已拒绝处理。");
+    throw new GenericHttpError(tError("translation.responseTooLarge"));
   }
   if (config.responseType === "text") {
     const text = body.trim();
     if (!text) {
-      throw new GenericHttpError("HTTP 翻译服务返回了空响应。");
+      throw new GenericHttpError(tError("translation.emptyResponse"));
     }
     return text;
   }
@@ -549,7 +563,7 @@ function extractTranslation(
     parsed = JSON.parse(body);
   } catch {
     throw new GenericHttpError(
-      "HTTP 翻译服务返回了非 JSON 响应。可将 httpResponseType 设为 text，或用 httpResponsePath 指向文本字段。",
+      tError("translation.nonJsonHttpResponse"),
     );
   }
   if (isRecord(parsed) && isRecord(parsed.error)) {
@@ -558,7 +572,9 @@ function extractTranslation(
         ? redactKey(parsed.error.message, config.apiKey)
         : "";
     throw new GenericHttpError(
-      `HTTP 翻译服务返回错误${message ? `：${message}` : "。"}`,
+      message
+        ? tError("translation.httpRemoteErrorWithDetail", { message })
+        : tError("translation.httpRemoteError"),
     );
   }
   let value = readPath(parsed, config.responsePath);
@@ -572,16 +588,18 @@ function extractTranslation(
   if (typeof value !== "string") {
     throw new GenericHttpError(
       config.responsePath
-        ? `HTTP 翻译响应中找不到文本字段 httpResponsePath=${config.responsePath}。`
-        : "HTTP 翻译响应不是文本。请设置 httpResponsePath。",
+        ? tError("translation.responsePathMissing", {
+            path: config.responsePath,
+          })
+        : tError("translation.responseNotText"),
     );
   }
   const text = value.trim();
   if (!text) {
-    throw new GenericHttpError("HTTP 翻译服务返回了空译文。");
+    throw new GenericHttpError(tError("translation.emptyTranslation"));
   }
   if (text.length > MAX_TRANSLATION_LENGTH) {
-    throw new GenericHttpError("HTTP 翻译结果过长，已拒绝写入。");
+    throw new GenericHttpError(tError("translation.translationTooLong"));
   }
   return text;
 }
@@ -594,7 +612,9 @@ function extractTranslation(
  */
 export class GenericHttpTranslationProvider implements TranslationProvider {
   readonly id = "http";
-  readonly label = "AI 翻译（自定义 HTTP）";
+  get label(): string {
+    return UI_TEXT.providers.customHttp;
+  }
 
   private readonly fetchImpl: typeof fetch;
   private readonly retryDelayMs: number;
@@ -625,7 +645,7 @@ export class GenericHttpTranslationProvider implements TranslationProvider {
     onChunk?: TranslationChunkHandler,
   ): Promise<TranslationResultItem[]> {
     if (signal?.aborted) {
-      throw new Error("翻译已取消");
+      throw new Error(tError("common.translationCancelled"));
     }
     if (request.items.length === 0) {
       return [];
@@ -675,7 +695,7 @@ export class GenericHttpTranslationProvider implements TranslationProvider {
       Array.from({ length: workerCount }, () => runWorker()),
     );
     if (signal?.aborted) {
-      throw new Error("翻译已取消");
+      throw new Error(tError("common.translationCancelled"));
     }
     if (failure) {
       throw failure;
@@ -695,7 +715,7 @@ export class GenericHttpTranslationProvider implements TranslationProvider {
     signal?: AbortSignal,
   ): Promise<ConnectionTestResult> {
     if (signal?.aborted) {
-      throw new Error("翻译已取消");
+      throw new Error(tError("common.translationCancelled"));
     }
     const config = normalizeConfig(await this.options.getConfig());
     const testItem: TranslationItem = {
@@ -725,7 +745,7 @@ export class GenericHttpTranslationProvider implements TranslationProvider {
       config.apiKey,
     );
     return {
-      model: "自定义 HTTP",
+      model: UI_TEXT.providers.customHttpModel,
       endpoint: redactKey(endpoint, config.apiKey),
       latencyMs: Date.now() - started,
       sample: text.slice(0, 160),
@@ -791,7 +811,7 @@ export class GenericHttpTranslationProvider implements TranslationProvider {
         return text;
       } catch (error) {
         if (signal?.aborted) {
-          throw new Error("翻译已取消");
+          throw new Error(tError("common.translationCancelled"));
         }
         if (
           error instanceof GenericHttpError &&
@@ -857,11 +877,11 @@ export class GenericHttpTranslationProvider implements TranslationProvider {
       return extractTranslation(responseText, config);
     } catch (error) {
       if (signal?.aborted) {
-        throw new Error("翻译已取消");
+        throw new Error(tError("common.translationCancelled"));
       }
       if (timedOut) {
         throw new GenericHttpError(
-          `HTTP 翻译请求超时（${Math.round(config.timeoutMs / 1000)} 秒），请检查网络或在设置中增大 apiTimeoutMs。`,
+          tError("translation.httpTimeout", { seconds: Math.round(config.timeoutMs / 1000) }),
           true,
         );
       }
@@ -870,7 +890,7 @@ export class GenericHttpTranslationProvider implements TranslationProvider {
       }
       const message = error instanceof Error ? error.message : String(error);
       throw new GenericHttpError(
-        `无法连接 HTTP 翻译服务：${redactKey(message, config.apiKey)}`,
+        tError("translation.httpConnectionFailed", { message: redactKey(message, config.apiKey) }),
         true,
       );
     } finally {

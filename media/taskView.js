@@ -74,18 +74,22 @@
   }
 
   // ---- 语言快捷切换 ----
-  // 任务面板 UI 固定为中文，语言名称也按 zh-CN 展示；不支持 Intl.DisplayNames 时退回标签。
-  const LANGUAGE_NAME_OVERRIDES = {
-    "zh-cn": "中文（简体）",
-    "zh-sg": "中文（简体）",
-    "zh-hans": "中文（简体）",
-    "zh-tw": "中文（繁體）",
-    "zh-hk": "中文（繁體）",
-    "zh-hant": "中文（繁體）",
-  };
+  // 页面 locale 由宿主写入 <html lang>，语言名称按该 locale 展示；中文简繁名称保留
+  // 人工覆盖，避免不同运行时对地区变体的译名不一致。不支持 Intl.DisplayNames 时退回标签。
+  const UI_LOCALE = document.documentElement.lang || "en";
+  const LANGUAGE_NAME_OVERRIDES = UI_LOCALE.toLowerCase().startsWith("zh")
+    ? {
+        "zh-cn": "中文（简体）",
+        "zh-sg": "中文（简体）",
+        "zh-hans": "中文（简体）",
+        "zh-tw": "中文（繁體）",
+        "zh-hk": "中文（繁體）",
+        "zh-hant": "中文（繁體）",
+      }
+    : {};
   let displayNames;
   try {
-    displayNames = new Intl.DisplayNames(["zh-CN"], { type: "language" });
+    displayNames = new Intl.DisplayNames([UI_LOCALE], { type: "language" });
   } catch {
     displayNames = undefined;
   }
@@ -182,6 +186,19 @@
       : status;
   }
 
+  /** 按页面 locale 格式化秒数；NumberFormat 不可用时退回 `1.2s`。 */
+  function formatDuration(seconds) {
+    try {
+      return new Intl.NumberFormat(UI_LOCALE, {
+        style: "unit",
+        unit: "second",
+        maximumFractionDigits: 1,
+      }).format(seconds);
+    } catch {
+      return seconds.toFixed(1) + "s";
+    }
+  }
+
   function elapsedLabel(task, now) {
     if (!task.startedAt) {
       return "";
@@ -190,7 +207,7 @@
     // 因此耗时只在宿主推送新状态时刷新。
     const end = task.finishedAt || now;
     const seconds = Math.max(0, (end - task.startedAt) / 1000);
-    return format(TEXT.elapsed, { seconds: seconds.toFixed(1) });
+    return format(TEXT.elapsed, { duration: formatDuration(seconds) });
   }
 
   function taskProgress(task) {

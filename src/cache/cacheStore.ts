@@ -16,6 +16,7 @@ import * as path from "node:path";
 import * as vscode from "vscode";
 import { shortHash } from "../util/hash";
 import { languageSuffix } from "../util/language";
+import { tError } from "../i18n/errors";
 
 /** 基于 `ExtensionContext.globalStorageUri` 的缓存仓库。 */
 export class CacheStore {
@@ -35,11 +36,11 @@ export class CacheStore {
    * `.<语言>.md`，使多个目标语言互不覆盖。
    *
    * 出错条件：源不是本地文件、目标语言无法生成合法后缀、相对路径为空/越界/为绝对
-   * 路径、最终路径跳出项目目录时抛出中文错误。无文件系统副作用。
+   * 路径、最终路径跳出项目目录时抛出本地化错误。无文件系统副作用。
    */
   getCacheUri(sourceUri: vscode.Uri, targetLanguage: string): vscode.Uri {
     if (sourceUri.scheme !== "file") {
-      throw new Error("双语缓存仅支持已保存到磁盘的文件。");
+      throw new Error(tError("cache.localFileOnly"));
     }
     const suffix = languageSuffix(targetLanguage);
 
@@ -65,7 +66,7 @@ export class CacheStore {
       path.posix.isAbsolute(normalized) ||
       /^[a-zA-Z]:/.test(normalized)
     ) {
-      throw new Error("无法为工作区之外的文件生成安全的缓存路径。");
+      throw new Error(tError("cache.unsafePath"));
     }
 
     const extension = path.posix.extname(normalized);
@@ -78,7 +79,7 @@ export class CacheStore {
     const rootPath = root.fsPath.replace(/\\/g, "/").toLowerCase();
     const cachePath = cacheUri.fsPath.replace(/\\/g, "/").toLowerCase();
     if (cachePath !== rootPath && !cachePath.startsWith(`${rootPath}/`)) {
-      throw new Error("缓存路径越出了扩展存储目录。");
+      throw new Error(tError("cache.pathEscaped"));
     }
     return cacheUri;
   }
@@ -149,7 +150,7 @@ export class CacheStore {
     );
     if (openDocument?.isDirty) {
       throw new Error(
-        "译文缓存正在编辑且有未保存修改。请先保存或撤销缓存编辑，再执行同步。",
+        tError("cache.dirty"),
       );
     }
 
@@ -165,11 +166,11 @@ export class CacheStore {
       );
       const applied = await vscode.workspace.applyEdit(edit);
       if (!applied) {
-        throw new Error("无法更新已打开的译文缓存。");
+        throw new Error(tError("cache.updateOpenFailed"));
       }
       const saved = await openDocument.save();
       if (!saved) {
-        throw new Error("译文缓存保存失败。");
+        throw new Error(tError("cache.saveFailed"));
       }
       return;
     }
@@ -192,7 +193,7 @@ export class CacheStore {
     );
     if (openDocuments.length > 0) {
       throw new Error(
-        `有 ${openDocuments.length} 个译文缓存正在编辑器中打开，请先关闭所有缓存标签页再清除。`,
+        tError("cache.openDocuments", { count: openDocuments.length }),
       );
     }
     const root = this.globalCacheRoot;
@@ -225,7 +226,7 @@ export class CacheStore {
       (document) => document.uri.toString() === cacheUri.toString(),
     );
     if (openDocument) {
-      throw new Error("译文缓存正在编辑器中打开，请先关闭缓存标签页再清理。");
+      throw new Error(tError("cache.openBeforeClear"));
     }
     if (!(await this.exists(cacheUri))) {
       return false;
@@ -244,10 +245,10 @@ export class CacheStore {
     return true;
   }
 
-  /** 在编辑器中打开缓存文件；不存在时抛出中文提示。 */
+  /** 在编辑器中打开缓存文件；不存在时抛出本地化提示。 */
   async openFile(cacheUri: vscode.Uri): Promise<void> {
     if (!(await this.exists(cacheUri))) {
-      throw new Error("译文缓存尚未生成，请先运行“翻译当前文件”或“同步译文”。");
+      throw new Error(tError("cache.notGenerated"));
     }
     const document = await vscode.workspace.openTextDocument(cacheUri);
     await vscode.window.showTextDocument(document, { preview: false });

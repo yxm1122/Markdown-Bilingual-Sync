@@ -9,10 +9,12 @@
  * - 等待者按 FIFO 唤醒；被取消的等待者会被移出队列且不占用槽位；
  * - 限制器只负责“准入”，不负责中止正在运行的任务——任务自身必须监听 signal。
  *
- * 外部依赖：仅 AbortSignal（无 VS Code 依赖）；不发请求、不写日志。
+ * 外部依赖：AbortSignal 与 tError（错误文案本地化）；不发请求、不写日志。
  *
  * 安全边界：不接触任务内容或密钥；取消错误统一为“翻译已取消”。
  */
+import { tError } from "../i18n/errors";
+
 export interface RequestLimiter {
   /** 当前并发上限（动态读取，可能随设置变化）。 */
   readonly limit: number;
@@ -105,7 +107,7 @@ export class ConcurrencyLimiter implements RequestLimiter {
    */
   private acquire(signal?: AbortSignal): Promise<void> {
     if (signal?.aborted) {
-      return Promise.reject(new Error("翻译已取消"));
+      return Promise.reject(new Error(tError("common.translationCancelled")));
     }
     if (this.active < this.limit) {
       this.active += 1;
@@ -121,7 +123,7 @@ export class ConcurrencyLimiter implements RequestLimiter {
             this.waiters.splice(index, 1);
             this.notify();
           }
-          reject(new Error("翻译已取消"));
+          reject(new Error(tError("common.translationCancelled")));
         };
         signal.addEventListener("abort", waiter.onAbort, { once: true });
       }
@@ -155,7 +157,7 @@ export class ConcurrencyLimiter implements RequestLimiter {
         return;
       }
       if (waiter.signal?.aborted) {
-        waiter.reject(new Error("翻译已取消"));
+        waiter.reject(new Error(tError("common.translationCancelled")));
         continue;
       }
       if (waiter.signal && waiter.onAbort) {

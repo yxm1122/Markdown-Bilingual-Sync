@@ -8,12 +8,13 @@
  * - 一次请求内 item.id 唯一；Provider 必须原样回显 id，且每个 id 恰好返回一次；
  * - 校验未通过前，调用方不得把任何译文写入缓存（validateTranslationResult 抛错即整体拒绝）。
  *
- * 外部依赖：仅依赖 markdown/types 的 BlockKind；不做 I/O，不读取配置。
+ * 外部依赖：markdown/types 的 BlockKind 与 tError（错误文案本地化）；不做 I/O，不读取配置。
  *
  * 安全边界：Provider 输出按不可信数据处理——未知、重复、空、超长（>500_000 字符）
  * 或缺失的块一律拒绝；术语替换是纯文本替换，不解析 Markdown/HTML，也不访问网络。
  */
 import type { BlockKind } from "../markdown/types";
+import { tError } from "../i18n/errors";
 
 // ---- 请求与结果数据类型 ----
 
@@ -180,7 +181,7 @@ export function applyGlossary(
 
 /**
  * 校验 Provider 结果并转换为 id -> 译文 映射。
- * 失败语义：出现未请求、重复、空、超过 500_000 字符或缺失的块时抛出中文错误；
+ * 失败语义：出现未请求、重复、空、超过 500_000 字符或缺失的块时抛出本地化错误；
  * 本函数不做部分接受，调用方应放弃整次写入。无副作用。
  */
 export function validateTranslationResult(
@@ -191,16 +192,16 @@ export function validateTranslationResult(
   const outputs = new Map<string, string>();
   for (const item of result) {
     if (!expected.has(item.id)) {
-      throw new Error(`翻译服务返回了未请求的块：${item.id}`);
+      throw new Error(tError("translation.unexpectedBlock", { id: item.id }));
     }
     if (outputs.has(item.id)) {
-      throw new Error(`翻译服务重复返回了块：${item.id}`);
+      throw new Error(tError("translation.duplicateBlock", { id: item.id }));
     }
     if (typeof item.text !== "string" || !item.text.trim()) {
-      throw new Error(`翻译服务返回了空译文：${item.id}`);
+      throw new Error(tError("translation.emptyBlock", { id: item.id }));
     }
     if (item.text.length > 500_000) {
-      throw new Error(`翻译结果过长，已拒绝写入：${item.id}`);
+      throw new Error(tError("translation.resultTooLong", { id: item.id }));
     }
     outputs.set(item.id, item.text);
   }
@@ -208,7 +209,7 @@ export function validateTranslationResult(
     const missing = requested
       .filter((item) => !outputs.has(item.id))
       .map((item) => item.id);
-    throw new Error(`翻译服务缺少 ${missing.length} 个块的结果：${missing.join(", ")}`);
+    throw new Error(tError("translation.missingBlocks", { count: missing.length, ids: missing.join(", ") }));
   }
   return outputs;
 }

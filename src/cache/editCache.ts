@@ -26,6 +26,7 @@ import type {
 } from "../markdown/types";
 import { normalizeNewlines } from "../util/hash";
 import { normalizeBlockContent } from "../util/text";
+import { tError } from "../i18n/errors";
 
 /** 编辑成功后的缓存文本、最终锚点与重新解析得到的块。 */
 export interface EditedCache {
@@ -45,7 +46,7 @@ export interface EditedCache {
 function assertEditable(cache: CacheDocument): void {
   if (cache.untracked.length > 0) {
     throw new Error(
-      "译文缓存中存在未加锚点的内容。请先清理缓存，再执行单块操作。",
+      tError("cache.untrackedContent"),
     );
   }
 }
@@ -57,7 +58,7 @@ function replaceAnchorLine(
   anchor: BlockAnchor,
 ): void {
   if (lineIndex < 0 || lineIndex >= lines.length) {
-    throw new Error("无法定位译文锚点所在的行。");
+    throw new Error(tError("cache.anchorLineMissing"));
   }
   lines[lineIndex] = serializeAnchor(anchor);
 }
@@ -84,13 +85,13 @@ export interface ReplaceCachedBlockInput {
  * 3. 重新解析，确认正文没有裂成多个块、仍能按 id 找到、类型未变；
  * 4. 用实际解析出的块哈希回填 `dst`，再解析一次确认结果可解析。
  *
- * 不写文件；失败时抛中文错误，调用方（`SyncService`）负责持久化。
+ * 不写文件；失败时抛本地化错误，调用方（`SyncService`）负责持久化。
  */
 export function replaceCachedBlock(input: ReplaceCachedBlockInput): EditedCache {
   assertEditable(input.cache);
   const content = normalizeBlockContent(input.content);
   if (!content.trim()) {
-    throw new Error("译文为空，已拒绝写入。");
+    throw new Error(tError("cache.emptyTarget"));
   }
 
   const lines = normalizeNewlines(input.cacheText).split("\n");
@@ -114,14 +115,14 @@ export function replaceCachedBlock(input: ReplaceCachedBlockInput): EditedCache 
   // 正常译文应当仍是一个带锚点的块；出现未跟踪块通常意味着译文里混入了空行或块结构。
   if (draft.untracked.length > 0) {
     throw new Error(
-      "译文被解析成了多个块。请检查译文中是否出现了多余的空行或块级结构。",
+      tError("cache.targetMultiBlock"),
     );
   }
   const draftBlock = draft.blocks.find(
     (item) => item.anchor.id === input.target.anchor.id,
   );
   if (!draftBlock) {
-    throw new Error("无法在修改后的缓存中定位该译文块。");
+    throw new Error(tError("cache.targetMissing"));
   }
   // 墓碑内容会被解析成普通块，类型可能与原文不同，因此仅对删除模式放行。
   if (
@@ -129,7 +130,7 @@ export function replaceCachedBlock(input: ReplaceCachedBlockInput): EditedCache 
     input.mode !== "deleted"
   ) {
     throw new Error(
-      `译文结构从 ${input.sourceKind} 变成了 ${draftBlock.block.kind}，已拒绝写入。`,
+      tError("cache.kindChanged", { from: input.sourceKind, to: draftBlock.block.kind }),
     );
   }
 
@@ -145,7 +146,7 @@ export function replaceCachedBlock(input: ReplaceCachedBlockInput): EditedCache 
     (item) => item.anchor.id === finalAnchor.id,
   );
   if (!finalBlock) {
-    throw new Error("写入后的译文块无法重新解析。");
+    throw new Error(tError("cache.unparsable"));
   }
   return { text: finalText, anchor: finalAnchor, block: finalBlock.block };
 }
@@ -180,7 +181,7 @@ export function markCachedBlockSynced(input: MarkSyncedInput): EditedCache {
   const final = parseCacheDocument(text, input.md);
   const finalBlock = final.blocks.find((item) => item.anchor.id === anchor.id);
   if (!finalBlock) {
-    throw new Error("标记已同步后无法重新解析该译文块。");
+    throw new Error(tError("cache.markSyncedUnparsable"));
   }
   return { text, anchor, block: finalBlock.block };
 }

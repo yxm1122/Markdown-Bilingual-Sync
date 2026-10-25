@@ -88,7 +88,11 @@ const mocks = vi.hoisted(() => {
   };
 });
 
-vi.mock("vscode", () => mocks.vscode);
+// 展开全局 stub 保留 l10n/env；本文件的 workspace/window mock 覆盖 stub 实现。
+vi.mock("vscode", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./vscodeStub")>();
+  return { ...actual.vscodeStub, ...mocks.vscode };
+});
 
 function createProvider(): {
   provider: TaskViewProvider;

@@ -13,7 +13,7 @@
  */
 import { randomBytes } from "node:crypto";
 import * as vscode from "vscode";
-import { formatText, UI_TEXT } from "../i18n/zh";
+import { formatText, UI_TEXT } from "../i18n";
 import { buildTaskViewHtml } from "./taskViewHtml";
 import type {
   TranslationTaskMonitor,
@@ -286,12 +286,16 @@ export class TaskViewProvider
     }
     const snapshot = this.options.monitor.snapshot();
     view.description =
-      snapshot.activeCount > 0 ? `${snapshot.activeCount} 个任务` : undefined;
+      snapshot.activeCount > 0
+        ? formatText(UI_TEXT.taskPanel.activeTaskCount, {
+            count: snapshot.activeCount,
+          })
+        : undefined;
     view.badge =
       snapshot.activeCount > 0
         ? {
             value: snapshot.activeCount,
-            tooltip: "活动的翻译任务",
+            tooltip: UI_TEXT.taskPanel.activeTaskBadgeTooltip,
           }
         : undefined;
   }
@@ -318,7 +322,7 @@ export class TaskViewProvider
         `[${new Date().toISOString()}] task view message failed: ${stack}`,
       );
       void vscode.window.showErrorMessage(
-        `Markdown Bilingual Sync：${message}`,
+        `${UI_TEXT.extension.messagePrefix}${message}`,
       );
     }
   }
@@ -435,7 +439,7 @@ export class TaskViewProvider
         language: selection.language || "-",
       });
       void vscode.window.showErrorMessage(
-        `Markdown Bilingual Sync：${message}`,
+        `${UI_TEXT.extension.messagePrefix}${message}`,
       );
       // 页面可能已把下拉框切到提交值；回推配置状态以还原选中项。
       this.sendState();
@@ -457,7 +461,7 @@ export class TaskViewProvider
           ? UI_TEXT.taskPanel.sourceLanguageUpdateFailed
           : UI_TEXT.taskPanel.targetLanguageUpdateFailed;
       void vscode.window.showErrorMessage(
-        `Markdown Bilingual Sync：${formatText(template, { message })}`,
+        `${UI_TEXT.extension.messagePrefix}${formatText(template, { message })}`,
       );
       this.sendState();
       return;
@@ -480,7 +484,7 @@ export class TaskViewProvider
     );
     if (swapped.status !== "ok") {
       void vscode.window.showErrorMessage(
-        `Markdown Bilingual Sync：${UI_TEXT.taskPanel.swapLanguagesUnavailable}`,
+        `${UI_TEXT.extension.messagePrefix}${UI_TEXT.taskPanel.swapLanguagesUnavailable}`,
       );
       this.sendState();
       return;
@@ -530,7 +534,7 @@ export class TaskViewProvider
         `[${new Date().toISOString()}] swap languages failed: ${message}`,
       );
       void vscode.window.showErrorMessage(
-        `Markdown Bilingual Sync：${formatText(
+        `${UI_TEXT.extension.messagePrefix}${formatText(
           UI_TEXT.taskPanel.languageUpdateFailed,
           { message },
         )}`,

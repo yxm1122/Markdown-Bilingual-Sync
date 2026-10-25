@@ -1,6 +1,6 @@
 /** 测试：任务视图静态骨架中的双语言选择器与交换按钮。 */
 import { describe, expect, it, vi } from "vitest";
-import { UI_TEXT } from "../src/i18n/zh";
+import { UI_TEXT } from "../src/i18n";
 import { buildTaskViewHtml } from "../src/status/taskViewHtml";
 
 const mocks = vi.hoisted(() => {
@@ -19,7 +19,11 @@ const mocks = vi.hoisted(() => {
   return { FakeUri, vscode: { Uri: FakeUri } };
 });
 
-vi.mock("vscode", () => mocks.vscode);
+// 展开全局 stub 保留 l10n/env；FakeUri 等本文件所需 API 覆盖 stub 实现。
+vi.mock("vscode", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./vscodeStub")>();
+  return { ...actual.vscodeStub, ...mocks.vscode };
+});
 
 function buildHtml(): string {
   const webview = {
@@ -35,6 +39,10 @@ function buildHtml(): string {
 }
 
 describe("task view language skeleton", () => {
+  it("declares the current VS Code locale on the html element", () => {
+    expect(buildHtml()).toContain('<html lang="zh-cn">');
+  });
+
   it("renders source/target selectors and a swap button before content", () => {
     const html = buildHtml();
     const sourceIndex = html.indexOf('id="task-source-language"');

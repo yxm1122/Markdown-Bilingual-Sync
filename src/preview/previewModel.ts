@@ -25,7 +25,7 @@
  * - `counts.total` 为对齐块数 + 译文独占块数，与渲染出的块数可能因空 HTML 跳块而略有差异。
  */
 import type { MarkdownIt } from "markdown-it";
-import { UI_TEXT } from "../i18n/zh";
+import { UI_TEXT } from "../i18n";
 import { alignDocument } from "../markdown/align";
 import { parseCacheDocument } from "../markdown/anchors";
 import { buildHeadingPaths } from "../markdown/headings";

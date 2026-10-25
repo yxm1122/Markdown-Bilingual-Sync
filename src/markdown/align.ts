@@ -23,6 +23,7 @@ import type {
   CacheDocument,
   MarkdownBlock,
 } from "./types";
+import { tError } from "../i18n/errors";
 
 type Pair = [number, number];
 
@@ -257,12 +258,12 @@ export function alignDocument(
 
   if (orphanCaches.length > 0) {
     warnings.push(
-      `有 ${orphanCaches.length} 个译文块无法对应到当前原文。`,
+      tError("sync.alignOrphanCaches", { count: orphanCaches.length }),
     );
   }
   if (cache.untracked.length > 0) {
     warnings.push(
-      `译文缓存中有 ${cache.untracked.length} 个未跟踪块，全量同步前需要先处理。`,
+      tError("sync.alignUntrackedCache", { count: cache.untracked.length }),
     );
   }
 

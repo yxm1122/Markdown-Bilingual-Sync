@@ -58,6 +58,7 @@ import {
 import { estimateTokenCount } from "../translation/batching";
 import { blockHash, newBlockId } from "../util/hash";
 import { LANGUAGE_TAG } from "../util/language";
+import { tError } from "../i18n/errors";
 
 /** 摘要是一个手动触发的单次请求；超过该输入规模时提示手动填写，避免超出模型上下文。 */
 const SUMMARY_MAX_INPUT_TOKENS = 12_000;
@@ -116,7 +117,7 @@ export interface BackTranslationResult extends LanguageSettings {
 /** 用户取消操作（关闭保存提示、取消同步等）时抛出的可识别错误。 */
 export class CancelledError extends Error {
   /** @param message 展示给用户的取消说明，默认“操作已取消”。 */
-  constructor(message = "操作已取消") {
+  constructor(message = tError("common.operationCancelled")) {
     super(message);
     this.name = "CancelledError";
   }
@@ -157,7 +158,7 @@ export class SyncService {
    * 读取并校验语言配置。
    *
    * 要求两侧都是形如 `en` / `zh-CN` 的标签，且原文语言与译文语言不同。
-   * 配置非法时抛出中文错误；无副作用。
+   * 配置非法时抛出本地化错误；无副作用。
    */
   getSettings(): LanguageSettings {
     const config = vscode.workspace.getConfiguration("markdownBilingualSync");
@@ -169,16 +170,16 @@ export class SyncService {
     ).trim();
     if (!LANGUAGE_TAG.test(sourceLanguage)) {
       throw new Error(
-        `原文语言设置“${sourceLanguage}”不是有效的 BCP-47 标签（如 en、zh-CN）。`,
+        tError("sync.invalidSourceLanguage", { language: sourceLanguage }),
       );
     }
     if (!LANGUAGE_TAG.test(targetLanguage)) {
       throw new Error(
-        `译文语言设置“${targetLanguage}”不是有效的 BCP-47 标签（如 zh-CN、ja-JP）。`,
+        tError("sync.invalidTargetLanguage", { language: targetLanguage }),
       );
     }
     if (sourceLanguage.toLowerCase() === targetLanguage.toLowerCase()) {
-      throw new Error("原文语言与译文语言相同，请修改 targetLanguage 设置。");
+      throw new Error(tError("sync.sameLanguage"));
     }
     return { sourceLanguage, targetLanguage };
   }
@@ -224,23 +225,26 @@ export class SyncService {
    * 加载某个原文的操作状态。
    *
    * `ensureSaved` 为 true 时，若文档有未保存修改会弹出模态确认并尝试保存；用户拒绝
-   * 或保存失败则抛 `CancelledError` / 中文错误。`purpose` 仅用于提示文案。随后计算
+   * 或保存失败则抛 `CancelledError` / 本地化错误。`purpose` 仅用于提示文案。随后计算
    * 缓存路径并读取缓存文本（不存在时为 `undefined`）。除可选的原文保存外，不写缓存。
    */
   async loadState(
     sourceUri: vscode.Uri,
     ensureSaved: boolean,
-    purpose = "同步",
+    purpose = tError("sync.purposeSync"),
   ): Promise<LoadedState> {
     if (sourceUri.scheme !== "file") {
-      throw new Error("仅支持本地的 Markdown / Skill 文件。请先保存文件到磁盘。");
+      throw new Error(tError("sync.localFileOnly"));
     }
     const settings = this.getSettings();
     const document = await vscode.workspace.openTextDocument(sourceUri);
     if (ensureSaved && document.isDirty) {
-      const saveLabel = `保存并${purpose}`;
+      const saveLabel = tError("sync.saveAndPurpose", { purpose });
       const choice = await vscode.window.showWarningMessage(
-        `“${path.basename(sourceUri.fsPath)}”有未保存的修改。${purpose}前需要先保存原文。`,
+        tError("sync.savePrompt", {
+          file: path.basename(sourceUri.fsPath),
+          purpose,
+        }),
         { modal: true },
         saveLabel,
       );
@@ -249,7 +253,7 @@ export class SyncService {
       }
       const saved = await document.save();
       if (!saved) {
-        throw new Error(`保存原文失败，未执行${purpose}。`);
+        throw new Error(tError("sync.saveSourceFailed", { purpose }));
       }
     }
     const cacheUri = this.cacheStore.getCacheUri(
@@ -407,10 +411,10 @@ export class SyncService {
         (item) => item.source.index === blockIndex,
       );
       if (!aligned) {
-        throw new Error(`找不到第 ${blockIndex + 1} 个原文块。`);
+        throw new Error(tError("common.missingSourceBlock", { index: blockIndex + 1 }));
       }
       if (!aligned.source.translatable) {
-        throw new Error("这个块不参与翻译（代码、公式、脚注或结构块）。");
+        throw new Error(tError("sync.blockNotTranslatable"));
       }
       if (!aligned.cache) {
         return {
@@ -508,31 +512,31 @@ export class SyncService {
         (item) => item.source.index === blockIndex,
       );
       if (!aligned) {
-        throw new Error(`找不到第 ${blockIndex + 1} 个原文块。`);
+        throw new Error(tError("common.missingSourceBlock", { index: blockIndex + 1 }));
       }
       if (!aligned.source.translatable) {
-        throw new Error("这个块不参与翻译（代码、公式、脚注或结构块）。");
+        throw new Error(tError("sync.blockNotTranslatable"));
       }
       if (!aligned.cache) {
-        throw new Error("这个块还没有译文，请先同步译文。");
+        throw new Error(tError("sync.noTranslationSyncFirst"));
       }
       if (
         expected?.sourceHash &&
         aligned.source.hash !== expected.sourceHash
       ) {
-        throw new Error("原文已更新，请刷新预览后重新编辑译文。");
+        throw new Error(tError("sync.sourceUpdatedRefresh"));
       }
       if (
         expected?.cacheId &&
         aligned.cache.anchor.id !== expected.cacheId
       ) {
-        throw new Error("译文块已变化，请刷新预览后重新编辑。");
+        throw new Error(tError("sync.translationChangedRefresh"));
       }
       if (
         expected?.baseText !== undefined &&
         aligned.cache.block.raw !== expected.baseText
       ) {
-        throw new Error("该块译文已更新，请刷新预览后重新编辑。");
+        throw new Error(tError("sync.translationUpdatedRefresh"));
       }
       const edited = replaceCachedBlock({
         cacheText: state.cacheText ?? "",
@@ -570,7 +574,7 @@ export class SyncService {
         (item) => item.source.index === blockIndex,
       );
       if (!aligned) {
-        throw new Error(`找不到第 ${blockIndex + 1} 个原文块。`);
+        throw new Error(tError("common.missingSourceBlock", { index: blockIndex + 1 }));
       }
       if (aligned.cache?.anchor.mode === "deleted") {
         return state.cacheText ?? "";
@@ -745,12 +749,12 @@ export class SyncService {
     }
     const state = await this.loadState(sourceUri, true);
     if (!state.cacheText?.trim()) {
-      throw new Error("译文缓存不存在，无法回译。");
+      throw new Error(tError("sync.cacheMissingBackTranslate"));
     }
     if (
       state.sourceLanguage.toLowerCase() === state.targetLanguage.toLowerCase()
     ) {
-      throw new Error("原文语言与译文语言相同，无法回译。");
+      throw new Error(tError("sync.sameLanguageBack"));
     }
     const source = parseMarkdownDocument(state.sourceText, this.md);
     const cache = parseCacheDocument(state.cacheText, this.md);
@@ -759,13 +763,13 @@ export class SyncService {
       (item) => item.source.index === blockIndex,
     );
     if (!aligned) {
-      throw new Error(`找不到第 ${blockIndex + 1} 个原文块。`);
+      throw new Error(tError("common.missingSourceBlock", { index: blockIndex + 1 }));
     }
     if (!aligned.source.translatable) {
-      throw new Error("这个块不参与翻译（代码、公式、脚注或结构块）。");
+      throw new Error(tError("sync.blockNotTranslatable"));
     }
     if (!aligned.cache) {
-      throw new Error("这个块还没有译文，无法回译。");
+      throw new Error(tError("sync.noTranslationBack"));
     }
     const headingPaths = buildHeadingPaths(source.blocks);
     const assistSettings = this.resolveAssist(assist);
@@ -800,7 +804,7 @@ export class SyncService {
     const outputs = validateTranslationResult([item], rawResult);
     const backText = outputs.get(item.id)?.trim() ?? "";
     if (!backText) {
-      throw new Error("回译结果为空。");
+      throw new Error(tError("sync.backEmpty"));
     }
     return {
       sourceText: aligned.source.raw,
@@ -834,7 +838,7 @@ export class SyncService {
     if (
       state.sourceLanguage.toLowerCase() === state.targetLanguage.toLowerCase()
     ) {
-      throw new Error("原文语言与译文语言相同，无法回译。");
+      throw new Error(tError("sync.sameLanguageBack"));
     }
     const item = {
       id: "mbs-target-draft",
@@ -858,7 +862,7 @@ export class SyncService {
     const outputs = validateTranslationResult([item], rawResult);
     const result = outputs.get(item.id)?.trim() ?? "";
     if (!result) {
-      throw new Error("回译结果为空。");
+      throw new Error(tError("sync.backEmpty"));
     }
     return result;
   }
@@ -887,16 +891,20 @@ export class SyncService {
     }
     if (!this.provider.supportsSummary || !this.provider.summarize) {
       throw new Error(
-        "当前翻译服务不支持自动生成全文摘要，请在预览中手动填写，或切换到 OpenAI 兼容服务。",
+        tError("sync.summaryUnsupported"),
       );
     }
-    const state = await this.loadState(sourceUri, true, "生成摘要");
+    const state = await this.loadState(
+      sourceUri,
+      true,
+      tError("sync.purposeGenerateSummary"),
+    );
     if (!state.sourceText.trim()) {
-      throw new Error("原文为空，无法生成摘要。");
+      throw new Error(tError("sync.sourceEmptySummary"));
     }
     if (estimateTokenCount(state.sourceText) > SUMMARY_MAX_INPUT_TOKENS) {
       throw new Error(
-        `原文超过摘要输入上限（约 ${SUMMARY_MAX_INPUT_TOKENS} tokens），请手动填写摘要或拆分文档。`,
+        tError("sync.summaryTooLongInput", { tokens: SUMMARY_MAX_INPUT_TOKENS }),
       );
     }
     const text = (
@@ -914,17 +922,28 @@ export class SyncService {
       throw new CancelledError();
     }
     if (!text) {
-      throw new Error("AI 返回了空摘要，请重试或手动填写。");
+      throw new Error(tError("sync.aiEmptySummary"));
     }
-    return this.writeSummary(state, text, this.provider.label);
+    // 持久化稳定 provider id（mock/openai/http），显示名在渲染时按当前 locale 映射，
+    // 避免缓存内容随界面语言变化。BatchTranslationCoordinator 的 id 带 batch: 前缀，
+    // 只用于运行时路由，不写入缓存。
+    return this.writeSummary(
+      state,
+      text,
+      this.provider.id.replace(/^batch:/, ""),
+    );
   }
 
   /** 保存用户在预览中编辑的摘要；会按当前原文更新关联哈希。 */
   async saveSummary(sourceUri: vscode.Uri, text: string): Promise<string> {
     if (!text.trim()) {
-      throw new Error("摘要不能为空。");
+      throw new Error(tError("sync.summaryEmpty"));
     }
-    const state = await this.loadState(sourceUri, true, "保存摘要");
+    const state = await this.loadState(
+      sourceUri,
+      true,
+      tError("sync.purposeSaveSummary"),
+    );
     return this.writeSummary(state, text, "manual");
   }
 
@@ -959,12 +978,12 @@ export class SyncService {
   private assertCacheSummaryWritable(cache: CacheDocument): void {
     if (cache.untracked.length > 0) {
       throw new Error(
-        "译文缓存中存在未加锚点的内容，请先清理后再保存摘要。",
+        tError("sync.summaryUntrackedCache"),
       );
     }
     if (cache.orphanAnchors.length > 0) {
       throw new Error(
-        "译文缓存中存在找不到译文块的锚点，请先清理后再保存摘要。",
+        tError("sync.summaryOrphanAnchor"),
       );
     }
   }
@@ -978,7 +997,7 @@ export class SyncService {
     const summaryText = text.trim();
     if (summaryText.length > MAX_SUMMARY_CHARS) {
       throw new Error(
-        `摘要过长（超过 ${MAX_SUMMARY_CHARS} 字符），请精简后再保存。`,
+        tError("sync.summaryTooLong", { chars: MAX_SUMMARY_CHARS }),
       );
     }
     const cache = parseCacheDocument(state.cacheText ?? "", this.md);
@@ -1022,7 +1041,7 @@ export class SyncService {
     return this.withLock(sourceUri, async () => {
       const state = await this.loadState(sourceUri, false);
       if (!state.cacheText?.trim()) {
-        throw new Error("译文缓存不存在，无法关联译文插入块。");
+        throw new Error(tError("sync.cacheMissingLink"));
       }
       let cacheText = state.cacheText;
       const usedIds = new Set<string>();
@@ -1035,7 +1054,7 @@ export class SyncService {
         );
         if (generated.blocks.length !== 1) {
           throw new Error(
-            "回译结果包含多个 Markdown 块，无法自动关联到单个译文块。",
+            tError("sync.backMultiBlock"),
           );
         }
         const generatedBlock = generated.blocks[0];
@@ -1043,7 +1062,7 @@ export class SyncService {
           (block) => block.hash === generatedBlock.hash,
         );
         if (!target) {
-          throw new Error("找不到回译生成的原文块，无法关联译文插入块。");
+          throw new Error(tError("sync.backSourceMissingLink"));
         }
         const cache = parseCacheDocument(cacheText, this.md);
         const alignment = alignDocument(source.blocks, cache);
@@ -1051,7 +1070,7 @@ export class SyncService {
           alignment.blocks.map((block) => [block.source.index, block]),
         );
         if (byIndex.get(target.index)?.cache) {
-          throw new Error("回译生成的原文块已经有译文，无法重复关联。");
+          throw new Error(tError("sync.backSourceAlreadyTranslated"));
         }
 
         const entries = cache.blocks.map((block) => ({
@@ -1126,16 +1145,16 @@ export class SyncService {
     text: string,
   ): Promise<string> {
     if (!text.trim()) {
-      throw new Error("译文块不能为空。");
+      throw new Error(tError("sync.emptyTargetBlock"));
     }
     const state = await this.loadState(sourceUri, false);
     const source = parseMarkdownDocument(state.sourceText, this.md);
     const cache = parseCacheDocument(state.cacheText ?? "", this.md);
     if (cache.untracked.length > 0) {
-      throw new Error("译文缓存中存在未加锚点的内容，无法插入译文块。");
+      throw new Error(tError("sync.cacheUntrackedForTargetInsert"));
     }
     if (afterIndex !== -1 && !source.blocks.some((item) => item.index === afterIndex)) {
-      throw new Error(`找不到要插入到的原文块：${afterIndex + 1}。`);
+      throw new Error(tError("common.missingInsertedSourceBlock", { index: afterIndex + 1 }));
     }
     const alignment = alignDocument(source.blocks, cache);
     const entries = this.orderedCacheEntries(cache);
@@ -1210,7 +1229,7 @@ export class SyncService {
     text: string,
   ): Promise<string> {
     if (!text.trim()) {
-      throw new Error("译文块不能为空。");
+      throw new Error(tError("sync.emptyTargetBlock"));
     }
     const state = await this.loadState(sourceUri, false);
     const cache = parseCacheDocument(state.cacheText ?? "", this.md);
@@ -1218,7 +1237,7 @@ export class SyncService {
       (item) => item.anchor.id === targetId,
     );
     if (!target) {
-      throw new Error("这个译文块已不存在。");
+      throw new Error(tError("sync.targetMissing"));
     }
     const parsed = parseMarkdownDocument(text, this.md);
     const kind = parsed.blocks[0]?.kind ?? "other";
@@ -1300,7 +1319,7 @@ export class SyncService {
       (item) => item.anchor.id === targetId,
     );
     if (!target) {
-      throw new Error("这个译文块已不存在。");
+      throw new Error(tError("sync.targetMissing"));
     }
     const assistSettings = this.resolveAssist(assist);
     const summary = this.summaryForCache(cache, assistSettings);
@@ -1313,7 +1332,7 @@ export class SyncService {
     const parsed = parseMarkdownDocument(generated, this.md);
     if (parsed.blocks.length !== 1) {
       throw new Error(
-        "回译结果包含多个 Markdown 块，无法自动关联到单个译文块。",
+        tError("sync.backMultiBlock"),
       );
     }
     const ordered = [...cache.blocks, ...cache.targetBlocks].sort(
@@ -1383,17 +1402,17 @@ export class SyncService {
       (item) => item.anchor.id === targetId,
     );
     if (!target) {
-      throw new Error("这个译文块已不存在或已经关联原文。");
+      throw new Error(tError("sync.targetMissingOrLinked"));
     }
     const generated = parseMarkdownDocument(generatedSourceText, this.md);
     if (generated.blocks.length !== 1) {
-      throw new Error("回译生成的原文不是单个 Markdown 块，无法关联。");
+      throw new Error(tError("sync.backNotSingleBlock"));
     }
     const sourceBlock = source.blocks.find(
       (item) => item.hash === generated.blocks[0].hash,
     );
     if (!sourceBlock) {
-      throw new Error("找不到回译生成的原文块，无法关联译文。");
+      throw new Error(tError("sync.backSourceMissing"));
     }
     const entries = this.orderedCacheEntries(cache).map((entry) =>
       entry.anchor.id === targetId
@@ -1442,7 +1461,7 @@ export class SyncService {
       }
       const generated = parseMarkdownDocument(generatedSourceText, this.md);
       if (generated.blocks.length !== 1) {
-        throw new Error("回译生成的原文不是单个 Markdown 块，无法关联译文。");
+        throw new Error(tError("sync.backNotSingleBlockForTarget"));
       }
       const source = parseMarkdownDocument(state.sourceText, this.md);
       const matched = source.blocks.filter(
@@ -1589,7 +1608,7 @@ export class SyncService {
     return this.withLock(sourceUri, async () => {
       const state = await this.loadState(sourceUri, true);
       if (!state.cacheText || !state.cacheText.trim()) {
-        throw new Error("译文缓存不存在，无法标记已同步。");
+        throw new Error(tError("sync.cacheMissingMarkSynced"));
       }
       const source = parseMarkdownDocument(state.sourceText, this.md);
       const cache = parseCacheDocument(state.cacheText, this.md);
@@ -1598,7 +1617,7 @@ export class SyncService {
         (item) => item.source.index === blockIndex,
       );
       if (!aligned?.cache) {
-        throw new Error("这个块还没有译文，无法标记已同步。");
+        throw new Error(tError("sync.noTranslationMarkSynced"));
       }
       const edited = markCachedBlockSynced({
         cacheText: state.cacheText,
@@ -1652,13 +1671,17 @@ export class SyncService {
     copiedCount: number;
   }> {
     if (translationUri.toString() === sourceUri.toString()) {
-      throw new Error("不能把原文文件本身导入为译文。");
+      throw new Error(tError("sync.importSameFile"));
     }
     return this.withLock(sourceUri, async () => {
-      const state = await this.loadState(sourceUri, true, "导入译文");
+      const state = await this.loadState(
+        sourceUri,
+        true,
+        tError("sync.purposeImport"),
+      );
       const bytes = await vscode.workspace.fs.readFile(translationUri);
       if (bytes.byteLength > 10_000_000) {
-        throw new Error("译文文件超过 10 MB，已拒绝导入。");
+        throw new Error(tError("sync.importTooLarge"));
       }
       const translationText = new TextDecoder("utf-8").decode(bytes);
       const imported = buildImportedCache(
@@ -1716,10 +1739,10 @@ export class SyncService {
    */
   async clearAllCaches(): Promise<number> {
     if (this.inFlight.size > 0) {
-      throw new Error("有同步或导入任务正在进行，请稍后再清除所有缓存。");
+      throw new Error(tError("sync.clearAllBusy"));
     }
     if (this.clearingAllCaches) {
-      throw new Error("正在清除所有缓存，请稍候。");
+      throw new Error(tError("sync.clearingCacheBusy"));
     }
     this.clearingAllCaches = true;
     try {
@@ -1743,7 +1766,7 @@ export class SyncService {
     const source = parseMarkdownDocument(document.getText(), this.md);
     const block = source.blocks.find((item) => item.index === blockIndex);
     if (!block) {
-      throw new Error(`找不到第 ${blockIndex + 1} 个原文块。`);
+      throw new Error(tError("common.missingSourceBlock", { index: blockIndex + 1 }));
     }
     const endLine = Math.max(block.startLine, block.endLine - 1);
     const selection = new vscode.Range(
@@ -1764,7 +1787,7 @@ export class SyncService {
    *
    * 安全约束：拒绝协议相对地址（`//`、`\\`）；外部地址只允许 http/https/mailto；
    * 页内锚点直接忽略；相对路径按原文目录解析，Markdown 文件用编辑器打开，其他文件
-   * 交给 `vscode.open`。无法解析或协议不受支持时抛出中文错误。
+   * 交给 `vscode.open`。无法解析或协议不受支持时抛出本地化错误。
    */
   async openLink(sourceUri: vscode.Uri, rawHref: string): Promise<void> {
     const href = rawHref.trim();
@@ -1773,13 +1796,13 @@ export class SyncService {
     }
     // 协议相对地址会被解析成当前页面协议，可能指向不可信网络位置，直接拒绝。
     if (/^[\\/]{2}/.test(href)) {
-      throw new Error("出于安全考虑，不支持协议相对或网络共享链接。");
+      throw new Error(tError("sync.protocolRelativeLink"));
     }
     let parsed: vscode.Uri;
     try {
       parsed = vscode.Uri.parse(href, true);
     } catch {
-      throw new Error("无法解析这个链接。");
+      throw new Error(tError("sync.invalidLink"));
     }
     const scheme = parsed.scheme.toLowerCase();
     if (scheme) {
@@ -1788,7 +1811,7 @@ export class SyncService {
         await vscode.env.openExternal(parsed);
         return;
       }
-      throw new Error(`出于安全考虑，不支持打开 ${scheme}: 链接。`);
+      throw new Error(tError("sync.unsupportedLinkScheme", { scheme: scheme }));
     }
     // 纯页内锚点无需打开任何文件。
     if (parsed.fragment && !parsed.path) {
@@ -1812,7 +1835,7 @@ export class SyncService {
           relative,
         );
     if (target.scheme !== "file") {
-      throw new Error("链接目标不是本地文件。");
+      throw new Error(tError("sync.linkNotLocalFile"));
     }
     const extension = path.extname(target.fsPath).toLowerCase();
     if (extension === ".md" || extension === ".markdown" || extension === ".mdx") {
@@ -1916,7 +1939,7 @@ export class SyncService {
    * @param sourceUri 源 Markdown 文件。
    * @param action 已持锁时执行的操作。
    * @returns action 的返回值。
-   * @throws 清空缓存进行中或同文件已有任务时抛出中文错误。
+   * @throws 清空缓存进行中或同文件已有任务时抛出本地化错误。
    */
   async runWithSourceLock<T>(
     sourceUri: vscode.Uri,
@@ -1938,10 +1961,10 @@ export class SyncService {
     const key = sourceUri.toString();
     // 清空缓存与写缓存不能交错，否则可能把文件写回正在删除的目录。
     if (this.clearingAllCaches) {
-      throw new Error("正在清除所有缓存，请稍后再执行此操作。");
+      throw new Error(tError("sync.clearingCacheBusyOp"));
     }
     if (this.inFlight.has(key)) {
-      throw new Error("这个文件已有同步任务正在进行，请稍候。");
+      throw new Error(tError("sync.fileSyncBusy"));
     }
     this.inFlight.add(key);
     try {

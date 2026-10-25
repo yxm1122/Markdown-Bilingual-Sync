@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { replaceCachedBlock } from "../src/cache/editCache";
 import { createDeletedMarker } from "../src/cache/deletedMarker";
 import { buildExportDiff } from "../src/export/diffPreview";
-import { UI_TEXT } from "../src/i18n/zh";
+import { UI_TEXT } from "../src/i18n";
 import { serializeAnchor } from "../src/markdown/anchors";
 import { buildPreviewHtml } from "../src/preview/html";
 import { buildPreviewModel } from "../src/preview/previewModel";
@@ -785,8 +785,15 @@ describe("buildPreviewHtml", () => {
     });
 
     expect(html).toContain('data-summary-panel');
+    expect(html).toContain('<html lang="zh-cn">');
     expect(html).toContain("这是全文摘要。");
     expect(html).toContain("可能过期");
+    const expectedTime = new Intl.DateTimeFormat("zh-cn", {
+      dateStyle: "medium",
+      timeStyle: "short",
+    }).format(new Date("2026-10-24T00:00:00.000Z"));
+    expect(html).toContain(expectedTime);
+    expect(html).not.toContain("2026-10-24T00:00:00.000Z");
     expect(html).toContain('data-assist-toggle="stableTranslation"');
     expect(html).toContain('data-assist-toggle="summaryContext" checked');
     expect(html).toContain('data-action="generateSummary"');
@@ -797,6 +804,37 @@ describe("buildPreviewHtml", () => {
     expect(html).toContain(`title="${UI_TEXT.preview.summary.useSummaryTitle}"`);
     expect(UI_TEXT.preview.summary.stableTranslationTitle).toContain("与全文摘要");
     expect(UI_TEXT.preview.summary.useSummaryTitle).toContain("token 预算");
+  });
+
+  it("maps persisted summary provider ids and legacy batch prefixes to localized labels", async () => {
+    const result = await translate();
+    const model = buildPreviewModel({
+      sourceText: SOURCE,
+      cacheText: result.cacheText,
+      ...LABELS,
+      assist: {
+        stableTranslation: true,
+        summaryContext: true,
+        summary: {
+          text: "这是全文摘要。",
+          stale: false,
+          updatedAt: "2026-10-24T00:00:00.000Z",
+          model: "batch:openai",
+          tokens: 12,
+          canGenerate: true,
+        },
+      },
+    });
+    const html = buildPreviewHtml({
+      model,
+      nonce: "test-nonce",
+      csp: "default-src 'none'",
+      cssHref: "preview.css",
+      scriptHref: "preview.js",
+      katexHref: "katex.css",
+    });
+    expect(html).toContain(UI_TEXT.providers.openaiCompatible);
+    expect(html).not.toContain("batch:openai");
   });
 
   it("escapes document metadata and warnings", () => {

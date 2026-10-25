@@ -7,7 +7,7 @@
 ```bash
 npm run typecheck     # TypeScript strict 检查
 npm test              # Vitest 全量运行
-npm run test:watch    # 监听模式
+npm run test:watch    # 监听模式（启动前自动生成 l10n bundle）
 npm run preview:sample  # 生成静态预览 HTML
 npm run package       # 构建 + 打包 VSIX
 ```
@@ -17,7 +17,8 @@ CI 会依次执行 `npm ci`、`typecheck`、`test`、`package`。本地提交前
 ## 2. 测试栈
 
 - **Vitest 3**：测试运行在 Node 中，不启动 VS Code。
-- **VS Code API mock**：依赖 `vscode` 的适配层测试使用 `vi.mock("vscode")` / `vi.hoisted` 提供最小桩（见 `test/cacheStore.test.ts`、`test/syncEditing.test.ts`、`test/exportService.test.ts`）。
+- **全局 `vscode` stub**：`vitest.config.ts` 把 `vscode` alias 到 `test/vscodeStub.ts`。stub 的 `l10n.t` 从 `l10n/bundle.l10n.zh-cn.json` 取译文，默认 locale 为 `zh-cn`，因此现有中文断言可直接保留；需要英文 locale 的用例在 `vi.resetModules()` 后修改 stub 的 `env.language`。
+- **局部 mock**：需要断言 `vscode` 调用的测试仍用 `vi.mock("vscode")` / `vi.hoisted`，并展开 stub 以保留 `l10n`/`env`（见 `test/cacheStore.test.ts`、`test/syncEditing.test.ts`、`test/exportService.test.ts`）。
 - **共享样例**：`test/helpers.ts` 提供 `SOURCE`、`makeMd()`、`translate()`（Mock Provider 同步）和 `inspect()`（解析 + 对齐）。
 - **无真实网络**：Provider 测试使用假响应或注入配置；不要调用真实 API。
 
@@ -49,6 +50,13 @@ CI 会依次执行 `npm ci`、`typecheck`、`test`、`package`。本地提交前
 | `previewModel.test.ts` | 块状态、统计、分栏/只读/占位、摘要面板、HTML 转义、悬停提示 |
 | `taskMonitor.test.ts` | 任务状态机、取消、历史快照 |
 | `language.test.ts` | markdown/skill 支持、manifest 激活与菜单条件 |
+| `i18nCatalog.test.ts` | en/zh key 与占位符一致性、bundle 新鲜度、中/英文 locale 行为 |
+| `i18nErrors.test.ts` | 错误 key 唯一性、bundle 覆盖、中/英文 `tError` 行为 |
+| `i18nFormat.test.ts` | 英文/中文日期格式、英文预览 Webview 与稳定 provider 显示名 |
+| `i18nUnused.test.ts` | UI_TEXT 与错误目录的未引用 key 检查 |
+| `htmlEscaping.test.ts` | 本地化文案含引号/尖括号时的 HTML 转义 |
+| `packageNls.test.ts` | `%key%` 引用完整性、品牌字段/命令/设置与双语言 key 集合 |
+| `taskViewHtml.test.ts` | 任务面板静态骨架、语言选择器、`<html lang>` 与注入文案 |
 
 `align.ts` 没有独立测试文件，对齐逻辑通过 `sync`、`previewModel`、`export` 和 `syncEditing` 测试间接覆盖。修改对齐算法时应主动补充直接用例。
 
@@ -86,7 +94,7 @@ const anchor = serializeAnchor({
 
 ### 4.3 VS Code 适配层
 
-对 `vscode` 的依赖用 `vi.mock("vscode")` 提供最小桩。常见需要：
+依赖 `vscode` 的适配层默认由全局 stub 提供；需要精确断言调用时，用 `vi.mock("vscode")` 覆盖并展开 `test/vscodeStub.ts` 的实现。常见需要：
 
 - `workspace.getConfiguration`
 - `workspace.fs.readFile/writeFile/stat/delete`
@@ -113,6 +121,14 @@ const anchor = serializeAnchor({
 - 两个 assist 开关的 `title` 提示存在。
 
 这类测试不能替代真实浏览器渲染；CSS 布局、滚动同步、拖拽、焦点陷阱仍需手动 E2E。
+
+### 4.6 本地化
+
+- `src/i18n/catalog.ts` 的 `collectCatalogIssues` 校验 en/zh key、占位符与错误目录；`buildL10nBundles` 还会拒绝同一英文对应不同中文。
+- `test/i18nCatalog.test.ts` 断言磁盘上的两份 bundle 与目录生成结果一致；修改文案后必须运行 `npm run l10n:build`。
+- `test/packageNls.test.ts` 校验 `package.json` 中每个 `%key%` 在两个 `package.nls*.json` 中都存在且无未使用 key。
+- 默认测试 locale 为 zh-cn；英文 locale 行为用 `vi.resetModules()` + 动态 import 覆盖，并在用例结束恢复 `env.language`。
+- Webview 测试断言 `<html lang>`、本地化注入文案与 `Intl` 日期格式；真实 VS Code 语言切换仍需用 `--locale=zh-cn` / `--locale=en` 手动验证。
 
 ## 5. CI
 

@@ -84,11 +84,12 @@ src/
   glossary/             术语表解析与存储
   batch/                目录扫描、文件级并发
   status/               任务状态机、任务面板、状态栏
-  i18n/                 中文 UI 文案
+  i18n/                 英文/中文 UI 目录、领域错误目录、l10n 目录校验
   util/                 哈希、语言标签、文本规范化
 media/                  预览/任务面板的浏览器侧 JS/CSS、图标、KaTeX
-test/                   Vitest 测试与共享样例
-scripts/                构建辅助与静态预览脚本
+l10n/                   运行时 l10n bundle（构建生成，打进 VSIX）
+test/                   Vitest 测试、vscode stub 与共享样例
+scripts/                构建辅助、l10n 生成与静态预览脚本
 samples/                示例 Markdown、译文与资源
 ```
 
