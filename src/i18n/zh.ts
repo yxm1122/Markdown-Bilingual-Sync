@@ -230,7 +230,11 @@ export const UI_TEXT = {
       manual: "手动编辑",
       staleHint: "原文已变化，摘要仍会作为上下文使用。",
       useSummary: "使用全文摘要上下文",
+      useSummaryTitle:
+        "仅在已生成全文摘要时生效：把摘要作为整篇文档的上下文发送给 AI，并计入每批请求的 token 预算。",
       stableTranslation: "参考上一版译文",
+      stableTranslationTitle:
+        "稳定翻译：重新翻译时，把该块上一次的译文发送给 AI 作为修订参考，减少细微修改带来的措辞波动；回译时改为参考当前原文。此开关与全文摘要的生成无关。",
       unsupported: "当前翻译服务不支持自动生成，请手动填写。",
       noSummary: "未生成",
       generated: "已生成",

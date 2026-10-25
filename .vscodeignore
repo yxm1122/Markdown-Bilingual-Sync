@@ -3,6 +3,8 @@
 src/**
 scripts/**
 samples/**
+docs/**
+HANDOFF.md
 node_modules/**
 dist/**/*.map
 tsconfig.json

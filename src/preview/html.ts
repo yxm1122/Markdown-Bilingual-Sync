@@ -760,8 +760,8 @@ function renderSummaryPanel(model: PreviewModel): string {
       <button type="button" class="mbs-button mbs-button-primary" data-action="generateSummary"${summary.canGenerate ? "" : ` disabled title="${escapeHtml(T.summary.unsupported)}"`}>${T.summary.generate}</button>
       <button type="button" class="mbs-button" data-action="saveSummary">${T.summary.save}</button>
       <button type="button" class="mbs-button" data-action="clearSummary"${hasSummary ? "" : " disabled"}>${T.summary.clear}</button>
-      <label class="mbs-assist-toggle"><input type="checkbox" data-assist-toggle="stableTranslation"${assist.stableTranslation ? " checked" : ""}> ${T.summary.stableTranslation}</label>
-      <label class="mbs-assist-toggle"><input type="checkbox" data-assist-toggle="summaryContext"${assist.summaryContext ? " checked" : ""}${hasSummary ? "" : " disabled"}> ${T.summary.useSummary}</label>
+      <label class="mbs-assist-toggle" title="${escapeHtml(T.summary.stableTranslationTitle)}"><input type="checkbox" data-assist-toggle="stableTranslation"${assist.stableTranslation ? " checked" : ""}> ${T.summary.stableTranslation}</label>
+      <label class="mbs-assist-toggle" title="${escapeHtml(T.summary.useSummaryTitle)}"><input type="checkbox" data-assist-toggle="summaryContext"${assist.summaryContext ? " checked" : ""}${hasSummary ? "" : " disabled"}> ${T.summary.useSummary}</label>
     </div>
     <textarea class="mbs-summary-text" data-summary-text spellcheck="false" rows="8" placeholder="${escapeHtml(T.summary.placeholder)}">${escapeHtml(summary.text)}</textarea>
     <p class="mbs-summary-meta">${escapeHtml(meta.join(" · "))}${summary.stale ? ` · ${escapeHtml(T.summary.staleHint)}` : ""}</p>

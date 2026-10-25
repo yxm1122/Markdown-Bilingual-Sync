@@ -2,7 +2,7 @@
   "name": "markdown-bilingual-sync",
   "displayName": "Markdown Bilingual Sync",
   "description": "AI-powered bilingual Markdown translation and preview for VS Code: block-anchored cache, translation locking, split views, glossary, and export.",
-  "version": "0.10.0",
+  "version": "0.10.1",
   "publisher": "yxm1122",
   "license": "MIT",
   "repository": {

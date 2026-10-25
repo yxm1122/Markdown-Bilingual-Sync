@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import { replaceCachedBlock } from "../src/cache/editCache";
 import { createDeletedMarker } from "../src/cache/deletedMarker";
 import { buildExportDiff } from "../src/export/diffPreview";
+import { UI_TEXT } from "../src/i18n/zh";
 import { serializeAnchor } from "../src/markdown/anchors";
 import { buildPreviewHtml } from "../src/preview/html";
 import { buildPreviewModel } from "../src/preview/previewModel";
@@ -790,6 +791,12 @@ describe("buildPreviewHtml", () => {
     expect(html).toContain('data-assist-toggle="summaryContext" checked');
     expect(html).toContain('data-action="generateSummary"');
     expect(html).not.toContain('data-assist-toggle="stableTranslation" checked');
+    expect(html).toContain(
+      `title="${UI_TEXT.preview.summary.stableTranslationTitle}"`,
+    );
+    expect(html).toContain(`title="${UI_TEXT.preview.summary.useSummaryTitle}"`);
+    expect(UI_TEXT.preview.summary.stableTranslationTitle).toContain("与全文摘要");
+    expect(UI_TEXT.preview.summary.useSummaryTitle).toContain("token 预算");
   });
 
   it("escapes document metadata and warnings", () => {

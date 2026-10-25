@@ -312,6 +312,8 @@ npm run package
 
 打包产物位于 `artifacts/vsix/markdown-bilingual-sync.vsix`。示例文档为 `samples/demo.md`。
 
+架构、缓存格式、预览协议、开发流程与测试指南见 [`docs/`](docs/README.md)。
+
 CI 配置位于 `.github/workflows/ci.yml`：每次推送和拉取请求会执行 `npm ci`、类型检查、全量测试，并打包 VSIX 作为构建产物。
 
 ## 路线图
