@@ -3,9 +3,11 @@
 [![CI](https://github.com/yxm1122/Markdown-Bilingual-Sync/actions/workflows/ci.yml/badge.svg)](https://github.com/yxm1122/Markdown-Bilingual-Sync/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://github.com/yxm1122/Markdown-Bilingual-Sync/blob/main/LICENSE)
 
+[English](README.en.md) | 中文
+
 在 VS Code 中翻译 Markdown，并以双语预览阅读；原文是唯一事实源，手动修改的译文会自动锁定，不会被静默覆盖。
 
-当前版本 **0.12.0**：完成 Phase 3 能力，并加入全插件本地化（英文默认、内置 zh-cn）；支持本地 VSIX 安装与从源码构建。
+当前版本 **0.12.0**：加入全插件本地化（英文默认、内置 zh-cn）；支持本地 VSIX 安装与从源码构建。
 
 ## 功能
 
@@ -128,7 +130,7 @@ npm run package
 
 - 预览顶部可在 **并排 / 交错 / 分栏** 三种布局间切换；布局会跨会话记住。
 - **分栏** 会创建原文、译文两个独立滚动窗格，而不是把每块的双语内容并排塞在一起。
-- 滚动任一窗格时，另一侧会按块锚点同步到对应块；插入/删除造成的单侧块在缺失的一栏显示与并排/交错模式一致的普通块头和占位说明，两边仍保持一一对应的块行。
+- 滚动任一窗格时，另一侧会以对应块为锚点，并按块内滚动进度插值同步；长块滚动时不会卡在块顶。插入/删除造成的单侧块在缺失的一栏显示与并排/交错模式一致的普通块头和占位说明，两边仍保持一一对应的块行。
 - 分栏中仍可执行原文/译文编辑、插入、删除、重译、回译与撤销删除；**重新翻译** 位于原文块，**定位原文** 位于译文块，插入和删除按钮在两栏都可用。
 - 每个块标题栏右上角有 **⋯** 按钮，默认隐藏该块的全部操作；点击后操作按钮在标题下方换行展开，鼠标离开块时自动收起。仅原文/仅译文模式不显示 ⋯，操作按钮直接内联在块头右侧。
 - **仅原文 / 仅译文** 模式与分栏兼容，会保留对应窗格并占满宽度。
@@ -291,7 +293,7 @@ npm run package
 - 仅支持本地文件流程；没有云端任务队列或多用户协作。
 - 代码块、数学公式、HTML 和 frontmatter 按设计原样复制，不参与 AI 翻译。
 - 预览内编辑按块进行，不支持跨块拖选或大范围结构重排；复杂结构调整建议直接编辑源文件。
-- 分栏滚动同步按块对齐，不保证同一块内逐像素同步。
+- 分栏滚动同步以块为锚点，并按块内滚动进度比例映射；块高差异很大时仍可能与源栏的视觉位置不完全一致，但不会在长块内卡住。
 - 导入已有译文要求原文与译文顶层块数量和类型逐块一致；结构不同会拒绝导入。
 - Provider 请求共享 `translationConcurrency` 并发上限（默认 8）；限流明显时调低，单文件块很多时可适当调高 `apiBatchTokenBudget`。
 - 批量导出只提供一次汇总确认，不逐个文件显示差异预览；需要逐文件确认时使用普通导出。
@@ -307,7 +309,7 @@ npm run package
 - 不支持 Mermaid、原始 HTML、自定义提示词和流式输出。
 - 术语表是全局的，不支持项目级覆盖。
 - UI 提供英文（默认 source）与 zh-cn 两种语言；其他 VS Code 语言回退英文。界面、预览与通知文案来自 `src/i18n/en.ts` / `src/i18n/zh.ts`，错误与警告来自 `src/i18n/errors/*`，清单文案来自 `package.nls*.json`。
-- README 与 Marketplace 列表目前仍为中文；运行时与扩展清单文案支持英文/zh-cn，未单独维护英文 README。
+- GitHub 默认 README 为中文，`README.en.md` 作为 Marketplace 英文 README 由打包脚本使用；两者同步维护。
 - 非实时同步：保存只标记状态，翻译由手动命令触发。
 
 ## 许可证
@@ -329,22 +331,6 @@ npm run package
 
 打包产物位于 `artifacts/vsix/markdown-bilingual-sync.vsix`。示例文档为 `samples/demo.md`。
 
-架构、缓存格式、预览协议、开发流程与测试指南见 [`docs/`](docs/README.md)。
+架构、缓存格式、预览协议、开发流程与测试指南见 [`docs/`](docs/README.md)。翻译质量评估见 [`docs/evaluation.md`](docs/evaluation.md)；可用 `npm run eval:translation -- --provider mock` 跑离线管线烟测。
 
 CI 配置位于 `.github/workflows/ci.yml`：每次推送和拉取请求会执行 `npm ci`、类型检查、全量测试，并打包 VSIX 作为构建产物。
-
-## 路线图
-
-### Phase 2 — 维护能力（已完成）
-
-- 导入已有译文并全量标记为译文锁定。
-- 真正的左右分栏与块级滚动同步。
-- 通用 HTTP Provider 模板（Key 仍只存 SecretStorage）。
-- 缓存打开/清理脚手架。
-
-### Phase 3 — 效率与发布准备（已完成）
-
-- 目录/批量翻译与导出队列。
-- Provider 预设与缓存清理（缓存路径按源文件哈希确定性生成，不需要额外索引）。
-- CI/集成测试与发布准备（UI 默认英文，提供 zh-cn 本地化）。
-- 全插件本地化：`package.nls*` 清单文案 + `l10n/*` 运行时文案，Webview 语言名与日期/耗时格式化使用当前 locale。

@@ -39,6 +39,7 @@ npm run compile
 | [预览与 Webview](preview.md) | 预览渲染管线、布局/只读、消息协议、原文暂存与写回、摘要面板、CSP |
 | [开发流程](development.md) | 本地调试、新增命令/设置/Provider/UI 动作、打包、发布检查清单、常见坑 |
 | [测试指南](testing.md) | 测试栈、测试文件分工、VS Code mock、CI、隔离环境 E2E、覆盖缺口 |
+| [翻译质量评估](evaluation.md) | 评估集、自动指标、Mock/真实 Provider 运行方式、报告与人工评分 |
 
 ## 架构速览
 

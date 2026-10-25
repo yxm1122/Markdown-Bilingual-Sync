@@ -4,7 +4,9 @@ src/**
 scripts/**
 samples/**
 docs/**
+eval/**
 HANDOFF.md
+README.md
 node_modules/**
 dist/**/*.map
 tsconfig.json

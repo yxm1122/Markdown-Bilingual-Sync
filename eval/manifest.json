@@ -1,0 +1,136 @@
+{
+  "sourceLanguage": "en",
+  "targetLanguage": "zh-CN",
+  "glossary": [
+    { "source": "block", "target": "块" },
+    { "source": "preview", "target": "预览" },
+    { "source": "translation lock", "target": "译文锁定" },
+    { "source": "cache", "target": "缓存" },
+    { "source": "provider", "target": "翻译服务" },
+    { "source": "workspace", "target": "工作区" },
+    { "source": "token budget", "target": "token 预算" },
+    { "source": "glossary", "target": "术语表" },
+    { "source": "heading", "target": "标题" },
+    { "source": "paragraph", "target": "段落" },
+    { "source": "table", "target": "表格" },
+    { "source": "code block", "target": "代码块" },
+    { "source": "footnote", "target": "脚注" },
+    { "source": "summary", "target": "摘要" },
+    { "source": "stable translation", "target": "稳定翻译" },
+    { "source": "back-translation", "target": "回译" }
+  ],
+  "cases": [
+    {
+      "id": "basic-structure",
+      "source": "cases/basic-structure/source.md",
+      "reference": "cases/basic-structure/reference.zh.md",
+      "tags": ["headings", "paragraphs", "emphasis", "inline-code"],
+      "notes": "Three heading levels with paragraphs that mix bold, italic, inline code, and an arrow token; checks hierarchy and inline formatting preservation."
+    },
+    {
+      "id": "nested-lists",
+      "source": "cases/nested-lists/source.md",
+      "reference": "cases/nested-lists/reference.zh.md",
+      "tags": ["lists", "nested-lists", "task-lists", "list-fragments"],
+      "notes": "Bullet list with nested bullets, a nested ordered list with a further bullet level, and task items; checks marker, indentation, and checkbox preservation."
+    },
+    {
+      "id": "table-alignment",
+      "source": "cases/table-alignment/source.md",
+      "reference": "cases/table-alignment/reference.zh.md",
+      "tags": ["tables", "alignment", "inline-code", "links"],
+      "notes": "Four-column table with left, center, and right alignment, inline code markers, and a link per row; checks row/column count and alignment parity."
+    },
+    {
+      "id": "code-math",
+      "source": "cases/code-math/source.md",
+      "reference": "cases/code-math/reference.zh.md",
+      "tags": ["code", "math", "inline-code", "verbatim"],
+      "notes": "TypeScript code fence, inline math, and a display equation; code and math must remain byte-identical while surrounding prose is translated."
+    },
+    {
+      "id": "links-images-footnotes",
+      "source": "cases/links-images-footnotes/source.md",
+      "reference": "cases/links-images-footnotes/reference.zh.md",
+      "tags": ["links", "images", "footnotes", "alt-text"],
+      "notes": "Inline link, image with local URL, footnote reference and definition; link text and alt text are translated, URLs and footnote ids are unchanged."
+    },
+    {
+      "id": "alerts-quotes",
+      "source": "cases/alerts-quotes/source.md",
+      "reference": "cases/alerts-quotes/reference.zh.md",
+      "tags": ["blockquotes", "github-alerts", "note", "warning"],
+      "notes": "GitHub Alerts NOTE and WARNING plus a plain blockquote; checks marker lines, multi-line quote structure, and quote-level translation."
+    },
+    {
+      "id": "pronouns-ellipsis",
+      "source": "cases/pronouns-ellipsis/source.md",
+      "reference": "cases/pronouns-ellipsis/reference.zh.md",
+      "tags": ["pronouns", "ellipsis", "cohesion", "context"],
+      "notes": "Three paragraphs where it, that consistency, there, and doing so depend on earlier text; checks that Chinese references stay clear without literal pronoun copying."
+    },
+    {
+      "id": "terminology",
+      "source": "cases/terminology/source.md",
+      "reference": "cases/terminology/reference.zh.md",
+      "tags": ["terminology", "glossary", "technical-prose"],
+      "notes": "Three technical paragraphs that deliberately use all glossary terms; checks exact target renderings and consistent capitalization of token."
+    },
+    {
+      "id": "mixed-language",
+      "source": "cases/mixed-language/source.md",
+      "reference": "cases/mixed-language/reference.zh.md",
+      "tags": ["mixed-language", "preserve-chinese", "selective-translation"],
+      "notes": "English prose interleaved with existing Chinese sentences; the reference translates only English and keeps every Chinese sentence unchanged."
+    },
+    {
+      "id": "long-paragraph",
+      "source": "cases/long-paragraph/source.md",
+      "reference": "cases/long-paragraph/reference.zh.md",
+      "tags": ["long-paragraph", "requirements-list", "punctuation"],
+      "notes": "A single 120-200 word paragraph containing five numbered requirements inline; checks long-range coherence, full-width enumeration punctuation, and no accidental list creation."
+    },
+    {
+      "id": "frontmatter",
+      "source": "cases/frontmatter/source.md",
+      "reference": "cases/frontmatter/reference.zh.md",
+      "tags": ["frontmatter", "yaml", "byte-preservation"],
+      "notes": "YAML frontmatter with title, description, tags, and a boolean plus a short heading and paragraph; frontmatter must be preserved byte-for-byte."
+    },
+    {
+      "id": "cjk-punctuation",
+      "source": "cases/cjk-punctuation/source.md",
+      "reference": "cases/cjk-punctuation/reference.zh.md",
+      "tags": ["cjk-punctuation", "spacing", "links", "inline-code"],
+      "notes": "Three paragraphs mixing bold commands, code spans, and links; checks natural full-width punctuation and consistent spacing between CJK and Latin/code tokens."
+    },
+    {
+      "id": "inline-html-escapes",
+      "source": "cases/inline-html-escapes/source.md",
+      "reference": "cases/inline-html-escapes/reference.zh.md",
+      "tags": ["inline-html", "escaped-markdown", "double-backtick", "link-title"],
+      "notes": "Inline HTML tags, escaped pipe/asterisk, double-backtick code, and a link title; checks protected-token handling while translating inline HTML text."
+    },
+    {
+      "id": "negation-quantities",
+      "source": "cases/negation-quantities/source.md",
+      "reference": "cases/negation-quantities/reference.zh.md",
+      "tags": ["negation", "quantities", "dates", "accuracy"],
+      "notes": "Negation, quantities, and a time condition; automatic structure checks cannot judge these, so human review is required."
+    },
+    {
+      "id": "real-project-readme",
+      "source": "cases/real-project-readme/source.md",
+      "reference": "cases/real-project-readme/reference.zh.md",
+      "tags": ["real-document", "readme", "tables", "code", "links", "footnotes"],
+      "notes": "Full-length README for a fictional CLI: status line, features, install and quick-start fences, configuration table, troubleshooting, link and footnote; checks long-form block alignment."
+    },
+    {
+      "id": "real-operations-runbook",
+      "source": "cases/real-operations-runbook/source.md",
+      "reference": "cases/real-operations-runbook/reference.zh.md",
+      "tags": ["real-document", "runbook", "github-alerts", "code", "tables", "operations"],
+      "notes": "Production deployment runbook with a WARNING alert, prerequisites, numbered deploy and rollback steps, JSON request/response, error-code table, and a blockquote note."
+    }
+  ]
+}

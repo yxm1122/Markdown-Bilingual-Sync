@@ -232,7 +232,8 @@
 
   // ---- 分栏块级滚动同步 ----
   // 左右两侧块高度不同，不能按像素等比映射。这里以“源栏当前可见的第一个块”为锚点，
-  // 找到目标栏同一 data-sync-key 的块，把它的顶部对齐到相同偏移。
+  // 找到目标栏同一 data-sync-key 的块，并按锚点块内的滚动进度插值到目标块：
+  // 块顶对齐块顶、块底对齐块底，长块滚动时另一侧会平滑跟随而不是一直卡在块顶。
   function setupSplitScrollSync() {
     const source = document.querySelector(
       '.mbs-split-content[data-split-content="source"]',
@@ -251,6 +252,11 @@
 
     function pairedBlocks(pane) {
       return Array.from(pane.querySelectorAll("[data-sync-key]"));
+    }
+
+    /** 把值钳制到 [min, max]；min > max 时返回 min。 */
+    function clamp(value, min, max) {
+      return Math.max(min, Math.min(max, value));
     }
 
     function sync(from, to) {
@@ -272,20 +278,36 @@
         }
       }
       const key = anchor.dataset.syncKey;
-      const twin = pairedBlocks(to).find(function (block) {
+      const twins = pairedBlocks(to);
+      const twin = twins.find(function (block) {
         return block.dataset.syncKey === key;
       });
       if (!twin) {
         return;
       }
-      const toTop = to.getBoundingClientRect().top;
-      const twinTop = twin.getBoundingClientRect().top - toTop + to.scrollTop;
-      // offset 取锚点顶部相对源容器顶部的偏移（部分滚出时钳制为 0，保证块顶对齐）。
-      const offset = Math.max(
-        0,
-        anchor.getBoundingClientRect().top - fromTop,
-      );
-      const nextTop = Math.max(0, twinTop - offset);
+
+      const anchorTop =
+        anchor.getBoundingClientRect().top - fromTop + from.scrollTop;
+      const twinTop = twin.getBoundingClientRect().top -
+        (to.getBoundingClientRect().top) +
+        to.scrollTop;
+      const delta = from.scrollTop - anchorTop;
+      // 锚点尚未到达视口顶部时（块前有间距）保持同样的间距；进入块内后按块高
+      // 比例插值，长块滚动不会让另一侧一直停在 twinTop。
+      const mapped =
+        delta <= 0
+          ? delta
+          : (delta / Math.max(1, anchor.offsetHeight)) * twin.offsetHeight;
+      const fromMax = Math.max(0, from.scrollHeight - from.clientHeight);
+      const toMax = Math.max(0, to.scrollHeight - to.clientHeight);
+      let nextTop = twinTop + mapped;
+      // 顶部/底部按整体文档对齐，避免最后一块高度不同导致另一侧永远差一截。
+      if (from.scrollTop <= 1) {
+        nextTop = 0;
+      } else if (fromMax > 0 && from.scrollTop >= fromMax - 1) {
+        nextTop = toMax;
+      }
+      nextTop = clamp(nextTop, 0, toMax);
       // 小于 2px 视为已经对齐，避免亚像素抖动反复设置 scrollTop。
       if (Math.abs(to.scrollTop - nextTop) < 2) {
         return;

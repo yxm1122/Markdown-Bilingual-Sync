@@ -9,6 +9,7 @@ npm run typecheck     # TypeScript strict 检查
 npm test              # Vitest 全量运行
 npm run test:watch    # 监听模式（启动前自动生成 l10n bundle）
 npm run preview:sample  # 生成静态预览 HTML
+npm run eval:translation -- --provider mock  # 翻译质量评估管线烟测
 npm run package       # 构建 + 打包 VSIX
 ```
 
@@ -50,6 +51,8 @@ CI 会依次执行 `npm ci`、`typecheck`、`test`、`package`。本地提交前
 | `previewModel.test.ts` | 块状态、统计、分栏/只读/占位、摘要面板、HTML 转义、悬停提示 |
 | `taskMonitor.test.ts` | 任务状态机、取消、历史快照 |
 | `language.test.ts` | markdown/skill 支持、manifest 激活与菜单条件 |
+| `evaluationMetrics.test.ts` | 遗漏/回显、受保护片段、术语、结构、frontmatter、参考相似度等评估指标 |
+| `evaluationDataset.test.ts` | 16 个评估用例的结构/术语/参考译文自洽性 |
 | `i18nCatalog.test.ts` | en/zh key 与占位符一致性、bundle 新鲜度、中/英文 locale 行为 |
 | `i18nErrors.test.ts` | 错误 key 唯一性、bundle 覆盖、中/英文 `tError` 行为 |
 | `i18nFormat.test.ts` | 英文/中文日期格式、英文预览 Webview 与稳定 provider 显示名 |
@@ -192,3 +195,7 @@ code --user-data-dir "<repo>/tmp/dev-user" \
 - 打包后的 VSIX 在干净 profile 中的安装/升级行为。
 
 如果修改涉及这些区域，请在 PR/提交说明中写清手动验证步骤与结果。
+
+## 8. 翻译质量评估
+
+`npm run eval:translation` 会读取 `eval/` 的 16 个用例，生成候选译文、自动指标与人工评分表。`--provider mock` 只用于验证管线；真实质量评估需要手动配置 Provider Key 并运行，详见 [翻译质量评估](evaluation.md)。评估数据集本身由 `evaluationDataset.test.ts` 在 `npm test` 中校验。
