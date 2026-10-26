@@ -33,14 +33,14 @@ const stub = {
   },
   getState(): WebviewState | undefined {
     try {
-      return JSON.parse(localStorage.getItem("mbs-preview-state") || "{}");
+      return JSON.parse(window.localStorage.getItem("mbs-preview-state") || "{}");
     } catch {
       return undefined;
     }
   },
   setState(state: WebviewState) {
     try {
-      localStorage.setItem("mbs-preview-state", JSON.stringify(state));
+      window.localStorage.setItem("mbs-preview-state", JSON.stringify(state));
     } catch {
       /* ignore */
     }

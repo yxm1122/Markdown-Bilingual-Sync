@@ -131,7 +131,7 @@ SyncService.loadPreviewState（source + cache + summary）
   → 重新 update()
 ```
 
-`PreviewManager` 为每个源文件维护一个面板；`PreviewPanelSession` 保存布局、只读、原文暂存、摘要开关等会话状态。刷新通过 `updateQueue` 串行化，`updateVersion` 丢弃过期的异步渲染结果。首次加载写入完整壳，脚本发送 `ready` 后只发送模型/面板 state 消息；脚本、样式和稳定的 DOM 不再整页重建。
+`PreviewManager` 为每个源文件维护一个面板；`PreviewPanelSession` 保存布局、只读、原文暂存、摘要开关等会话状态。刷新通过 `updateQueue` 串行化，`updateVersion` 丢弃过期的异步渲染结果。首次加载写入完整壳，脚本发送 `ready` 后只发送模型/面板 state 消息；脚本、样式和稳定的 DOM 不再整页重建。内联编辑/插入草稿由编辑器组件本地持有，输入时不触发整棵块树 diff；分栏滚动同步只抑制对侧回声事件，避免连续滚动被节流。
 
 ### 3.3 原文编辑与写回
 
@@ -271,7 +271,7 @@ Provider 必须：
 - 导入只校验块数与块类型，不校验更细的 Markdown 结构。
 - `languageSuffix` 只取 BCP-47 主语言子标签，`zh-CN` 与 `zh-TW` 会共用同一个 `zh` 后缀。
 - 缓存写入本身不是原子操作；进程崩溃可能留下截断文件。源写回有锁与内存回滚，但缓存没有事务日志。
-- 单元测试不启动真实 VS Code / 浏览器；Webview 行为需要手动 E2E 验证。
+- 单元测试不启动真实 VS Code；Webview 有 jsdom 组件测试与 headless Edge 截图/性能脚本，真实主题注入、IME、CSP 与安装流程仍需要隔离 profile 手动 E2E。
 
 ## 8. 推荐阅读顺序
 

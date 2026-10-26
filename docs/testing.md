@@ -1,23 +1,26 @@
 # 测试指南
 
-测试目标：在不启动真实 VS Code、不访问真实 Provider 的前提下，覆盖切块、缓存、对齐、同步、编辑、导出、导入、分批与预览 HTML；真实 Extension Host 与 Webview 行为用隔离 profile 手动 E2E 补足。
+测试目标：在不启动真实 VS Code、不访问真实 Provider 的前提下，覆盖切块、缓存、对齐、同步、编辑、导出、导入、分批与预览 HTML。Webview 另有 jsdom 组件测试、headless Edge 截图矩阵与 320 块性能基线；真实 Extension Host、真实主题注入与输入法仍需隔离 profile 手动 E2E 补足。
 
 ## 1. 命令
 
 ```bash
 npm run typecheck     # TypeScript strict 检查
-npm test              # Vitest 全量运行
+npm test              # Vitest 全量运行（含 jsdom Webview 组件测试）
 npm run test:watch    # 监听模式（启动前自动生成 l10n bundle）
 npm run preview:sample  # 生成静态预览 HTML
+npm run ui:matrix     # 三主题 × 三布局 × 三模式 + 关键状态截图（需要 Edge）
+npm run ui:perf       # 320 块性能基线（需要 Edge，含 4× CPU 降速）
 npm run eval:translation -- --provider mock  # 翻译质量评估管线烟测
 npm run package       # 构建 + 打包 VSIX
 ```
 
-CI 会依次执行 `npm ci`、`typecheck`、`test`、`package`。本地提交前至少执行前三项。
+CI 会依次执行 `npm ci`、`typecheck`、`test`、`package`。本地提交前至少执行前三项；改 UI 时再跑 `ui:matrix` 与 `ui:perf`。
 
 ## 2. 测试栈
 
-- **Vitest 3**：测试运行在 Node 中，不启动 VS Code。
+- **Vitest 3**：纯逻辑测试运行在 Node 中，不启动 VS Code；Webview 组件测试在文件头用 `@vitest-environment jsdom` 切换环境。
+- **jsdom + Testing Library**：`@testing-library/preact` 挂载真实组件树；`test/webview/harness.ts` 负责注入文案、模拟 `acquireVsCodeApi`、记录上行消息，`test/webview/dom.ts` 补齐 jsdom 缺失的 `<dialog>`、`CSS.escape` 与 `localStorage`。
 - **全局 `vscode` stub**：`vitest.config.ts` 把 `vscode` alias 到 `test/vscodeStub.ts`。stub 的 `l10n.t` 从 `l10n/bundle.l10n.zh-cn.json` 取译文，默认 locale 为 `zh-cn`，因此现有中文断言可直接保留；需要英文 locale 的用例在 `vi.resetModules()` 后修改 stub 的 `env.language`。
 - **局部 mock**：需要断言 `vscode` 调用的测试仍用 `vi.mock("vscode")` / `vi.hoisted`，并展开 stub 以保留 `l10n`/`env`（见 `test/cacheStore.test.ts`、`test/syncEditing.test.ts`、`test/exportService.test.ts`）。
 - **共享样例**：`test/helpers.ts` 提供 `SOURCE`、`makeMd()`、`translate()`（Mock Provider 同步）和 `inspect()`（解析 + 对齐）。
@@ -63,6 +66,11 @@ CI 会依次执行 `npm ci`、`typecheck`、`test`、`package`。本地提交前
 | `packageNls.test.ts` | `%key%` 引用完整性、品牌字段/命令/设置与双语言 key 集合 |
 | `taskViewProvider.test.ts` | 任务 TreeView 节点、状态图标/详情、语言切换作用域与交换回滚 |
 | `appShell.test.ts` | 原生预览首屏 CSP、资源 URI、初始状态 JSON、文案注入与转义 |
+| `webview/app.render.test.tsx` | 首屏、统计、模式/布局切换、分栏只读、空状态、控件无障碍名称 |
+| `webview/app.editing.test.tsx` | 译文/原文编辑、待插入/独立译文、插入、删除/撤销、链接、菜单键盘导航 |
+| `webview/app.summary.test.tsx` | 摘要/术语表草稿、assist 开关、提示条/toast、宿主刷新时焦点与草稿保持、忙碌、脚注 |
+| `webview/app.dialogs.test.tsx` | 导出/原文 diff、写入态竞态、错误恢复、关闭与焦点 |
+| `webview/bridge.test.ts` | 首屏 JSON、格式化、VS Code API 与静态预览 localStorage 回退 |
 
 `align.ts` 没有独立测试文件，对齐逻辑通过 `sync`、`previewModel`、`export` 和 `syncEditing` 测试间接覆盖。修改对齐算法时应主动补充直接用例。
 
@@ -117,14 +125,80 @@ const anchor = serializeAnchor({
 - 用 Mock Provider 测试同步/预览，不要依赖网络。
 - 新增 Provider 时至少覆盖：成功、缺块/重复/空结果、HTTP 错误、取消、密钥不出现在错误文本。
 
-### 4.5 预览壳与原生 UI
+### 4.5 预览壳、组件测试与视觉/性能脚本
 
 生产预览由 `buildPreviewAppShell` + `src/webview/preview/app.tsx` 渲染：
 
 - `appShell.test.ts` 断言 CSP、资源 URI、初始状态 JSON、文案注入和 `</script>` 转义；
+- `test/webview/*.test.tsx` 在 jsdom 中挂载真实 Preact 组件，断言用户可见行为与上行消息，不读内部 state；
 - `previewModel.test.ts` 仍用旧的字符串渲染器（`src/preview/html.ts`，仅测试/历史参考）断言模型字段、统计和 HTML 转义；
-- 新 UI 的按钮、菜单和编辑态在 `app.tsx`；改动交互时用隔离 profile 跑真实 E2E（同步、分栏、只读、编辑、导出/原文 diff、滚动同步），并检查 `window.__stableTestMarker` 不丢失；
-- `npm run preview:sample` 生成原生静态页面，可用于视觉检查，不替代真实 Webview。
+- 真实 Webview 的主题注入、IME、HiDPI 与窗口缩放仍需隔离 profile 手动 E2E。
+
+#### 4.5.1 组件测试入口
+
+`test/webview/harness.ts` 在动态 import `app.tsx` 之前完成三件事：
+
+1. 往页面写入 `#mbs-ui-text`（真实 `UI_TEXT`），因为 `InlineEditor` 等组件仍从 bridge 的模块级 catalog 取取消按钮文案；
+2. 安装 `acquireVsCodeApi`，把 `send()` 的上行消息收集到 `messages`，并让 `getState/setState` 使用内存对象；
+3. 调用 `installDomPolyfills()` 补齐 jsdom 的 `<dialog>.showModal`、`CSS.escape` 与 Storage。
+
+用法：
+
+```ts
+// @vitest-environment jsdom
+const harness = await loadHarness();
+beforeEach(() => resetHarness());
+const { container } = render(<harness.App boot={makeBoot(makeModel())} text={harness.text} />);
+fireEvent.input(within(block).getByRole("textbox"), { target: { value: "新译文" } });
+expect(actions(harness)).toContainEqual({ type: "saveTargetEdit", text: "新译文", /* ... */ });
+```
+
+- 宿主消息用 `postHostMessage({ type: "state", state })` 模拟，内部会包 `act()`；
+- 夹具在 `test/webview/fixtures.ts`：`makeBlock` / `makeModel` / `makeBoot` / `makeExportConfirmation`；
+- 断言优先用角色、`aria-label`、标题和可见文本，避免绑定 class；结构性查询（如 `.pv-split`）只用于布局存在性。
+- 内联编辑与插入的草稿现在由编辑器本地持有；状态更新时用 `textarea` 同一节点与 `document.activeElement` 验证焦点/草稿保持。
+
+#### 4.5.2 截图矩阵
+
+```bash
+npm run ui:matrix
+```
+
+脚本先由 `render-sample` 生成 `tmp/preview-matrix-{dark,light,hc}.html` 与 `preview-empty-*.html`，再用 headless Edge 驱动生产 Webview 脚本，输出到 `artifacts/ui-matrix/`：
+
+- 三主题 × 三布局（columns/stacked/split）× 三模式（bilingual/source/target）= 27 张；
+- 每主题另拍 summary、export-dialog、source-dialog、editing、block-menu、split-readonly、busy、narrow(900×900)、empty，共 54 张；
+- `manifest.json` 记录视口、实际 PNG 尺寸、布局/模式/只读状态、横向溢出与控制台错误；
+- `index.html` 是联系表，`report.md` 是汇总；
+- 任一状态出现横向溢出、运行时异常或尺寸不一致，脚本以非零退出。
+
+静态主题是 VS Code 默认主题的令牌近似值，不是真实主题注入；它用于布局、对比度和状态色回归，不替代真实 Webview 检查。
+
+#### 4.5.3 性能基线
+
+```bash
+npm run ui:perf
+```
+
+生成 320 个顶层块（约 550 KiB HTML、1.25 万 DOM 节点）的文档，在 headless Edge 中测量：
+
+- 首屏挂载与首块绘制；
+- 布局/模式切换、宿主 `state` 更新、100 次连续输入；
+- 正文滚动与分栏滚动同步的帧间隔（p95/max）；
+- 在 4× CPU 降速下复测布局、更新、输入与滚动。
+
+产物在 `artifacts/ui-perf/`：`report.json`、`report.md`、`300-blocks.png`。预算失败会非零退出。当前基线（1440×960，本机）：
+
+| 路径 | 1× CPU | 4× CPU |
+| --- | --- | --- |
+| 首屏挂载 | ~60–70ms | — |
+| 布局切换（320 块） | ~130–150ms | ~1.0s |
+| 模式切换 | ~40–75ms | ~0.4s |
+| 宿主 state 更新 | ~32ms | ~50–100ms |
+| 100 次输入 | ~600ms（含每次让出任务） | ~3.4s |
+| 正文/分栏滚动帧 | 16.7–16.8ms | 33–50ms |
+
+数字是本机基线，不是跨机器 SLA；4× 用于放大主线程问题。内联编辑草稿由编辑器局部持有、分栏同步只锁“回声侧”，这两条是保持大文档输入与滚动可用的关键。
 
 ### 4.6 本地化
 
@@ -188,14 +262,14 @@ code --user-data-dir "<repo>/tmp/dev-user" \
 以下行为目前没有自动化覆盖，修改相关代码时必须手动验证：
 
 - 真实 VS Code 激活事件、菜单条件、标题栏按钮。
-- Webview 的 CSS 布局、滚动同步、焦点管理、modal 交互。
-- CSP 与 `localResourceRoots` 在真实 Webview 中的加载行为。
+- 真实 Webview 注入的主题变量、`prefers-reduced-motion`、系统输入法候选框、HiDPI 与窗口拖拽缩放。截图矩阵使用静态主题近似值，且 headless 浏览器通常报告 reduced motion。
+- 真实 Webview 的 CSP、`localResourceRoots`、消息时序与 Webview 生命周期；jsdom 不会执行 CSP。
 - 真实 Provider 的网络、鉴权、模型输出差异。
 - 跨窗口/多进程并发；`withLock` 只保证本进程内互斥。
-- 大文档性能、极端 Markdown 结构、真实用户缓存的历史兼容。
+- 极端 Markdown 结构、真实用户缓存的历史兼容；性能基线只覆盖合成的 320 块文档。
 - 打包后的 VSIX 在干净 profile 中的安装/升级行为。
 
-如果修改涉及这些区域，请在 PR/提交说明中写清手动验证步骤与结果。
+截图矩阵与性能基线依赖本机 Edge，CI 不运行；CI 通过只代表静态检查、单元/组件测试与打包成功。如果修改涉及上述区域，请在 PR/提交说明中写清手动验证步骤与结果。
 
 ## 8. 翻译质量评估
 

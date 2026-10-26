@@ -36,6 +36,7 @@ import {
 } from "../src/preview/previewModel";
 import { syncDocument } from "../src/sync/sync";
 import { MockTranslationProvider } from "../src/translation/mockProvider";
+import { STATIC_THEMES, type StaticTheme } from "./static-themes";
 
 // 输出固定写到仓库的 tmp/，方便直接双击打开或交给本地静态服务器。
 const projectRoot = process.cwd();
@@ -56,95 +57,21 @@ function resolveImage(source: string): string {
   return pathToFileURL(path.resolve(projectRoot, "samples", source)).href;
 }
 
-/** standalone 页面没有 VS Code 注入的主题变量；只用于本机静态预览。 */
-const STATIC_THEME = `
-:root {
-  color-scheme: dark;
-  --vscode-font-family: "Segoe UI", "Microsoft YaHei UI", "Microsoft YaHei", sans-serif;
-  --vscode-editor-font-family: "Cascadia Code", Consolas, "Courier New", monospace;
-  --vscode-markdown-font-family: var(--vscode-font-family);
-  --vscode-markdown-font-size: 14px;
-  --vscode-markdown-line-height: 1.6;
-  --vscode-foreground: #cccccc;
-  --vscode-descriptionForeground: #9d9d9d;
-  --vscode-disabledForeground: #cccccc80;
-  --vscode-errorForeground: #f85149;
-  --vscode-editorWarning-foreground: #cca700;
-  --vscode-editorInfo-foreground: #3794ff;
-  --vscode-icon-foreground: #cccccc;
-  --vscode-focusBorder: #0078d4;
-  --vscode-widget-border: #313131;
-  --vscode-widget-shadow: rgba(0,0,0,.36);
-  --vscode-editor-background: #1f1f1f;
-  --vscode-editor-foreground: #cccccc;
-  --vscode-editorWidget-background: #202020;
-  --vscode-editorWidget-border: #454545;
-  --vscode-panel-border: #2b2b2b;
-  --vscode-button-background: #0078d4;
-  --vscode-button-foreground: #ffffff;
-  --vscode-button-hoverBackground: #026ec1;
-  --vscode-button-secondaryBackground: #313131;
-  --vscode-button-secondaryForeground: #cccccc;
-  --vscode-button-secondaryHoverBackground: #3c3c3c;
-  --vscode-input-background: #313131;
-  --vscode-input-foreground: #cccccc;
-  --vscode-input-border: #3c3c3c;
-  --vscode-list-hoverBackground: #2a2d2e;
-  --vscode-list-activeSelectionBackground: #04395e;
-  --vscode-badge-background: #616161;
-  --vscode-badge-foreground: #f8f8f8;
-  --vscode-textLink-foreground: #4daafc;
-  --vscode-textLink-activeForeground: #4daafc;
-  --vscode-textCodeBlock-background: #2b2b2b;
-  --vscode-textPreformat-foreground: #d7ba7d;
-  --vscode-textPreformat-background: #2b2b2b;
-  --vscode-textBlockQuote-background: #2b2b2b;
-  --vscode-textBlockQuote-border: #616161;
-  --vscode-menu-background: #1f1f1f;
-  --vscode-menu-foreground: #cccccc;
-  --vscode-menu-border: #454545;
-  --vscode-menu-selectionBackground: #0078d4;
-  --vscode-menu-selectionForeground: #ffffff;
-  --vscode-menu-separatorBackground: #454545;
-  --vscode-notifications-background: #202020;
-  --vscode-notifications-border: #454545;
-  --vscode-notifications-foreground: #cccccc;
-  --vscode-diffEditor-insertedLineBackground: #20442c;
-  --vscode-diffEditor-removedLineBackground: #4b1818;
-  --vscode-diffEditor-insertedTextBackground: #2ea04326;
-  --vscode-diffEditor-removedTextBackground: #f8514926;
-  --vscode-testing-iconPassed: #73c991;
-  --vscode-charts-blue: #3794ff;
-  --vscode-symbolIcon-keywordForeground: #c586c0;
-  --vscode-symbolIcon-stringForeground: #ce9178;
-  --vscode-symbolIcon-numberForeground: #b5cea8;
-  --vscode-symbolIcon-commentForeground: #6a9955;
-  --vscode-symbolIcon-functionForeground: #dcdcaa;
-  --vscode-symbolIcon-classForeground: #4ec9b0;
-  --vscode-inputValidation-warningBackground: #352a05;
-  --vscode-inputValidation-warningBorder: #b89500;
-  --vscode-inputValidation-infoBackground: #063b49;
-  --vscode-inputValidation-infoBorder: #007acc;
-  --vscode-inputValidation-errorBackground: #5a1d1d;
-  --vscode-inputValidation-errorBorder: #be1100;
-  --vscode-scrollbarSlider-background: #79797966;
-  --vscode-scrollbarSlider-hoverBackground: #646464b3;
-  --vscode-scrollbarSlider-activeBackground: #bfbfbf66;
-}
-body { margin: 0; }
-`;
+
 
 /**
  * 构建一份原生静态预览 HTML。
  * @param model 预览模型（块、统计、脚注等）。
  * @param exportConfirmation 可选的导出确认弹窗数据，用于预置导出 diff。
  * @param layout 默认使用 columns，另可生成 split 分栏预览。
+ * @param theme 静态主题令牌，默认 Dark+。
  * @returns 完整 HTML 字符串。
  */
 function renderHtml(
   model: PreviewModel,
   exportConfirmation?: ExportConfirmationView,
   layout: "columns" | "stacked" | "split" = "columns",
+  theme: StaticTheme = "dark",
 ): string {
   const nonce = randomBytes(18).toString("base64");
   const webview = {
@@ -162,7 +89,10 @@ function renderHtml(
     },
     exportConfirmation,
   });
-  return html.replace("</head>", `<style>${STATIC_THEME}</style></head>`);
+  return html.replace(
+    "</head>",
+    `<style id="static-theme">${STATIC_THEMES[theme]}</style></head>`,
+  );
 }
 
 /**
@@ -319,11 +249,58 @@ async function main(): Promise<void> {
   );
   summarize("preview-states.html", stateModel);
 
+  // 截图矩阵使用同一份“真实同步 + 过期 + 锁定”的模型，并附带摘要/术语表，
+  // 这样三种主题下的布局、状态色、摘要面板和 diff 弹窗都能用同一页驱动。
+  const matrixModel = buildPreviewModel({
+    sourceText: editedSource,
+    cacheText: humanCache.text,
+    ...settings,
+    providerLabel,
+    fileLabel: "demo.md",
+    resolveImage,
+    assist: {
+      stableTranslation: true,
+      summaryContext: true,
+      summary: {
+        text:
+          "这是一份用于演示双语预览的示例文档，涵盖标题、段落、列表、表格、代码、公式和脚注。摘要会作为整篇文档的上下文参与翻译，并在预算内随请求发送。",
+        stale: true,
+        updatedAt: "2026-10-26T08:00:00.000Z",
+        model: "mock",
+        tokens: 312,
+        canGenerate: true,
+        glossaryText: "Markdown => Markdown\nAnchor => 锚点\nGlossary => 术语表",
+        glossaryCount: 3,
+      },
+    },
+  });
+  const emptyModel = buildPreviewModel({
+    sourceText: "",
+    ...settings,
+    providerLabel,
+    fileLabel: "empty.md",
+  });
+  for (const theme of Object.keys(STATIC_THEMES) as StaticTheme[]) {
+    await writeFile(
+      path.join(outputDir, `preview-matrix-${theme}.html`),
+      renderHtml(matrixModel, undefined, "columns", theme),
+      "utf8",
+    );
+    await writeFile(
+      path.join(outputDir, `preview-empty-${theme}.html`),
+      renderHtml(emptyModel, undefined, "columns", theme),
+      "utf8",
+    );
+  }
+  summarize("preview-matrix-dark.html", matrixModel);
+
   console.log(`\n输出目录：${outputDir}`);
   console.log(`- preview.html        翻译完成后的双语预览`);
   console.log(`- preview-split.html  左右分栏预览（含块级滚动同步）`);
   console.log(`- preview-export.html 带分栏差异的导出确认弹窗`);
   console.log(`- preview-states.html 修改原文并锁定列表译文后的状态预览`);
+  console.log(`- preview-matrix-*.html 截图矩阵入口（dark/light/hc，含摘要）`);
+  console.log(`- preview-empty-*.html  空状态截图入口（dark/light/hc）`);
   console.log(`- demo.zh.md          Mock 生成的译文缓存`);
   console.log(`- demo.states.zh.md   锁定后的译文缓存`);
 }

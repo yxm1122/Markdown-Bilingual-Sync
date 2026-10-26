@@ -49,7 +49,7 @@ interface EditingState {
   blockIndex?: number;
   pendingId?: string;
   standaloneId?: string;
-  draft: string;
+  /** 打开编辑器时的初始文本；之后的输入由编辑器自己持有，避免整页重渲染。 */
   baseText: string;
   sourceHash: string;
   cacheId?: string;
@@ -58,7 +58,6 @@ interface EditingState {
 interface InsertState {
   afterBlockIndex: number;
   type: "source" | "target";
-  draft: string;
 }
 
 interface Toast {
@@ -257,7 +256,35 @@ function Menu(props: {
       if (event.key === "Escape") {
         event.preventDefault();
         props.onClose();
+        return;
       }
+      if (
+        event.key !== "ArrowDown" &&
+        event.key !== "ArrowUp" &&
+        event.key !== "Home" &&
+        event.key !== "End"
+      ) {
+        return;
+      }
+      const items = Array.from(
+        ref.current?.querySelectorAll<HTMLButtonElement>(".menu-item:not([disabled])") ?? [],
+      );
+      if (!items.length) {
+        return;
+      }
+      event.preventDefault();
+      const current = items.indexOf(document.activeElement as HTMLButtonElement);
+      let next: number;
+      if (event.key === "Home") {
+        next = 0;
+      } else if (event.key === "End") {
+        next = items.length - 1;
+      } else if (event.key === "ArrowDown") {
+        next = current < 0 ? 0 : (current + 1) % items.length;
+      } else {
+        next = current < 0 ? items.length - 1 : (current - 1 + items.length) % items.length;
+      }
+      items[next]?.focus();
     };
     document.addEventListener("mousedown", onPointerDown);
     document.addEventListener("keydown", onKeyDown);
@@ -634,6 +661,7 @@ function SummaryPanel(props: {
             class="pv-textarea"
             rows={6}
             spellcheck={false}
+            aria-label={text.preview.summary.title}
             value={props.summaryDraft}
             placeholder={text.preview.summary.placeholder}
             onInput={(event) => props.onDraft(event.currentTarget.value)}
@@ -654,6 +682,7 @@ function SummaryPanel(props: {
                 class="pv-textarea pv-glossary-text"
                 rows={4}
                 spellcheck={false}
+                aria-label={text.preview.summary.glossaryTitle}
                 value={props.glossaryDraft}
                 placeholder={text.preview.summary.glossaryPlaceholder}
                 onInput={(event) => props.onGlossaryDraft(event.currentTarget.value)}
@@ -679,15 +708,16 @@ function SummaryPanel(props: {
 // ---- 内联编辑 / 插入编辑器 ----
 
 function InlineEditor(props: {
-  draft: string;
+  initial: string;
   hint: string;
   saveLabel: string;
   busy: boolean;
-  onDraft: (value: string) => void;
-  onSave: () => void;
+  onSave: (text: string) => void;
   onCancel: () => void;
 }) {
   const ref = useRef<HTMLTextAreaElement>(null);
+  // 草稿留在编辑器内部：输入时只重渲染 textarea，不触发 300 块文档的整棵树 diff。
+  const [draft, setDraft] = useState(props.initial);
   useEffect(() => {
     const node = ref.current;
     if (node) {
@@ -699,25 +729,25 @@ function InlineEditor(props: {
     <div class="pv-editor">
       <textarea
         ref={ref}
-        rows={Math.min(28, Math.max(5, props.draft.split("\n").length + 1))}
+        rows={Math.min(28, Math.max(5, draft.split("\n").length + 1))}
         spellcheck={false}
-        value={props.draft}
+        value={draft}
         aria-label={props.hint}
-        onInput={(event) => props.onDraft(event.currentTarget.value)}
+        onInput={(event) => setDraft(event.currentTarget.value)}
         onKeyDown={(event) => {
           if (event.key === "Escape") {
             event.preventDefault();
             props.onCancel();
           } else if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) {
             event.preventDefault();
-            props.onSave();
+            props.onSave(draft);
           }
         }}
       />
       <div class="pv-editor-actions">
         <span class="pv-editor-hint">{props.hint}</span>
         <Button onClick={props.onCancel}>{catalog!.preview.actions.cancelEdit}</Button>
-        <Button primary disabled={props.busy} onClick={props.onSave}>
+        <Button primary disabled={props.busy} onClick={() => props.onSave(draft)}>
           {props.saveLabel}
         </Button>
       </div>
@@ -727,13 +757,12 @@ function InlineEditor(props: {
 
 function InsertEditor(props: {
   type: "source" | "target";
-  draft: string;
-  onDraft: (value: string) => void;
-  onSave: () => void;
+  onSave: (text: string) => void;
   onCancel: () => void;
 }) {
   const text = catalog!.preview;
   const ref = useRef<HTMLTextAreaElement>(null);
+  const [draft, setDraft] = useState("");
   useEffect(() => {
     ref.current?.focus();
   }, []);
@@ -745,15 +774,15 @@ function InsertEditor(props: {
         spellcheck={false}
         aria-label={text.actions.insertPlaceholder}
         placeholder={text.actions.insertPlaceholder}
-        value={props.draft}
-        onInput={(event) => props.onDraft(event.currentTarget.value)}
+        value={draft}
+        onInput={(event) => setDraft(event.currentTarget.value)}
         onKeyDown={(event) => {
           if (event.key === "Escape") {
             event.preventDefault();
             props.onCancel();
           } else if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) {
             event.preventDefault();
-            props.onSave();
+            props.onSave(draft);
           }
         }}
       />
@@ -762,7 +791,7 @@ function InsertEditor(props: {
           {props.type === "target" ? text.actions.targetInsertHint : text.actions.sourceEditHint}
         </span>
         <Button onClick={props.onCancel}>{text.actions.cancelEdit}</Button>
-        <Button primary onClick={props.onSave}>
+        <Button primary onClick={() => props.onSave(draft)}>
           {props.type === "target" ? text.actions.addStandaloneTarget : text.actions.stageInsert}
         </Button>
       </div>
@@ -782,8 +811,7 @@ function PaneContent(props: {
   busy: boolean;
   editing: EditingState | null;
   onStartEdit: (block: PreviewBlockView, side: Side) => void;
-  onDraft: (value: string) => void;
-  onSave: () => void;
+  onSave: (text: string) => void;
   onCancel: () => void;
   onRetranslate: () => void;
   onOpenLink: (href: string) => void;
@@ -798,9 +826,9 @@ function PaneContent(props: {
   if (editing && editing.key === block.key && editing.side === side) {
     content = (
       <InlineEditor
-        draft={editing.draft}
+        initial={editing.baseText}
         hint={
-          editing.kind === "source"
+          editing.kind === "source" || editing.kind === "pending"
             ? text.preview.actions.sourceEditHint
             : editing.kind === "standalone"
               ? text.preview.actions.standaloneEditHint
@@ -814,7 +842,6 @@ function PaneContent(props: {
               : text.preview.actions.saveTarget
         }
         busy={props.busy}
-        onDraft={props.onDraft}
         onSave={props.onSave}
         onCancel={props.onCancel}
       />
@@ -1039,12 +1066,10 @@ function PairedBlock(props: {
   onMenu: (event: MouseEvent, block: PreviewBlockView, side?: Side) => void;
   onRetranslate: (block: PreviewBlockView) => void;
   onStartEdit: (block: PreviewBlockView, side: Side) => void;
-  onDraft: (value: string) => void;
-  onSave: () => void;
+  onSave: (text: string) => void;
   onCancel: () => void;
   onOpenLink: (href: string) => void;
-  onInsertDraft: (value: string) => void;
-  onInsertSave: () => void;
+  onInsertSave: (text: string) => void;
   onInsertCancel: () => void;
 }) {
   const { block, text } = props;
@@ -1087,8 +1112,6 @@ function PairedBlock(props: {
       {insertHere ? (
         <InsertEditor
           type={insertHere.type}
-          draft={insertHere.draft}
-          onDraft={props.onInsertDraft}
           onSave={props.onInsertSave}
           onCancel={props.onInsertCancel}
         />
@@ -1110,8 +1133,7 @@ function SplitCell(props: {
   onMenu: (event: MouseEvent, block: PreviewBlockView, side: Side) => void;
   onStartEdit: (block: PreviewBlockView, side: Side) => void;
   onRetranslate: (block: PreviewBlockView) => void;
-  onDraft: (value: string) => void;
-  onSave: () => void;
+  onSave: (text: string) => void;
   onCancel: () => void;
   onOpenLink: (href: string) => void;
 }) {
@@ -1165,7 +1187,6 @@ function SplitCell(props: {
           busy={props.busy}
           editing={props.editing}
           onStartEdit={props.onStartEdit}
-          onDraft={props.onDraft}
           onSave={props.onSave}
           onCancel={props.onCancel}
           onRetranslate={() => props.onRetranslate(block)}
@@ -1187,19 +1208,19 @@ function SplitView(props: {
   onMenu: (event: MouseEvent, block: PreviewBlockView, side: Side) => void;
   onRetranslate: (block: PreviewBlockView) => void;
   onStartEdit: (block: PreviewBlockView, side: Side) => void;
-  onDraft: (value: string) => void;
-  onSave: () => void;
+  onSave: (text: string) => void;
   onCancel: () => void;
   onOpenLink: (href: string) => void;
-  onInsertDraft: (value: string) => void;
-  onInsertSave: () => void;
+  onInsertSave: (text: string) => void;
   onInsertCancel: () => void;
   onToggleReadonly: (side: Side) => void;
 }) {
   const { model, text, mode, readonly } = props;
   const sourceRef = useRef<HTMLDivElement>(null);
   const targetRef = useRef<HTMLDivElement>(null);
-  const syncLock = useRef(0);
+  // 只抑制「程序写入另一侧」触发的回声事件，避免双向反馈；
+  // 用户在本侧连续滚动时不应被节流，否则另一侧会明显落后。
+  const syncLock = useRef<Record<Side, number>>({ source: 0, target: 0 });
 
   useEffect(() => {
     const saved = savedState();
@@ -1244,9 +1265,9 @@ function SplitView(props: {
     if (!source || !target) {
       return;
     }
-    const sync = (from: HTMLDivElement, to: HTMLDivElement) => {
+    const sync = (from: HTMLDivElement, to: HTMLDivElement, fromSide: Side) => {
       const now = performance.now();
-      if (now < syncLock.current || mode !== "bilingual") {
+      if (now < syncLock.current[fromSide] || mode !== "bilingual") {
         return;
       }
       // 一侧被 CSS 隐藏时不参与同步，避免 clientHeight 为 0 造成死循环。
@@ -1293,11 +1314,12 @@ function SplitView(props: {
       if (Math.abs(to.scrollTop - next) < 2) {
         return;
       }
-      syncLock.current = now + 90;
+      const toSide: Side = fromSide === "source" ? "target" : "source";
+      syncLock.current[toSide] = now + 90;
       to.scrollTop = next;
     };
-    const onSource = () => sync(source, target);
-    const onTarget = () => sync(target, source);
+    const onSource = () => sync(source, target, "source");
+    const onTarget = () => sync(target, source, "target");
     source.addEventListener("scroll", onSource, { passive: true });
     target.addEventListener("scroll", onTarget, { passive: true });
     return () => {
@@ -1315,8 +1337,6 @@ function SplitView(props: {
     return (
       <InsertEditor
         type={side}
-        draft={props.insert.draft}
-        onDraft={props.onInsertDraft}
         onSave={props.onInsertSave}
         onCancel={props.onInsertCancel}
       />
@@ -1335,6 +1355,7 @@ function SplitView(props: {
               class={`pv-pane-mode${readonly.source ? " is-active" : ""}`}
               disabled={props.busy}
               aria-pressed={readonly.source}
+              aria-label={readonly.source ? text.preview.actions.exitReadonlyTitle : text.preview.actions.readonlyPreviewTitle}
               title={readonly.source ? text.preview.actions.exitReadonlyTitle : text.preview.actions.readonlyPreviewTitle}
               onClick={() => props.onToggleReadonly("source")}
             >
@@ -1357,7 +1378,6 @@ function SplitView(props: {
                 onMenu={props.onMenu}
                 onStartEdit={props.onStartEdit}
                 onRetranslate={props.onRetranslate}
-                onDraft={props.onDraft}
                 onSave={props.onSave}
                 onCancel={props.onCancel}
                 onOpenLink={props.onOpenLink}
@@ -1385,6 +1405,7 @@ function SplitView(props: {
               class={`pv-pane-mode${readonly.target ? " is-active" : ""}`}
               disabled={props.busy}
               aria-pressed={readonly.target}
+              aria-label={readonly.target ? text.preview.actions.exitReadonlyTitle : text.preview.actions.readonlyPreviewTitle}
               title={readonly.target ? text.preview.actions.exitReadonlyTitle : text.preview.actions.readonlyPreviewTitle}
               onClick={() => props.onToggleReadonly("target")}
             >
@@ -1407,7 +1428,6 @@ function SplitView(props: {
                 onMenu={props.onMenu}
                 onStartEdit={props.onStartEdit}
                 onRetranslate={props.onRetranslate}
-                onDraft={props.onDraft}
                 onSave={props.onSave}
                 onCancel={props.onCancel}
                 onOpenLink={props.onOpenLink}
@@ -1713,9 +1733,12 @@ export function App(props: { boot: BootData; text: UiCatalog }) {
   const sendMessage = useCallback((message: OutboundMessage) => {
     send(message);
     if (standaloneMode) {
-      showToast(`Static preview: ${message.type}`, "info");
+      showToast(
+        fmt(text.preview.modal.staticPreview, { type: message.type }),
+        "info",
+      );
     }
-  }, [showToast]);
+  }, [showToast, text.preview.modal.staticPreview]);
 
   const openMenu = useCallback((event: MouseEvent, items: MenuEntry[]) => {
     event.preventDefault();
@@ -1885,7 +1908,6 @@ export function App(props: { boot: BootData; text: UiCatalog }) {
           side,
           kind: "pending",
           pendingId: block.pendingInsertId,
-          draft: block.sourceRaw,
           baseText: block.sourceRaw,
           sourceHash: "",
         });
@@ -1895,7 +1917,6 @@ export function App(props: { boot: BootData; text: UiCatalog }) {
           side,
           kind: "source",
           blockIndex: block.blockIndex,
-          draft: block.sourceRaw,
           baseText: block.sourceRaw,
           sourceHash: block.sourceHash,
         });
@@ -1911,7 +1932,6 @@ export function App(props: { boot: BootData; text: UiCatalog }) {
         side,
         kind: "standalone",
         standaloneId: block.standaloneTargetId,
-        draft: block.targetRaw,
         baseText: block.targetRaw,
         sourceHash: "",
       });
@@ -1921,7 +1941,6 @@ export function App(props: { boot: BootData; text: UiCatalog }) {
         side,
         kind: "target",
         blockIndex: block.blockIndex,
-        draft: block.targetRaw,
         baseText: block.targetRaw,
         sourceHash: block.sourceHash,
         cacheId: block.cacheId,
@@ -1929,7 +1948,7 @@ export function App(props: { boot: BootData; text: UiCatalog }) {
     }
   };
 
-  const saveEdit = () => {
+  const saveEdit = (draft: string) => {
     if (!editing || busy) {
       return;
     }
@@ -1937,7 +1956,7 @@ export function App(props: { boot: BootData; text: UiCatalog }) {
       setEditing(null);
       return;
     }
-    if (!editing.draft.trim()) {
+    if (!draft.trim()) {
       showToast(text.preview.actions.emptyEdit, "error");
       return;
     }
@@ -1946,25 +1965,25 @@ export function App(props: { boot: BootData; text: UiCatalog }) {
         sendMessage({
           type: "stageSourceEdit",
           blockIndex: editing.blockIndex!,
-          text: editing.draft,
+          text: draft,
           sourceHash: editing.sourceHash,
         });
         break;
       case "pending":
-        sendMessage({ type: "updateSourceInsert", pendingId: editing.pendingId!, text: editing.draft });
+        sendMessage({ type: "updateSourceInsert", pendingId: editing.pendingId!, text: draft });
         break;
       case "target":
         sendMessage({
           type: "saveTargetEdit",
           blockIndex: editing.blockIndex!,
-          text: editing.draft,
+          text: draft,
           baseText: editing.baseText,
           sourceHash: editing.sourceHash,
           ...(editing.cacheId ? { cacheId: editing.cacheId } : {}),
         });
         break;
       case "standalone":
-        sendMessage({ type: "updateStandaloneTarget", standaloneId: editing.standaloneId!, text: editing.draft });
+        sendMessage({ type: "updateStandaloneTarget", standaloneId: editing.standaloneId!, text: draft });
         break;
       default:
         break;
@@ -1982,21 +2001,21 @@ export function App(props: { boot: BootData; text: UiCatalog }) {
     if (type === "source" && mode === "target") {
       setMode("bilingual");
     }
-    setInsert({ afterBlockIndex, type, draft: "" });
+    setInsert({ afterBlockIndex, type });
   };
 
-  const saveInsert = () => {
+  const saveInsert = (draft: string) => {
     if (!insert || busy) {
       return;
     }
-    if (!insert.draft.trim()) {
+    if (!draft.trim()) {
       showToast(text.preview.actions.emptyEdit, "error");
       return;
     }
     sendMessage({
       type: insert.type === "target" ? "insertTargetBlock" : "insertSourceBlock",
       afterBlockIndex: insert.afterBlockIndex,
-      text: insert.draft,
+      text: draft,
     });
     setInsert(null);
   };
@@ -2365,11 +2384,9 @@ export function App(props: { boot: BootData; text: UiCatalog }) {
             onMenu={openBlockMenu}
             onRetranslate={retranslateBlock}
             onStartEdit={startEdit}
-            onDraft={(value) => setEditing((current) => (current ? { ...current, draft: value } : current))}
             onSave={saveEdit}
             onCancel={() => setEditing(null)}
             onOpenLink={(href) => sendMessage({ type: "openLink", href })}
-            onInsertDraft={(value) => setInsert((current) => (current ? { ...current, draft: value } : current))}
             onInsertSave={saveInsert}
             onInsertCancel={() => setInsert(null)}
             onToggleReadonly={toggleReadonly}
@@ -2379,8 +2396,6 @@ export function App(props: { boot: BootData; text: UiCatalog }) {
             {insert?.afterBlockIndex === -1 ? (
               <InsertEditor
                 type={insert.type}
-                draft={insert.draft}
-                onDraft={(value) => setInsert((current) => (current ? { ...current, draft: value } : current))}
                 onSave={saveInsert}
                 onCancel={() => setInsert(null)}
               />
@@ -2399,11 +2414,9 @@ export function App(props: { boot: BootData; text: UiCatalog }) {
                 onMenu={(event, target, side) => openBlockMenu(event, target, side)}
                 onRetranslate={retranslateBlock}
                 onStartEdit={startEdit}
-                onDraft={(value) => setEditing((current) => (current ? { ...current, draft: value } : current))}
                 onSave={saveEdit}
                 onCancel={() => setEditing(null)}
                 onOpenLink={(href) => sendMessage({ type: "openLink", href })}
-                onInsertDraft={(value) => setInsert((current) => (current ? { ...current, draft: value } : current))}
                 onInsertSave={saveInsert}
                 onInsertCancel={() => setInsert(null)}
               />

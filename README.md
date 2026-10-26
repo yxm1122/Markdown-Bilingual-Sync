@@ -7,7 +7,7 @@
 
 在 VS Code 中翻译 Markdown，并以双语预览阅读；原文是唯一事实源，手动修改的译文会自动锁定，不会被静默覆盖。
 
-当前版本 **0.12.0**：加入全插件本地化（英文默认、内置 zh-cn）；支持本地 VSIX 安装与从源码构建。
+当前版本 **0.13.0**：原生预览与任务面板重构完成（稳定 Webview 壳 + Preact、原生 TreeView），并补齐 jsdom 组件测试、三主题截图矩阵与 320 块性能基线；延续 0.12.0 的全插件本地化（英文默认、内置 zh-cn）。
 
 ## 功能
 
@@ -334,10 +334,14 @@ npm run typecheck
 npm test
 npm run compile
 npm run preview:sample
+npm run ui:matrix
+npm run ui:perf
 npm run package
 ```
 
 `typecheck`、`test`、`compile`、`test:watch` 和 `package` 会自动生成 l10n bundle；只修改文案时可单独运行 `npm run l10n:build`。`watch` 启动前生成一次 bundle，但不会监听文案目录变化。
+
+`ui:matrix` 用 headless Edge 生成三主题 × 三布局 × 三模式的截图矩阵（含摘要、弹窗、编辑、只读、忙碌、窄窗口与空状态），`ui:perf` 生成 320 块文档的首屏、输入与滚动性能基线；产物分别在 `artifacts/ui-matrix/` 与 `artifacts/ui-perf/`。两者需要本机 Edge，可用 `EDGE_PATH` 指定路径，CI 不运行。
 
 打包产物位于 `artifacts/vsix/markdown-bilingual-sync.vsix`。示例文档为 `samples/demo.md`。
 

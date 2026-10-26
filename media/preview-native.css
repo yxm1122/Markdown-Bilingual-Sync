@@ -109,17 +109,28 @@ textarea:focus-visible {
   right: 0;
   top: 0;
   height: 2px;
-  background: linear-gradient(90deg, transparent, var(--vscode-progressBar-background), transparent);
-  background-size: 220% 100%;
-  animation: pv-progress 1.05s linear infinite;
+  background: var(--vscode-progressBar-background);
+  opacity: 0.32;
+}
+
+.pv-app.is-busy::after {
+  content: "";
+  position: absolute;
+  z-index: 31;
+  top: 0;
+  left: 0;
+  width: 34%;
+  height: 2px;
+  background: var(--vscode-progressBar-background);
+  animation: pv-progress 1.2s ease-in-out infinite;
 }
 
 @keyframes pv-progress {
   from {
-    background-position: 220% 0;
+    left: -34%;
   }
   to {
-    background-position: -220% 0;
+    left: 100%;
   }
 }
 

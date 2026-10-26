@@ -38,7 +38,7 @@ SyncService.loadPreviewState(sourceUri)
 ### 原生渲染层
 
 - 首次加载写入完整壳；脚本发送 `ready` 后，宿主只发送 `state`，不会再替换整页 HTML。
-- 模型与面板状态（model/layout/readonly）由宿主下发；预览模式、摘要展开、滚动位置、内联编辑和菜单由 Webview 本地维护。
+- 模型与面板状态（model/layout/readonly）由宿主下发；预览模式、摘要展开、摘要/术语表草稿、滚动位置和菜单由 Webview 维护；内联编辑/插入的草稿留在编辑器组件内部，输入时不会触发整棵块树重新渲染。
 - 未变化的块通过 `key` 复用，Preact 只更新变化部分，避免整页重载、白闪和丢失焦点。
 - 摘要/术语表草稿在用户编辑期间不会被新的 state 覆盖；保存后以宿主返回值为准。
 - 首次加载期间的控制消息（busy/toast/确认结果）由宿主排队，`ready` 后补发。
@@ -59,7 +59,7 @@ SyncService.loadPreviewState(sourceUri)
 - 只读状态是**会话级**，不持久化；只影响 `split` 布局。
 - 只读栏渲染为连续文档，隐藏块级操作与内联编辑；另一栏仍可编辑。
 - 布局/只读切换不改变滚动位置，Webview 侧会捕获并恢复。
-- 分栏下同一块的两侧使用相同的 `data-sync-key` 做滚动同步。
+- 分栏下同一块的两侧使用相同的 `data-sync-key` 做滚动同步；只抑制“程序写入对侧”触发的回声事件，本侧连续滚动不会被 90ms 节流，顶部/底部按整篇文档对齐。
 
 ## 3. 视图模型
 
@@ -137,7 +137,7 @@ Webview 只通过 `vscode.postMessage` 与宿主通信。宿主在 `PreviewManag
 
 - “文档开头插入”在 Webview 内部转换为 `insertSourceBlock` + `afterBlockIndex = -1`；不是独立消息。
 - `saveTargetEdit` 的三个并发字段由 Webview 从块数据属性带回，宿主会校验；任一不一致会拒绝写入，避免覆盖编辑期间的其他修改。
-- `setAssistToggle` 只更新会话状态，不重绘页面，避免丢失摘要 textarea 的未保存内容。
+- `setAssistToggle` 只更新会话状态，不重建预览块；摘要草稿由 Webview 保留。
 
 ### 4.2 宿主 → Webview
 
@@ -160,7 +160,8 @@ Webview 只通过 `vscode.postMessage` 与宿主通信。宿主在 `PreviewManag
 | --- | --- | --- |
 | 块、缓存、计数、摘要正文、确认数据、布局、只读、忙碌态 | 宿主 | 缓存/globalStorage/session |
 | 预览模式 | Webview | `vscode.setState` |
-| 摘要展开、摘要/术语表草稿、内联编辑、菜单、滚动位置 | Webview | 内存 + `vscode.setState`（草稿用 sessionStorage） |
+| 摘要展开、摘要/术语表草稿、菜单、滚动位置 | Webview | 内存 + `vscode.setState`（草稿用 sessionStorage） |
+| 内联编辑/插入草稿 | 编辑器组件局部 state | 内存（块被移除或取消即丢弃） |
 
 ## 5. 原文暂存与写回
 
@@ -243,10 +244,12 @@ Webview 只通过 `vscode.postMessage` 与宿主通信。宿主在 `PreviewManag
 2. 在 `src/preview/protocol.ts` 增加下行消息（如需要），在 `src/preview/previewManager.ts` 的 `onMessage` 增加校验与 `case`。
 3. 在 `src/webview/preview/app.tsx` 的对应组件增加按钮/菜单项，调用 `sendMessage`；状态变化由宿主 `state` 消息回来。
 4. 在 `SyncService` / `ExportService` 实现业务逻辑；写盘前遵守锁、并发校验和缓存规则。
-5. 更新 `test/appShell.test.ts` / `test/taskViewProvider.test.ts` / 模型测试；交互路径用隔离 profile 验证。
+5. 更新 `test/appShell.test.ts` / `test/taskViewProvider.test.ts` / 模型测试；在 `test/webview/` 增加组件或交互用例，覆盖可见结果与上行消息。
 6. 若动作影响块状态，补充 `previewModel.test.ts`；若涉及消息/确认，补协议或服务层测试。
+7. 运行 `npm run ui:matrix` 检查三主题布局与溢出；若动到编辑/滚动路径，再跑 `npm run ui:perf`。
+8. 用隔离 profile 验证真实主题、IME、CSP 与消息时序。
 
-## 11. 静态预览
+## 11. 静态预览、截图矩阵与性能基线
 
 `npm run preview:sample` 用 Mock Provider 生成：
 
@@ -254,6 +257,10 @@ Webview 只通过 `vscode.postMessage` 与宿主通信。宿主在 `PreviewManag
 - `tmp/preview-split.html`：分栏
 - `tmp/preview-export.html`：导出确认
 - `tmp/preview-states.html`：原文变更 + 译文锁定
+- `tmp/preview-matrix-{dark,light,hc}.html`：截图矩阵入口（含摘要/术语表）
+- `tmp/preview-empty-{dark,light,hc}.html`：空状态入口
 - `tmp/demo.zh.md` 等缓存文件
 
-生成的页面使用原生 Preact 预览壳；`preview.js` 检测不到 `acquireVsCodeApi` 时会用 localStorage 和 `window.__mbsMessages` 模拟宿主，并附带只用于静态预览的深色主题变量。它只用于本地检查布局/HTML，不替代真实 Webview 测试。
+`npm run ui:matrix` 用 headless Edge 驱动这些页面，输出 `artifacts/ui-matrix/` 的 54 张截图、`manifest.json`、`index.html` 联系表与 `report.md`；任一状态横向溢出、运行时异常或截图尺寸错误都会失败。`npm run ui:perf` 生成 320 块文档，输出 `artifacts/ui-perf/` 的首屏/切换/输入/滚动基线，并在 4× CPU 降速下复测。
+
+生成的页面使用原生 Preact 预览壳；`preview.js` 检测不到 `acquireVsCodeApi` 时会用 localStorage 和 `window.__mbsMessages` 模拟宿主，并附带只用于静态预览的主题变量。静态主题是近似值，不能替代真实 Webview 的主题、IME 与 CSP 验证。

@@ -7,7 +7,7 @@
 
 Translate Markdown inside VS Code and read it as a bilingual preview. The source text stays the single source of truth, and translations you edit by hand are locked so they are never silently overwritten.
 
-Current version **0.12.0**: full localization of the extension (English by default, zh-cn built in), local VSIX installation, and builds from source.
+Current version **0.13.0**: the native preview and task panel rebuild is complete (stable Webview shell + Preact, native TreeView), with jsdom component tests, a three-theme screenshot matrix, and a 320-block performance baseline. The 0.12.0 localization work (English by default, zh-cn built in) is included.
 
 ## Features
 
@@ -334,10 +334,14 @@ npm run typecheck
 npm test
 npm run compile
 npm run preview:sample
+npm run ui:matrix
+npm run ui:perf
 npm run package
 ```
 
 `typecheck`, `test`, `compile`, `test:watch`, and `package` generate the l10n bundle automatically; to change text only, run `npm run l10n:build` on its own. `watch` builds the bundle once at startup but does not watch the locale folders.
+
+`ui:matrix` captures three themes × three layouts × three modes plus summary, dialogs, editing, read-only, busy, narrow, and empty states with headless Edge. `ui:perf` records a 320-block baseline for mount, input, and scrolling. Outputs go to `artifacts/ui-matrix/` and `artifacts/ui-perf/`. Both require a local Edge (set `EDGE_PATH` if needed) and do not run in CI.
 
 The package output is `artifacts/vsix/markdown-bilingual-sync.vsix`, and the sample document is `samples/demo.md`.
 

@@ -43,9 +43,20 @@ npm run watch     # 增量构建，适合 F5 调试
 
 ```bash
 npm run preview:sample
+npm run ui:matrix   # 连拍三主题 × 三布局 × 三模式 + 关键状态，需 Edge
+npm run ui:perf     # 320 块性能基线，需 Edge
 ```
 
-用 Mock 生成 `tmp/preview*.html`，可直接在浏览器打开检查布局与 HTML。它不启动 VS Code，也不验证真实 Webview 的消息/权限。
+`preview:sample` 用 Mock 生成 `tmp/preview*.html`，可直接在浏览器打开检查布局与 HTML。`ui:matrix` 会调用它并额外生成 `preview-matrix-{dark,light,hc}.html` 与 `preview-empty-*.html`，再用 headless Edge 输出到 `artifacts/ui-matrix/`（PNG、manifest、联系表、report）。`ui:perf` 生成 320 块页面并测量首屏、切换、输入与滚动，输出到 `artifacts/ui-perf/`。两者都不启动 VS Code，也不验证真实 Webview 的消息/权限、主题注入和输入法。找不到 Edge 时用 `EDGE_PATH` 指定可执行文件。
+
+修改 `app.tsx` 交互后，除了 `npm test`，建议同时运行：
+
+```bash
+npm run ui:matrix
+npm run ui:perf
+```
+
+矩阵会因横向溢出、运行时错误或截图尺寸不一致失败；性能脚本会因超出预算失败。
 
 ## 3. 代码约定
 
@@ -206,4 +217,4 @@ npm version <patch|minor|major> --no-git-tag-version
 - **语言后缀**：`languageSuffix` 只取主语言子标签，`zh-CN` 与 `zh-TW` 共用 `zh`。
 - **锁的作用域**：`withLock` 是进程内、按 URI 字符串的互斥，不是跨窗口文件锁。
 - **缓存写入非原子**：源写回有内存回滚，缓存没有事务日志；不要把“写入成功”当成强一致保证。
-- **测试不启动 VS Code**：与真实 Extension Host/Webview 相关的行为必须手动 E2E。
+- **测试的边界**：Vitest 不启动真实 VS Code；Webview 由 jsdom 组件测试和 headless Edge 截图/性能脚本覆盖，但真实主题注入、IME、CSP 与打包后的安装仍需隔离 profile 验证。
