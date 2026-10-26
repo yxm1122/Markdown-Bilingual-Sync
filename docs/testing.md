@@ -20,7 +20,7 @@ CI 会依次执行 `npm ci`、`typecheck`、`test`、`package`。本地提交前
 ## 2. 测试栈
 
 - **Vitest 3**：纯逻辑测试运行在 Node 中，不启动 VS Code；Webview 组件测试在文件头用 `@vitest-environment jsdom` 切换环境。
-- **jsdom + Testing Library**：`@testing-library/preact` 挂载真实组件树；`test/webview/harness.ts` 负责注入文案、模拟 `acquireVsCodeApi`、记录上行消息，`test/webview/dom.ts` 补齐 jsdom 缺失的 `<dialog>`、`CSS.escape` 与 `localStorage`。
+- **jsdom + Testing Library**：`@testing-library/preact` 挂载真实组件树；`test/webview/harness.ts` 负责注入文案、模拟 `acquireVsCodeApi`、记录上行消息，`test/webview/dom.ts` 补齐 jsdom 缺失的 `<dialog>`、`CSS.escape` 与 `localStorage`。jsdom 固定在 29.x：30.x 要求 Node ≥22.22，而 CI 使用 Node 20；升级 jsdom 前先同步提高 CI 的 Node 版本。
 - **全局 `vscode` stub**：`vitest.config.ts` 把 `vscode` alias 到 `test/vscodeStub.ts`。stub 的 `l10n.t` 从 `l10n/bundle.l10n.zh-cn.json` 取译文，默认 locale 为 `zh-cn`，因此现有中文断言可直接保留；需要英文 locale 的用例在 `vi.resetModules()` 后修改 stub 的 `env.language`。
 - **局部 mock**：需要断言 `vscode` 调用的测试仍用 `vi.mock("vscode")` / `vi.hoisted`，并展开 stub 以保留 `l10n`/`env`（见 `test/cacheStore.test.ts`、`test/syncEditing.test.ts`、`test/exportService.test.ts`）。
 - **共享样例**：`test/helpers.ts` 提供 `SOURCE`、`makeMd()`、`translate()`（Mock Provider 同步）和 `inspect()`（解析 + 对齐）。
