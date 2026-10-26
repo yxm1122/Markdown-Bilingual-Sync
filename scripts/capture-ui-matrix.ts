@@ -71,6 +71,17 @@ interface ShotRecord {
   overflow: boolean;
 }
 
+interface ScrollCheckRecord {
+  theme: StaticTheme;
+  name: string;
+  sourceKey: string | null;
+  targetKey: string | null;
+  targetKeyAfterScroll: string | null;
+  sourceKeyAfterReturn: string | null;
+  bilingualSourceKey: string | null;
+  bilingualTargetKey: string | null;
+}
+
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 /** 在常见安装位置中找到 Edge；失败时提示设置 EDGE_PATH。 */
@@ -525,6 +536,86 @@ class Page {
     );
     await this.dismissToasts();
   }
+
+  /** 当前滚动容器顶部第一个可见块的 key。 */
+  async firstVisibleKey(side: "source" | "target"): Promise<string | null> {
+    return this.evaluate<string | null>(`(() => {
+      const pane = document.querySelector('[data-split-content="${side}"]');
+      const rect = pane.getBoundingClientRect();
+      const cells = Array.from(pane.querySelectorAll(".pv-cell[data-sync-key]"));
+      const first = cells.find((cell) => cell.getBoundingClientRect().bottom > rect.top + 1);
+      return first ? first.dataset.syncKey : null;
+    })()`);
+  }
+
+  async scrollSplit(side: "source" | "target", top: number): Promise<void> {
+    await this.evaluate(`(() => {
+      const pane = document.querySelector('[data-split-content="${side}"]');
+      pane.scrollTop = ${top};
+      pane.dispatchEvent(new Event("scroll"));
+    })()`);
+    await sleep(120);
+  }
+
+  /** 仅原文/仅译文切换后，另一侧应回到同一块；回到双语后两侧应一致。 */
+  async verifySplitScrollSync(theme: StaticTheme): Promise<ScrollCheckRecord> {
+    await this.select("split", "bilingual");
+    await this.click('.pv-seg [data-mode="source"]');
+    await this.waitFor(`document.querySelector(".pv-app").dataset.mode === "source"`);
+    await this.scrollSplit("source", 400);
+    const sourceKey = await this.firstVisibleKey("source");
+
+    await this.click('.pv-seg [data-mode="target"]');
+    await this.waitFor(`document.querySelector(".pv-app").dataset.mode === "target"`);
+    const targetKey = await this.firstVisibleKey("target");
+    if (!sourceKey || !targetKey || sourceKey !== targetKey) {
+      throw new Error(
+        `${theme} split scroll: source ${sourceKey} -> target ${targetKey}`,
+      );
+    }
+
+    await this.scrollSplit("target", 200);
+    const targetKeyAfterScroll = await this.firstVisibleKey("target");
+    await this.click('.pv-seg [data-mode="source"]');
+    await this.waitFor(`document.querySelector(".pv-app").dataset.mode === "source"`);
+    const sourceKeyAfterReturn = await this.firstVisibleKey("source");
+    if (
+      !targetKeyAfterScroll ||
+      !sourceKeyAfterReturn ||
+      targetKeyAfterScroll !== sourceKeyAfterReturn
+    ) {
+      throw new Error(
+        `${theme} split scroll: target ${targetKeyAfterScroll} -> source ${sourceKeyAfterReturn}`,
+      );
+    }
+
+    await this.click('.pv-seg [data-mode="bilingual"]');
+    await this.waitFor(`document.querySelector(".pv-app").dataset.mode === "bilingual"`);
+    await sleep(120);
+    const bilingualSourceKey = await this.firstVisibleKey("source");
+    const bilingualTargetKey = await this.firstVisibleKey("target");
+    if (
+      !bilingualSourceKey ||
+      !bilingualTargetKey ||
+      bilingualSourceKey !== sourceKeyAfterReturn ||
+      bilingualTargetKey !== sourceKeyAfterReturn
+    ) {
+      throw new Error(
+        `${theme} split scroll: bilingual ${bilingualSourceKey}/${bilingualTargetKey} expected ${sourceKeyAfterReturn}`,
+      );
+    }
+    await this.select("split", "bilingual");
+    return {
+      theme,
+      name: "split-scroll-carryover",
+      sourceKey,
+      targetKey,
+      targetKeyAfterScroll,
+      sourceKeyAfterReturn,
+      bilingualSourceKey,
+      bilingualTargetKey,
+    };
+  }
 }
 
 /** 联系表：按主题分组展示截图，附检查结果。 */
@@ -573,12 +664,17 @@ ${sections}
 }
 
 /** Markdown 汇总，方便在 docs/PR 里引用。 */
-function report(records: ShotRecord[], durationMs: number): string {
+function report(
+  records: ShotRecord[],
+  durationMs: number,
+  scrollChecks: ScrollCheckRecord[],
+): string {
   const lines = [
     "# Native preview UI matrix",
     "",
     `- Generated: ${new Date().toISOString()}`,
     `- Screenshots: ${records.length}`,
+    `- Split scroll carryover checks: ${scrollChecks.length} passed`,
     `- Duration: ${(durationMs / 1000).toFixed(1)}s`,
     `- Themes: ${themes.map((theme) => STATIC_THEME_NAMES[theme]).join(", ")}`,
     `- Layouts: ${layouts.join(", ")}`,
@@ -622,6 +718,7 @@ async function main(): Promise<void> {
   await cdp.send("Log.enable");
   const page = new Page(cdp);
   const records: ShotRecord[] = [];
+  const scrollChecks: ScrollCheckRecord[] = [];
 
   try {
     for (const theme of themes) {
@@ -680,6 +777,9 @@ async function main(): Promise<void> {
       );
       await page.dismissToasts();
 
+      scrollChecks.push(await page.verifySplitScrollSync(theme));
+      console.log("  ✓ split-scroll-carryover");
+
       await page.setBusy(true);
       records.push(await page.shot(theme, "busy"));
       console.log("  ✓ busy");
@@ -707,6 +807,7 @@ async function main(): Promise<void> {
         durationMs: Date.now() - started,
         edge: edgePath,
         records,
+        scrollChecks,
       },
       null,
       2,
@@ -716,7 +817,7 @@ async function main(): Promise<void> {
   await writeFile(path.join(outputDir, "index.html"), contactSheet(records), "utf8");
   await writeFile(
     path.join(outputDir, "report.md"),
-    report(records, Date.now() - started),
+    report(records, Date.now() - started, scrollChecks),
     "utf8",
   );
   console.log(

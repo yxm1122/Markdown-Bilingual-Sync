@@ -66,6 +66,15 @@ interface Toast {
   kind: PreviewToastKind;
 }
 
+interface SplitScrollAnchor {
+  side: Side;
+  key: string;
+  /** 当前块内的滚动进度（0–1）。 */
+  progress: number;
+  atTop: boolean;
+  atBottom: boolean;
+}
+
 interface MenuState {
   x: number;
   y: number;
@@ -1221,8 +1230,80 @@ function SplitView(props: {
   // 只抑制「程序写入另一侧」触发的回声事件，避免双向反馈；
   // 用户在本侧连续滚动时不应被节流，否则另一侧会明显落后。
   const syncLock = useRef<Record<Side, number>>({ source: 0, target: 0 });
+  // 仅原文/仅译文时另一侧不可见，无法实时测量；记录最后滚动块的进度，
+  // 切换模式后在新可见侧还原，避免两侧各自停在不同位置。
+  const scrollAnchor = useRef<SplitScrollAnchor | null>(null);
+
+  /** 找到滚动容器顶部对应的块及其块内偏移。 */
+  const locateAnchor = (pane: HTMLDivElement) => {
+    if (pane.clientHeight === 0) {
+      return null;
+    }
+    const cells = Array.from(pane.querySelectorAll<HTMLElement>(".pv-cell[data-sync-key]"));
+    if (!cells.length) {
+      return null;
+    }
+    const paneRect = pane.getBoundingClientRect();
+    let anchor = cells[cells.length - 1];
+    for (const cell of cells) {
+      if (cell.getBoundingClientRect().bottom > paneRect.top + 1) {
+        anchor = cell;
+        break;
+      }
+    }
+    return {
+      anchor,
+      anchorTop: anchor.getBoundingClientRect().top - paneRect.top + pane.scrollTop,
+      anchorHeight: Math.max(1, anchor.offsetHeight),
+      max: Math.max(0, pane.scrollHeight - pane.clientHeight),
+    };
+  };
+
+  const readAnchor = (
+    pane: HTMLDivElement,
+    side: Side,
+  ): SplitScrollAnchor | null => {
+    const located = locateAnchor(pane);
+    if (!located) {
+      return null;
+    }
+    const progress = Math.max(
+      0,
+      Math.min(1, (pane.scrollTop - located.anchorTop) / located.anchorHeight),
+    );
+    return {
+      side,
+      key: located.anchor.dataset.syncKey ?? "",
+      progress,
+      atTop: pane.scrollTop <= 1,
+      atBottom: located.max > 0 && pane.scrollTop >= located.max - 1,
+    };
+  };
+
+  const applyAnchor = (pane: HTMLDivElement, anchor: SplitScrollAnchor): void => {
+    const located = locateAnchor(pane);
+    if (!located) {
+      return;
+    }
+    const twin = pane.querySelector<HTMLElement>(
+      `.pv-cell[data-sync-key="${CSS.escape(anchor.key)}"]`,
+    );
+    if (!twin) {
+      return;
+    }
+    const paneRect = pane.getBoundingClientRect();
+    const twinTop =
+      twin.getBoundingClientRect().top - paneRect.top + pane.scrollTop;
+    const next = anchor.atTop
+      ? 0
+      : anchor.atBottom
+        ? located.max
+        : twinTop + anchor.progress * twin.offsetHeight;
+    pane.scrollTop = Math.max(0, Math.min(located.max, next));
+  };
 
   useEffect(() => {
+    scrollAnchor.current = null;
     const saved = savedState();
     if (sourceRef.current) {
       sourceRef.current.scrollTop = saved.sourceScroll ?? 0;
@@ -1266,48 +1347,43 @@ function SplitView(props: {
       return;
     }
     const sync = (from: HTMLDivElement, to: HTMLDivElement, fromSide: Side) => {
+      // 隐藏侧不参与测量；可见侧无论是否双语都记录锚点，供模式切换还原。
+      if (from.clientHeight === 0) {
+        return;
+      }
+      scrollAnchor.current = readAnchor(from, fromSide);
+      if (mode !== "bilingual" || to.clientHeight === 0) {
+        return;
+      }
       const now = performance.now();
-      if (now < syncLock.current[fromSide] || mode !== "bilingual") {
+      if (now < syncLock.current[fromSide]) {
         return;
       }
-      // 一侧被 CSS 隐藏时不参与同步，避免 clientHeight 为 0 造成死循环。
-      if (from.clientHeight === 0 || to.clientHeight === 0) {
+      const located = locateAnchor(from);
+      if (!located) {
         return;
       }
-      const cells = Array.from(from.querySelectorAll<HTMLElement>(".pv-cell[data-sync-key]"));
-      if (!cells.length) {
-        return;
-      }
-      const fromRect = from.getBoundingClientRect();
-      const toRect = to.getBoundingClientRect();
-      let anchor = cells[cells.length - 1];
-      for (const cell of cells) {
-        if (cell.getBoundingClientRect().bottom > fromRect.top + 1) {
-          anchor = cell;
-          break;
-        }
-      }
-      const twin = to.querySelector<HTMLElement>(`.pv-cell[data-sync-key="${CSS.escape(anchor.dataset.syncKey ?? "")}"]`);
+      const twin = to.querySelector<HTMLElement>(
+        `.pv-cell[data-sync-key="${CSS.escape(located.anchor.dataset.syncKey ?? "")}"]`,
+      );
       if (!twin) {
         return;
       }
+      const toRect = to.getBoundingClientRect();
       // offsetTop 的 offsetParent 可能是 .pv-body 而不是滚动容器，使用 rect 差更可靠。
-      const anchorTop =
-        anchor.getBoundingClientRect().top - fromRect.top + from.scrollTop;
       const twinTop =
         twin.getBoundingClientRect().top - toRect.top + to.scrollTop;
-      const delta = from.scrollTop - anchorTop;
+      const delta = from.scrollTop - located.anchorTop;
       const mapped =
         delta <= 0
           ? delta
-          : (delta / Math.max(1, anchor.offsetHeight)) * twin.offsetHeight;
-      const fromMax = Math.max(0, from.scrollHeight - from.clientHeight);
+          : (delta / located.anchorHeight) * twin.offsetHeight;
       const toMax = Math.max(0, to.scrollHeight - to.clientHeight);
       let next = twinTop + mapped;
       // 顶部/底部按整篇文档对齐，避免最后一块高度不同导致另一侧永远差一截。
       if (from.scrollTop <= 1) {
         next = 0;
-      } else if (fromMax > 0 && from.scrollTop >= fromMax - 1) {
+      } else if (located.max > 0 && from.scrollTop >= located.max - 1) {
         next = toMax;
       }
       next = Math.max(0, Math.min(toMax, next));
@@ -1327,6 +1403,25 @@ function SplitView(props: {
       target.removeEventListener("scroll", onTarget);
     };
   }, [model.fileLabel, mode, readonly.source, readonly.target]);
+
+  // 切换仅原文/仅译文/双语后，把最后滚动的块位置还原到新可见侧。
+  useLayoutEffect(() => {
+    const anchor = scrollAnchor.current;
+    const source = sourceRef.current;
+    const target = targetRef.current;
+    if (!anchor || !source || !target) {
+      return;
+    }
+    if (mode === "source") {
+      applyAnchor(source, anchor);
+    } else if (mode === "target") {
+      applyAnchor(target, anchor);
+    } else if (anchor.side === "source") {
+      applyAnchor(target, anchor);
+    } else {
+      applyAnchor(source, anchor);
+    }
+  }, [mode]);
 
   const footnoteSource = model.sourceFootnotesHtml;
   const footnoteTarget = model.targetFootnotesHtml;

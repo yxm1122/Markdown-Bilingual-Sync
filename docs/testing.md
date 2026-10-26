@@ -67,6 +67,7 @@ CI 会依次执行 `npm ci`、`typecheck`、`test`、`package`。本地提交前
 | `taskViewProvider.test.ts` | 任务 TreeView 节点、状态图标/详情、语言切换作用域与交换回滚 |
 | `appShell.test.ts` | 原生预览首屏 CSP、资源 URI、初始状态 JSON、文案注入与转义 |
 | `webview/app.render.test.tsx` | 首屏、统计、模式/布局切换、分栏只读、空状态、控件无障碍名称 |
+| `webview/app.scroll.test.tsx` | 虚拟块几何下的分栏双向同步、仅原文/仅译文切换位置还原、顶部/底部对齐 |
 | `webview/app.editing.test.tsx` | 译文/原文编辑、待插入/独立译文、插入、删除/撤销、链接、菜单键盘导航 |
 | `webview/app.summary.test.tsx` | 摘要/术语表草稿、assist 开关、提示条/toast、宿主刷新时焦点与草稿保持、忙碌、脚注 |
 | `webview/app.dialogs.test.tsx` | 导出/原文 diff、写入态竞态、错误恢复、关闭与焦点 |
@@ -157,6 +158,7 @@ expect(actions(harness)).toContainEqual({ type: "saveTargetEdit", text: "新译�
 - 夹具在 `test/webview/fixtures.ts`：`makeBlock` / `makeModel` / `makeBoot` / `makeExportConfirmation`；
 - 断言优先用角色、`aria-label`、标题和可见文本，避免绑定 class；结构性查询（如 `.pv-split`）只用于布局存在性。
 - 内联编辑与插入的草稿现在由编辑器本地持有；状态更新时用 `textarea` 同一节点与 `document.activeElement` 验证焦点/草稿保持。
+- 分栏滚动用 `app.scroll.test.tsx` 的虚拟几何（每块 50px、视口 300px）验证锚点映射；模式切换的真实重排另由 `ui:matrix` 的 split 截图与 headless 检查补充。
 
 #### 4.5.2 截图矩阵
 
@@ -169,6 +171,7 @@ npm run ui:matrix
 - 三主题 × 三布局（columns/stacked/split）× 三模式（bilingual/source/target）= 27 张；
 - 每主题另拍 summary、export-dialog、source-dialog、editing、block-menu、split-readonly、busy、narrow(900×900)、empty，共 54 张；
 - `manifest.json` 记录视口、实际 PNG 尺寸、布局/模式/只读状态、横向溢出与控制台错误；
+- 每个主题还会验证分栏“仅原文 → 仅译文 → 仅原文 → 双语”的滚动落点，要求另一侧回到同一块；
 - `index.html` 是联系表，`report.md` 是汇总；
 - 任一状态出现横向溢出、运行时异常或尺寸不一致，脚本以非零退出。
 
