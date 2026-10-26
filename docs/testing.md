@@ -40,8 +40,8 @@ CI 会依次执行 `npm ci`、`typecheck`、`test`、`package`。本地提交前
 | `exportService.test.ts` | 导出准备、覆盖确认、写盘、未保存文档 |
 | `diffPreview.test.ts` | 行级 diff、截断、新建文件 |
 | `importTranslation.test.ts` | 导入结构校验、human 锁定、锚点拒绝 |
-| `batching.test.ts` | token 估算、块数/预算、并发均衡、摘要上下文 |
-| `batchCoordinator.test.ts` | 跨文件合并、复合 id 路由、摘要隔离、单调用取消 |
+| `batching.test.ts` | token 估算、块数/预算、并发均衡、摘要上下文、文档/小节边界 |
+| `batchCoordinator.test.ts` | 跨文件合并、复合 id 路由、摘要隔离、文档标识分配、单调用取消 |
 | `concurrency.test.ts` | 全局限制器 FIFO/取消/计数、文件 worker |
 | `batchFiles.test.ts` | 目录扫描、导出文件过滤、路径边界 |
 | `openaiProvider.test.ts` | 请求体、JSON 校验、重试、提示词/回声拒绝、脱敏、摘要、连接测试 |
@@ -53,6 +53,8 @@ CI 会依次执行 `npm ci`、`typecheck`、`test`、`package`。本地提交前
 | `language.test.ts` | markdown/skill 支持、manifest 激活与菜单条件 |
 | `evaluationMetrics.test.ts` | 遗漏/回显、受保护片段、术语、结构、frontmatter、参考相似度等评估指标 |
 | `evaluationDataset.test.ts` | 16 个评估用例的结构/术语/参考译文自洽性 |
+| `consistency.test.ts` | 译后术语/受保护 Markdown 检查、人工锁定块跳过、无缓存处理 |
+| `documentGlossary.test.ts` | 文档术语表文本格式解析、去重、行号错误与条数上限 |
 | `i18nCatalog.test.ts` | en/zh key 与占位符一致性、bundle 新鲜度、中/英文 locale 行为 |
 | `i18nErrors.test.ts` | 错误 key 唯一性、bundle 覆盖、中/英文 `tError` 行为 |
 | `i18nFormat.test.ts` | 英文/中文日期格式、英文预览 Webview 与稳定 provider 显示名 |

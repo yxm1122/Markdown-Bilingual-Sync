@@ -481,11 +481,14 @@ describe("buildPreviewModel", () => {
 
     const sync = html.indexOf('data-action="sync"');
     const importButton = html.indexOf('data-action="importTranslation"');
+    const checkButton = html.indexOf('data-action="checkConsistency"');
     const refresh = html.indexOf('data-action="refresh"');
     expect(sync).toBeGreaterThanOrEqual(0);
     expect(importButton).toBeGreaterThan(sync);
-    expect(refresh).toBeGreaterThan(importButton);
+    expect(checkButton).toBeGreaterThan(importButton);
+    expect(refresh).toBeGreaterThan(checkButton);
     expect(html).toContain("导入译文");
+    expect(html).toContain("检查");
   });
 
   it("renders independent read-only panes in the split layout", async () => {
@@ -710,7 +713,7 @@ describe("buildPreviewModel", () => {
       ...LABELS,
     });
     expect(model.sourceFootnotesHtml).toContain("Footnote body.");
-    expect(model.targetFootnotesHtml).toContain("Footnote body.");
+    expect(model.targetFootnotesHtml).toContain("脚注 body.");
     expect(model.blocks.some((block) => block.kind === "footnote")).toBe(
       false,
     );
@@ -772,6 +775,8 @@ describe("buildPreviewHtml", () => {
           model: "test-model",
           tokens: 12,
           canGenerate: true,
+          glossaryText: "table => 表格\ncache => 缓存",
+          glossaryCount: 2,
         },
       },
     });
@@ -788,6 +793,9 @@ describe("buildPreviewHtml", () => {
     expect(html).toContain('<html lang="zh-cn">');
     expect(html).toContain("这是全文摘要。");
     expect(html).toContain("可能过期");
+    expect(html).toContain('data-glossary-text');
+    expect(html).toContain('data-action="saveGlossary"');
+    expect(html).toContain("2 条");
     const expectedTime = new Intl.DateTimeFormat("zh-cn", {
       dateStyle: "medium",
       timeStyle: "short",
@@ -934,6 +942,9 @@ describe("buildPreviewHtml", () => {
 
     expect(html).toContain(
       'data-action="export" disabled title="需要先生成译文缓存"',
+    );
+    expect(html).toContain(
+      'data-action="checkConsistency" disabled title="还没有译文缓存，请先同步翻译。"',
     );
     expect(html).not.toContain('data-action="retranslateStale"');
     expect(html).not.toContain('data-action="retranslateAll"');

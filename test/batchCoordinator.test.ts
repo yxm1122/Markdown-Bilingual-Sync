@@ -83,6 +83,36 @@ describe("BatchTranslationCoordinator", () => {
     expect(progressB[progressB.length - 1]).toEqual([2, 2]);
   });
 
+  it("assigns distinct document ids when merging calls without metadata", async () => {
+    const calls: TranslationRequest[] = [];
+    const delegate: TranslationProvider = {
+      id: "fake",
+      label: "Fake",
+      async translate(requested) {
+        calls.push(requested);
+        return requested.items.map((entry) => ({
+          id: entry.id,
+          text: `译:${entry.text}`,
+        }));
+      },
+    };
+    const coordinator = new BatchTranslationCoordinator(delegate, {
+      flushDelayMs: 0,
+    });
+
+    await Promise.all([
+      coordinator.translate(request([item("a1", "A1"), item("a2", "A2")])),
+      coordinator.translate(request([item("b1", "B1"), item("b2", "B2")])),
+    ]);
+
+    expect(calls).toHaveLength(1);
+    const documentIds = calls[0].items.map((entry) => entry.documentId);
+    expect(documentIds.every(Boolean)).toBe(true);
+    expect(documentIds[0]).toBe(documentIds[1]);
+    expect(documentIds[2]).toBe(documentIds[3]);
+    expect(documentIds[0]).not.toBe(documentIds[2]);
+  });
+
   it("does not coalesce calls with different document summaries", async () => {
     const calls: TranslationRequest[] = [];
     const delegate: TranslationProvider = {
@@ -162,7 +192,7 @@ describe("BatchTranslationCoordinator", () => {
         return [];
       },
       async summarize(request) {
-        return `摘要：${request.text}`;
+        return { summary: `摘要：${request.text}`, glossary: [] };
       },
     };
     const coordinator = new BatchTranslationCoordinator(delegate, {
@@ -176,7 +206,7 @@ describe("BatchTranslationCoordinator", () => {
         sourceLanguage: "en",
         targetLanguage: "zh-CN",
       }),
-    ).resolves.toBe("摘要：全文");
+    ).resolves.toEqual({ summary: "摘要：全文", glossary: [] });
   });
 
   it("rejects summary generation when the delegate does not support it", async () => {

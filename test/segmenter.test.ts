@@ -84,7 +84,7 @@ describe("parseMarkdownDocument", () => {
     expect(byKind.get("blockquote")).toBe(true);
     expect(byKind.get("math")).toBe(false);
     expect(byKind.get("code")).toBe(false);
-    expect(byKind.get("footnote")).toBe(false);
+    expect(byKind.get("footnote")).toBe(true);
   });
 
   it("recognizes standalone math instead of a paragraph", () => {

@@ -5,6 +5,7 @@
  * 解析缓存时剥离，序列化时写回；这样摘要随缓存文件一起保存/删除，
  * 又不会参与块对齐、译文统计或导出。
  */
+import { normalizeGlossaryEntries } from "../glossary/glossary";
 import type { CacheSummary } from "../markdown/types";
 import { normalizeNewlines, sha256 } from "../util/hash";
 
@@ -32,6 +33,7 @@ export function createSummaryMarker(summary: CacheSummary): string {
     sourceHash: summary.sourceHash,
     updatedAt: summary.updatedAt,
     ...(summary.model ? { model: summary.model } : {}),
+    ...(summary.glossary?.length ? { glossary: summary.glossary } : {}),
   });
   return `${PREFIX}${Buffer.from(payload, "utf8").toString("base64url")}${SUFFIX}`;
 }
@@ -70,6 +72,7 @@ export function parseSummaryMarker(line: string): CacheSummary | undefined {
     ) {
       return undefined;
     }
+    const glossary = normalizeGlossaryEntries(record.glossary);
     return {
       text,
       sourceHash,
@@ -77,6 +80,7 @@ export function parseSummaryMarker(line: string): CacheSummary | undefined {
       ...(typeof record.model === "string" && record.model
         ? { model: record.model }
         : {}),
+      ...(glossary.length > 0 ? { glossary } : {}),
     };
   } catch {
     return undefined;

@@ -64,6 +64,7 @@ export const UI_TEXT = {
     testProgressMessage: "正在发送测试请求…",
     testSuccess: "翻译连接成功：{model} · {latency} ms{thinking} · 示例译文：{sample}",
     testThinkingDisabled: " · 已关闭思考模式",
+    testThinkingEnabled: " · 已开启思考模式",
     noApiKey: "尚未保存 AI 翻译 API Key。",
     confirmClearApiKey: "清除已保存的 AI 翻译 API Key？",
     clearApiKeyAction: "清除密钥",
@@ -104,6 +105,12 @@ export const UI_TEXT = {
     providerPresetPlaceholder: "选择后会把 provider 与接口设置写入用户设置",
     providerPresetApplied: "已应用 {name} 预设。",
     providerPresetTestAction: "测试连接",
+    editScopedGlossaryTitle: "编辑术语表",
+    glossaryGlobal: "全局术语表",
+    glossaryGlobalDescription: "所有工作区共用",
+    glossaryWorkspace: "工作区术语表",
+    glossaryWorkspaceDescription: "保存在工作区根目录的 .mbs-glossary.json",
+    glossaryNoWorkspace: "请先打开一个文件夹，再编辑工作区术语表。",
   },
   // 双语预览页：结构由 src/preview/html.ts 渲染，部分弹窗/编辑器字段再注入 media/preview.js。
   preview: {
@@ -201,10 +208,20 @@ export const UI_TEXT = {
     // 翻译态占位文本：目标块无内容、未翻译、已删除等场景。
     summary: {
       title: "全文摘要",
-      placeholder: "尚未生成全文摘要。可点击“AI 生成”，也可以直接手动填写。",
+      placeholder:
+        "尚未生成全文摘要。点击“AI 生成”可同时创建摘要与文档术语表，也可以直接手动填写摘要。",
       generate: "AI 生成",
+      generateTitle: "生成摘要与文档术语表",
       save: "保存摘要",
       clear: "清除摘要",
+      clearTitle: "清除摘要及其文档术语表",
+      glossaryTitle: "文档术语表",
+      glossaryCount: "{count} 条",
+      glossaryPlaceholder: "每行一条，例如：table => 表格",
+      glossaryHint:
+        "随摘要生成；重新生成会保留已有条目。同名 source 的文档术语优先于全局/工作区术语表。",
+      glossaryNeedsSummary: "先生成全文摘要，才能创建文档术语表。",
+      saveGlossary: "保存术语表",
       stale: "可能过期",
       tokens: "约 {count} tokens",
       generatedAt: "生成于 {time}",
@@ -274,6 +291,8 @@ export const UI_TEXT = {
       importTranslationTitle: "导入已有译文并标记为译文锁定",
       refresh: "刷新",
       editCache: "编辑缓存",
+      checkConsistency: "检查",
+      checkConsistencyTitle: "检查机器译文中的术语与受保护 Markdown",
       export: "导出",
       exportDisabledTitle: "需要先生成译文缓存",
       openCacheFolder: "打开缓存目录",
@@ -336,6 +355,18 @@ export const UI_TEXT = {
       writeFailed: "写回原文失败。",
       note: "写入后会保存源文件；机器译文按原文变更规则标记为过期，回译对应的译文会锁定到新原文。",
     },
+  },
+  // 译后一致性检查（预览工具栏动作）。
+  consistency: {
+    title: "译文一致性检查",
+    blockItem: "块 {index} · {count} 个问题",
+    glossaryIssue: "术语：{source} → {target}",
+    protectedIssue: "受保护 Markdown：{token}",
+    location: "第 {line} 行",
+    noCache: "还没有译文缓存，请先同步翻译。",
+    ok: "未发现术语或受保护 Markdown 问题。",
+    okWithSkipped: "机器译文未发现问题；已跳过 {count} 个译文锁定块。",
+    retranslateNote: "选择后会重译该块；译文锁定块不参与检查。",
   },
   // 异步操作结果提示：由扩展宿主通过 showToast / showInformationMessage 展示。
   notifications: {
@@ -408,6 +439,11 @@ export const UI_TEXT = {
     summarySaved: "全文摘要已保存。",
     summaryCleared: "全文摘要已清除。",
     summaryEmpty: "摘要不能为空。",
+    glossarySaving: "正在保存文档术语表…",
+    glossarySaved: "文档术语表已保存。",
+    glossaryInvalidLines:
+      "术语表第 {lines} 行格式不正确，请使用“source => target”每行一条。",
+    glossaryTooMany: "文档术语表最多支持 {max} 条。",
     backStaged: "回译结果已暂存为原文修改，点击“应用原文修改”写回文件。",
     backSame: "回译结果与当前原文一致，未暂存修改。",
     backMultiBlock: "回译结果包含多个 Markdown 块，无法暂存为单个原文块。",

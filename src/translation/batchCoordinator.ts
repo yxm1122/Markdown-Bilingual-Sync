@@ -9,6 +9,7 @@
  * - 合并请求使用 `mbsq_<callId>_<index>` 复合 id，调用方永远看不到复合 id；
  * - 每个调用块必须恰好交付一次：重复交付立即报错，缺失则整个调用失败；
  * - 只合并 sourceLanguage/targetLanguage/全文摘要完全相同的调用；术语表按 source 去重（先到先得）；
+ * - 合并后的块仍按 documentId 分批，不同文件的块不会进入同一 HTTP 请求；
  * - 一个调用取消不影响同组其他调用；只有组内所有调用都取消/结算后才 abort 组信号。
  *
  * 外部依赖：被包装的 TranslationProvider；纯内存调度，不读写文件/配置。
@@ -21,6 +22,7 @@ import type {
   GlossaryEntry,
   TranslationChunkHandler,
   SummaryRequest,
+  SummaryResult,
   TranslationProgress,
   TranslationProvider,
   TranslationRequest,
@@ -110,7 +112,7 @@ export class BatchTranslationCoordinator implements TranslationProvider {
   summarize(
     request: SummaryRequest,
     signal?: AbortSignal,
-  ): Promise<string> {
+  ): Promise<SummaryResult> {
     if (signal?.aborted) {
       return Promise.reject(new Error(tError("common.translationCancelled")));
     }
@@ -292,7 +294,12 @@ export class BatchTranslationCoordinator implements TranslationProvider {
           call,
           originalId: item.id,
         });
-        combinedItems.push({ ...item, id: compositeId });
+        combinedItems.push({
+          ...item,
+          id: compositeId,
+          // 调用方未提供文档标识时，按调用分配一个，避免不同文件混批。
+          documentId: item.documentId ?? `call-${call.id}`,
+        });
       });
     }
     if (combinedItems.length === 0) {

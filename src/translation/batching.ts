@@ -339,6 +339,389 @@ function balancedPack(
   );
 }
 
+// ---- 文档 / 小节感知分批 ----
+
+/**
+ * 一个不可再优先切分的打包单元：同一文档、同一小节的连续块。
+ * 小节超过块数或 token 上限时会先被拆成多个同 key 的 unit。
+ */
+interface BatchingUnit {
+  items: TranslationItem[];
+  tokens: number;
+  documentId: string;
+  sectionId: string;
+}
+
+/** 取块的文档/小节 key；未提供时回退为空串，让旧调用方保持原有行为。 */
+function unitKey(item: TranslationItem): {
+  documentId: string;
+  sectionId: string;
+} {
+  return {
+    documentId: item.documentId ?? "",
+    sectionId: item.sectionId ?? "",
+  };
+}
+
+/** 计算一组块的估算 token 总和。纯函数。 */
+function sumTokens(
+  items: readonly TranslationItem[],
+  estimates: ReadonlyMap<TranslationItem, number>,
+): number {
+  let total = 0;
+  for (const item of items) {
+    total += estimates.get(item) ?? 0;
+  }
+  return total;
+}
+
+/**
+ * 把块按文档/小节分组为 unit；超限的小节再用 greedyPack 内部拆分。
+ * 分组只按输入顺序切连续段，保证输出顺序与原文一致。纯函数。
+ */
+function buildUnits(
+  items: readonly TranslationItem[],
+  estimates: ReadonlyMap<TranslationItem, number>,
+  maxItems: number,
+  tokenBudget: number,
+): BatchingUnit[] {
+  const units: BatchingUnit[] = [];
+  let start = 0;
+  while (start < items.length) {
+    const key = unitKey(items[start]);
+    let end = start + 1;
+    while (end < items.length) {
+      const next = unitKey(items[end]);
+      if (
+        next.documentId !== key.documentId ||
+        next.sectionId !== key.sectionId
+      ) {
+        break;
+      }
+      end += 1;
+    }
+    const sectionItems = items.slice(start, end);
+    const tokens = sumTokens(sectionItems, estimates);
+    if (sectionItems.length <= maxItems && tokens <= tokenBudget) {
+      units.push({ items: sectionItems, tokens, ...key });
+    } else {
+      const sectionEstimates = sectionItems.map(
+        (item) => estimates.get(item) ?? 0,
+      );
+      for (const part of greedyPack(
+        sectionItems,
+        sectionEstimates,
+        maxItems,
+        tokenBudget,
+      )) {
+        units.push({
+          items: part,
+          tokens: sumTokens(part, estimates),
+          ...key,
+        });
+      }
+    }
+    start = end;
+  }
+  return units;
+}
+
+/**
+ * 把 unit 顺序装入批次：文档变化、块数或 token 超限时落批。
+ * 同一文档的相邻小节可以共享一批，但绝不会跨文档混批。纯函数。
+ */
+function packUnits(
+  units: readonly BatchingUnit[],
+  maxItems: number,
+  tokenBudget: number,
+): BatchingUnit[][] {
+  const batches: BatchingUnit[][] = [];
+  let current: BatchingUnit[] = [];
+  let count = 0;
+  let tokens = 0;
+  let documentId: string | undefined;
+
+  const flush = () => {
+    if (current.length > 0) {
+      batches.push(current);
+      current = [];
+      count = 0;
+      tokens = 0;
+      documentId = undefined;
+    }
+  };
+
+  for (const unit of units) {
+    if (current.length > 0) {
+      if (
+        documentId !== unit.documentId ||
+        count + unit.items.length > maxItems ||
+        tokens + unit.tokens > tokenBudget
+      ) {
+        flush();
+      }
+    }
+    if (current.length === 0) {
+      documentId = unit.documentId;
+    }
+    current.push(unit);
+    count += unit.items.length;
+    tokens += unit.tokens;
+  }
+  flush();
+  return batches;
+}
+
+/**
+ * 在 unit 边界找一个均衡切点。优先切在不同小节之间；没有跨小节边界时
+ * 允许切在同小节的多个 unit 之间（通常来自超大小节的内部拆分）。纯函数。
+ */
+function splitUnitBatch(
+  batch: readonly BatchingUnit[],
+  maxItems: number,
+  minimumTokens: number,
+): [BatchingUnit[], BatchingUnit[]] | undefined {
+  if (batch.length < 2) {
+    return undefined;
+  }
+  const totalTokens = batch.reduce((sum, unit) => sum + unit.tokens, 0);
+  const totalItems = batch.reduce((sum, unit) => sum + unit.items.length, 0);
+  let leftTokens = 0;
+  let leftItems = 0;
+  let crossSection: [BatchingUnit[], BatchingUnit[]] | undefined;
+  let crossScore = Number.POSITIVE_INFINITY;
+  let sameSection: [BatchingUnit[], BatchingUnit[]] | undefined;
+  let sameScore = Number.POSITIVE_INFINITY;
+
+  for (let index = 1; index < batch.length; index += 1) {
+    leftTokens += batch[index - 1].tokens;
+    leftItems += batch[index - 1].items.length;
+    const rightTokens = totalTokens - leftTokens;
+    const rightItems = totalItems - leftItems;
+    if (
+      leftTokens < minimumTokens ||
+      rightTokens < minimumTokens ||
+      leftItems > maxItems ||
+      rightItems > maxItems
+    ) {
+      continue;
+    }
+    const parts: [BatchingUnit[], BatchingUnit[]] = [
+      batch.slice(0, index),
+      batch.slice(index),
+    ];
+    const score = Math.abs(leftTokens - rightTokens);
+    const previous = batch[index - 1];
+    const next = batch[index];
+    if (
+      previous.documentId === next.documentId &&
+      previous.sectionId === next.sectionId
+    ) {
+      if (score < sameScore) {
+        sameScore = score;
+        sameSection = parts;
+      }
+    } else if (score < crossScore) {
+      crossScore = score;
+      crossSection = parts;
+    }
+  }
+  return crossSection ?? sameSection;
+}
+
+/** 把一个超限 unit 的内部按 splitBatch 再拆成两个 unit。纯函数。 */
+function splitLargeUnit(
+  unit: BatchingUnit,
+  estimates: ReadonlyMap<TranslationItem, number>,
+  maxItems: number,
+  minimumTokens: number,
+): [BatchingUnit, BatchingUnit] | undefined {
+  const parts = splitBatch(
+    unit.items,
+    estimates,
+    maxItems,
+    minimumTokens,
+  );
+  if (!parts) {
+    return undefined;
+  }
+  return [
+    {
+      ...unit,
+      items: parts[0],
+      tokens: sumTokens(parts[0], estimates),
+    },
+    {
+      ...unit,
+      items: parts[1],
+      tokens: sumTokens(parts[1], estimates),
+    },
+  ];
+}
+
+/** 取一批的文档 id；空批返回空串。 */
+function batchDocumentId(batch: readonly TranslationItem[]): string {
+  return batch[0]?.documentId ?? "";
+}
+
+/**
+ * 合并相邻的小批，但只允许同一文档内合并。
+ * 这是文档感知版本的 mergeSmallBatches，避免把不同文件的小文件硬塞进一批。纯函数。
+ */
+function mergeSmallBatchesSameDocument(
+  batches: TranslationItem[][],
+  estimates: ReadonlyMap<TranslationItem, number>,
+  maxItems: number,
+  tokenBudget: number,
+  minimumTokens: number,
+): TranslationItem[][] {
+  const merged: TranslationItem[][] = [];
+  for (const batch of batches) {
+    const previous = merged[merged.length - 1];
+    if (previous && batchDocumentId(previous) === batchDocumentId(batch)) {
+      const previousTokens = sumTokens(previous, estimates);
+      const currentTokens = sumTokens(batch, estimates);
+      if (
+        (previousTokens < minimumTokens || currentTokens < minimumTokens) &&
+        previous.length + batch.length <= maxItems &&
+        previousTokens + currentTokens <= tokenBudget
+      ) {
+        merged[merged.length - 1] = [...previous, ...batch];
+        continue;
+      }
+    }
+    merged.push([...batch]);
+  }
+  if (merged.length > 1) {
+    const last = merged[merged.length - 1];
+    const previous = merged[merged.length - 2];
+    const lastTokens = sumTokens(last, estimates);
+    const previousTokens = sumTokens(previous, estimates);
+    if (
+      batchDocumentId(previous) === batchDocumentId(last) &&
+      lastTokens < minimumTokens &&
+      previous.length + last.length <= maxItems &&
+      previousTokens + lastTokens <= tokenBudget
+    ) {
+      merged.splice(merged.length - 2, 2, [...previous, ...last]);
+    }
+  }
+  return merged;
+}
+
+/**
+ * 文档/小节感知的均衡分批。
+ *
+ * 先按文档和小节组成 unit，再顺序装批；并发不足时优先在跨小节边界拆分，
+ * 其次才拆大 unit 内部。这样既保留小节内的连贯性，也不会浪费并发槽位。
+ */
+function groupedBalancedPack(
+  items: readonly TranslationItem[],
+  estimates: readonly number[],
+  options: { maxItems: number; tokenBudget: number; concurrency: number },
+): TranslationItem[][] {
+  const { maxItems, tokenBudget, concurrency } = options;
+  const minimumTokens = Math.max(
+    MIN_BATCH_TOKENS_FLOOR,
+    Math.floor(tokenBudget * MIN_BATCH_RATIO),
+  );
+  const estimatesByItem = new Map<TranslationItem, number>();
+  for (let index = 0; index < items.length; index += 1) {
+    estimatesByItem.set(items[index], estimates[index]);
+  }
+
+  const units = buildUnits(items, estimatesByItem, maxItems, tokenBudget);
+  const unitBatches = packUnits(units, maxItems, tokenBudget);
+  const totalTokens = estimates.reduce((sum, value) => sum + value, 0);
+  const usefulConcurrentBatches = Math.min(
+    concurrency,
+    items.length,
+    Math.max(1, Math.floor(totalTokens / minimumTokens)),
+  );
+  const desiredBatches = Math.min(
+    items.length,
+    Math.max(
+      1,
+      unitBatches.length,
+      Math.ceil(items.length / maxItems),
+      usefulConcurrentBatches,
+    ),
+  );
+
+  while (unitBatches.length < desiredBatches) {
+    // 先找跨小节/unit 边界；选 token 最大的批来拆，尽快缩小最大批。
+    let target = -1;
+    let targetParts: [BatchingUnit[], BatchingUnit[]] | undefined;
+    for (let index = 0; index < unitBatches.length; index += 1) {
+      const parts = splitUnitBatch(
+        unitBatches[index],
+        maxItems,
+        minimumTokens,
+      );
+      if (
+        parts &&
+        (target < 0 ||
+          unitBatches[index].reduce((sum, unit) => sum + unit.tokens, 0) >
+            unitBatches[target].reduce((sum, unit) => sum + unit.tokens, 0))
+      ) {
+        target = index;
+        targetParts = parts;
+      }
+    }
+    if (targetParts) {
+      unitBatches.splice(target, 1, targetParts[0], targetParts[1]);
+      continue;
+    }
+
+    // 没有 unit 边界可拆时，拆分最大的单个 unit（通常是一个超大章节）。
+    let splitBatchIndex = -1;
+    let splitUnitIndex = -1;
+    let splitParts: [BatchingUnit, BatchingUnit] | undefined;
+    for (let batchIndex = 0; batchIndex < unitBatches.length; batchIndex += 1) {
+      const batch = unitBatches[batchIndex];
+      for (let unitIndex = 0; unitIndex < batch.length; unitIndex += 1) {
+        const unit = batch[unitIndex];
+        const parts = splitLargeUnit(
+          unit,
+          estimatesByItem,
+          maxItems,
+          minimumTokens,
+        );
+        if (
+          parts &&
+          (splitBatchIndex < 0 ||
+            unit.tokens > unitBatches[splitBatchIndex][splitUnitIndex].tokens)
+        ) {
+          splitBatchIndex = batchIndex;
+          splitUnitIndex = unitIndex;
+          splitParts = parts;
+        }
+      }
+    }
+    if (splitBatchIndex < 0 || !splitParts) {
+      break;
+    }
+    const [left, right] = splitParts;
+    unitBatches.splice(
+      splitBatchIndex,
+      1,
+      [left],
+      [right],
+    );
+  }
+
+  const itemBatches = unitBatches.map((batch) =>
+    batch.flatMap((unit) => unit.items),
+  );
+  return mergeSmallBatchesSameDocument(
+    itemBatches,
+    estimatesByItem,
+    maxItems,
+    tokenBudget,
+    minimumTokens,
+  );
+}
+
 // ---- 入口 ----
 
 /**
@@ -360,6 +743,27 @@ export function planTranslationBatches(
   const effectiveBudget = Math.max(1, options.tokenBudget - options.contextTokens);
   const effective = { ...options, tokenBudget: effectiveBudget };
   const estimates = items.map(estimateItemTokens);
+  const grouped = items.some(
+    (item) => item.documentId !== undefined || item.sectionId !== undefined,
+  );
+  if (grouped) {
+    if (effective.concurrency <= 1) {
+      const estimatesByItem = new Map<TranslationItem, number>();
+      for (let index = 0; index < items.length; index += 1) {
+        estimatesByItem.set(items[index], estimates[index]);
+      }
+      const units = buildUnits(
+        items,
+        estimatesByItem,
+        effective.maxItems,
+        effectiveBudget,
+      );
+      return packUnits(units, effective.maxItems, effectiveBudget).map(
+        (batch) => batch.flatMap((unit) => unit.items),
+      );
+    }
+    return groupedBalancedPack(items, estimates, effective);
+  }
   if (effective.concurrency <= 1) {
     return greedyPack(items, estimates, effective.maxItems, effectiveBudget);
   }

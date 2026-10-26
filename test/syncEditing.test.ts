@@ -125,11 +125,17 @@ describe("SyncService block editing and back-translation", () => {
         }));
       },
       async summarize(summaryRequest) {
-        return `摘要：${summaryRequest.text.split("\n")[0]}`;
+        return {
+          summary: `摘要：${summaryRequest.text.split("\n")[0]}`,
+          glossary: [{ source: "summary", target: "摘要" }],
+        };
       },
     };
     const glossaryStore = {
       async load() {
+        return { entries: [], warnings: [] };
+      },
+      async loadFor() {
         return { entries: [], warnings: [] };
       },
     };
@@ -218,6 +224,9 @@ describe("SyncService block editing and back-translation", () => {
       store as unknown as CacheStore,
       {
         async load() {
+          return { entries: [], warnings: [] };
+        },
+        async loadFor() {
           return { entries: [], warnings: [] };
         },
       } as unknown as GlossaryStore,
@@ -680,6 +689,9 @@ describe("SyncService block editing and back-translation", () => {
     const cacheText = await service.generateSummary(uri);
     const generated = parseCacheDocument(cacheText, makeMd()).summary;
     expect(generated?.text).toContain("摘要：");
+    expect(generated?.glossary).toEqual([
+      { source: "summary", target: "摘要" },
+    ]);
     // 缓存持久化稳定 provider id，而不是随界面语言变化的显示名。
     expect(generated?.model).toBe("test");
 
@@ -687,6 +699,63 @@ describe("SyncService block editing and back-translation", () => {
     await service.retranslateAll(uri);
     expect(requests[0].summary).toContain("摘要：");
     expect(cacheStore.text).toContain("mbs-summary:");
+  });
+
+  it("edits the document glossary without changing the summary", async () => {
+    const uri = mocks.FakeUri.file("/project/demo.md") as unknown as Uri;
+    const generatedText = await service.generateSummary(uri);
+    const generated = parseCacheDocument(generatedText, makeMd()).summary;
+
+    const updatedText = await service.saveDocumentGlossary(uri, [
+      { source: "table", target: "表格" },
+    ]);
+    const updated = parseCacheDocument(updatedText, makeMd()).summary;
+    expect(updated?.text).toBe(generated?.text);
+    expect(updated?.model).toBe(generated?.model);
+    expect(updated?.glossary).toEqual([
+      { source: "table", target: "表格" },
+    ]);
+
+    const paragraph = inspect(SOURCE, updatedText).alignment.blocks.find(
+      (block) => block.source.kind === "paragraph" && block.cache,
+    )!;
+    requests = [];
+    await service.retranslateBlock(uri, paragraph.source.index);
+    expect(requests[0].glossary).toEqual([
+      { source: "table", target: "表格" },
+    ]);
+
+    const clearedText = await service.saveDocumentGlossary(uri, []);
+    expect(
+      parseCacheDocument(clearedText, makeMd()).summary?.glossary,
+    ).toBeUndefined();
+    expect(
+      parseCacheDocument(clearedText, makeMd()).summary?.text,
+    ).toBe(generated?.text);
+  });
+
+  it("keeps existing document glossary entries when regenerating the summary", async () => {
+    const uri = mocks.FakeUri.file("/project/demo.md") as unknown as Uri;
+    await service.generateSummary(uri);
+    await service.saveDocumentGlossary(uri, [
+      { source: "custom", target: "自定义" },
+    ]);
+
+    const regenerated = await service.generateSummary(uri);
+    const summary = parseCacheDocument(regenerated, makeMd()).summary;
+    expect(summary?.glossary).toEqual([
+      { source: "summary", target: "摘要" },
+      { source: "custom", target: "自定义" },
+    ]);
+  });
+
+  it("requires a summary before saving a document glossary", async () => {
+    const uri = mocks.FakeUri.file("/project/demo.md") as unknown as Uri;
+    await expect(
+      service.saveDocumentGlossary(uri, [
+        { source: "table", target: "表格" },
+      ]),
+    ).rejects.toThrow(/全文摘要/);
   });
 
   it("generates a summary without an existing translation cache", async () => {

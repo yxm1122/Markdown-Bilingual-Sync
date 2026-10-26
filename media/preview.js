@@ -1242,6 +1242,15 @@
         post({ type: "saveSummary", summaryText: textarea.value });
         return;
       }
+      if (type === "saveGlossary") {
+        const panel = action.closest("[data-summary-panel]");
+        const textarea = panel?.querySelector("[data-glossary-text]");
+        if (!(textarea instanceof HTMLTextAreaElement)) {
+          return;
+        }
+        post({ type: "saveGlossary", glossaryText: textarea.value });
+        return;
+      }
       if (type === "generateSummary" || type === "clearSummary") {
         post({ type: type });
         return;

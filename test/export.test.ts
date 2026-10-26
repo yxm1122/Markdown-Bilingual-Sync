@@ -102,6 +102,21 @@ describe("buildExportMarkdown", () => {
     expect(exported.text).not.toContain("const value = 1;");
   });
 
+  it("exports translated footnote definitions with their labels", async () => {
+    const sourceText =
+      "A decision was recorded.[^lock]\n\n[^lock]: Locked translations are safe.\n";
+    const result = await translate(sourceText);
+    const exported = buildExportMarkdown({
+      md: makeMd(),
+      sourceText,
+      cacheText: result.cacheText,
+    });
+
+    expect(result.translatedCount).toBe(2);
+    expect(exported.text).toContain("[^lock]:");
+    expect(exported.text).not.toContain("Locked translations are safe.");
+  });
+
   it("exports a target-only cache block without modifying the source", async () => {
     const result = await translate();
     const before = inspect(SOURCE, result.cacheText);

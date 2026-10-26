@@ -90,6 +90,11 @@ export const SYNC_ERRORS = [
     zh: "保存摘要",
   },
   {
+    key: "sync.purposeSaveGlossary",
+    en: "saving the document glossary",
+    zh: "保存文档术语表",
+  },
+  {
     key: "sync.purposeImport",
     en: "importing the translation",
     zh: "导入译文",
@@ -178,6 +183,11 @@ export const SYNC_ERRORS = [
     key: "sync.summaryTooLong",
     en: "The summary is too long (over {chars} characters). Shorten it before saving.",
     zh: "摘要过长（超过 {chars} 字符），请精简后再保存。",
+  },
+  {
+    key: "sync.glossaryNoSummary",
+    en: "Generate the full-document summary before editing its glossary.",
+    zh: "请先生成全文摘要，再编辑文档术语表。",
   },
   {
     key: "sync.cacheMissingLink",

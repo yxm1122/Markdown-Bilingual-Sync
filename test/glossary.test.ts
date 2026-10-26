@@ -1,6 +1,9 @@
 /** 测试：术语表 JSON 解析、去重与警告。 */
 import { describe, expect, it } from "vitest";
-import { parseGlossaryText } from "../src/glossary/glossary";
+import {
+  mergeGlossaryResults,
+  parseGlossaryText,
+} from "../src/glossary/glossary";
 
 describe("parseGlossaryText", () => {
   it("parses a JSON array and trims terms", () => {
@@ -53,6 +56,42 @@ describe("parseGlossaryText", () => {
       { source: "api", target: "应用程序接口" },
     ]);
     expect(result.warnings.join("\n")).toContain("重复");
+  });
+
+  it("merges scoped glossaries with later scopes overriding earlier ones", () => {
+    const result = mergeGlossaryResults([
+      {
+        label: "glossary.json",
+        result: {
+          entries: [
+            { source: "API", target: "接口" },
+            { source: "cache", target: "缓存" },
+          ],
+          warnings: ["global warning"],
+        },
+      },
+      {
+        label: ".mbs-glossary.json",
+        result: {
+          entries: [{ source: "api", target: "API 端点" }],
+          warnings: ["project warning"],
+        },
+      },
+      {
+        label: "guide.mbs-glossary.json",
+        result: {
+          entries: [{ source: "cache", target: "高速缓存" }],
+          warnings: [],
+        },
+      },
+    ]);
+
+    expect(result.entries).toEqual([
+      { source: "api", target: "API 端点" },
+      { source: "cache", target: "高速缓存" },
+    ]);
+    expect(result.warnings).toContain("glossary.json: global warning");
+    expect(result.warnings).toContain(".mbs-glossary.json: project warning");
   });
 
   it("caps entries at 1000", () => {

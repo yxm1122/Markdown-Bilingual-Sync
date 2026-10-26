@@ -6,6 +6,7 @@ import {
   sanitizeRemoteMessage,
   selectGlossary,
   type OpenAIProviderConfig,
+  type OpenAIProviderOptions,
 } from "../src/translation/openaiProvider";
 import type {
   TranslationItem,
@@ -62,12 +63,14 @@ function configuredProvider(
   handler: (call: FetchCall) => Promise<Response>,
   config: Partial<OpenAIProviderConfig> = {},
   limiter?: RequestLimiter,
+  onResponse?: OpenAIProviderOptions["onResponse"],
 ) {
   const calls: FetchCall[] = [];
   const provider = new OpenAITranslationProvider({
     getConfig: () => ({ ...BASE_CONFIG, ...config }),
     retryDelayMs: 0,
     limiter,
+    onResponse,
     fetchImpl: (async (
       input: string | URL | Request,
       init?: RequestInit,
@@ -160,6 +163,24 @@ describe("OpenAITranslationProvider", () => {
     });
   });
 
+  it("allows neighbor context but requires independent item output", async () => {
+    const { provider, calls } = configuredProvider(async () =>
+      completion('{"items":[{"id":"b1","text":"你好。"}]}'),
+    );
+
+    await provider.translate(request([item("b1", "Hello.")]));
+
+    const body = JSON.parse(String(calls[0].init.body)) as {
+      messages: Array<{ role: string; content: string }>;
+    };
+    expect(body.messages[0].content).toContain(
+      "may come from the same document or section",
+    );
+    expect(body.messages[0].content).toContain(
+      "translate each item independently",
+    );
+  });
+
   it("sends stable reference and full-document summary in the request", async () => {
     const { provider, calls } = configuredProvider(async () =>
       completion('{"items":[{"id":"b1","text":"你好，世界。"}]}'),
@@ -198,9 +219,10 @@ describe("OpenAITranslationProvider", () => {
       title: "demo.md",
     });
 
-    expect(summary).toBe(
-      "This document explains the translation workflow.",
-    );
+    expect(summary).toEqual({
+      summary: "This document explains the translation workflow.",
+      glossary: [],
+    });
     expect(calls).toHaveLength(1);
     const body = JSON.parse(String(calls[0].init.body)) as {
       messages: Array<{ role: string; content: string }>;
@@ -211,25 +233,100 @@ describe("OpenAITranslationProvider", () => {
     );
   });
 
-  it("sends enable_thinking only when thinking is disabled", async () => {
+  it("parses a summary JSON and a document glossary", async () => {
+    const { provider, calls } = configuredProvider(async () =>
+      completion(
+        JSON.stringify({
+          summary: "本文介绍翻译流程。",
+          glossary: [
+            { source: "table", target: "表格" },
+            { source: "table", target: "数据表" },
+            { source: "", target: "无效" },
+          ],
+        }),
+      ),
+    );
+
+    const summary = await provider.summarize({
+      text: "# Workflow\n\nSteps.",
+      sourceLanguage: "en",
+      targetLanguage: "zh-CN",
+      glossary: [{ source: "cache", target: "缓存" }],
+    });
+
+    expect(summary).toEqual({
+      summary: "本文介绍翻译流程。",
+      glossary: [{ source: "table", target: "数据表" }],
+    });
+    const body = JSON.parse(String(calls[0].init.body)) as {
+      messages: Array<{ role: string; content: string }>;
+    };
+    expect(JSON.parse(body.messages[1].content).glossary).toEqual([
+      { source: "cache", target: "缓存" },
+    ]);
+  });
+
+  it("sends explicit enable_thinking for enabled and disabled modes", async () => {
     const handler = async () =>
       completion('{"items":[{"id":"b1","text":"你好。"}]}');
 
-    const { provider: thinkingProvider, calls: thinkingCalls } =
-      configuredProvider(handler);
-    await thinkingProvider.translate(request([item("b1", "Hello.")]));
-    const thinkingBody = JSON.parse(String(thinkingCalls[0].init.body)) as {
-      enable_thinking?: boolean;
+    const bodyFor = async (
+      config: Partial<OpenAIProviderConfig>,
+    ): Promise<{ enable_thinking?: boolean }> => {
+      const { provider, calls } = configuredProvider(handler, config);
+      await provider.translate(request([item("b1", "Hello.")]));
+      return JSON.parse(String(calls[0].init.body)) as {
+        enable_thinking?: boolean;
+      };
     };
-    expect(thinkingBody.enable_thinking).toBeUndefined();
 
-    const { provider: noThinkingProvider, calls: noThinkingCalls } =
-      configuredProvider(handler, { disableThinking: true });
-    await noThinkingProvider.translate(request([item("b1", "Hello.")]));
-    const noThinkingBody = JSON.parse(
-      String(noThinkingCalls[0].init.body),
-    ) as { enable_thinking?: boolean };
-    expect(noThinkingBody.enable_thinking).toBe(false);
+    expect((await bodyFor({})).enable_thinking).toBeUndefined();
+    expect(
+      (await bodyFor({ thinking: "default" })).enable_thinking,
+    ).toBeUndefined();
+    expect(
+      (await bodyFor({ thinking: "enabled" })).enable_thinking,
+    ).toBe(true);
+    expect(
+      (await bodyFor({ thinking: "disabled" })).enable_thinking,
+    ).toBe(false);
+    expect(
+      (await bodyFor({ disableThinking: true })).enable_thinking,
+    ).toBe(false);
+  });
+
+  it("reports whether a response contains reasoning", async () => {
+    const seen: boolean[] = [];
+    const { provider } = configuredProvider(
+      async () =>
+        new Response(
+          JSON.stringify({
+            choices: [
+              {
+                message: {
+                  role: "assistant",
+                  content: '{"items":[{"id":"b1","text":"你好。"}]}',
+                  reasoning_content: "先分析再翻译。",
+                },
+              },
+            ],
+            usage: {
+              completion_tokens_details: { reasoning_tokens: 12 },
+            },
+          }),
+          {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          },
+        ),
+      {},
+      undefined,
+      (info) => seen.push(info.hasReasoning),
+    );
+
+    await provider.translate(request([item("b1", "Hello.")]));
+
+    expect(seen).toEqual([true]);
   });
 
   it("splits requests into batches and reports progress", async () => {
@@ -366,6 +463,163 @@ describe("OpenAITranslationProvider", () => {
     expect(userPayload(calls[0]).glossary).toEqual([
       { source: "API", target: "接口" },
     ]);
+  });
+
+  it("retries once with missing glossary targets and uses the corrected result", async () => {
+    let attempt = 0;
+    const { provider, calls } = configuredProvider(async () => {
+      attempt += 1;
+      return completion(
+        JSON.stringify({
+          items: [
+            {
+              id: "b1",
+              text:
+                attempt === 1
+                  ? "下表汇总状态。"
+                  : "下面的表格汇总了状态。",
+            },
+          ],
+        }),
+      );
+    });
+
+    const results = await provider.translate({
+      ...request([item("b1", "The table below summarizes the state.")]),
+      glossary: [{ source: "table", target: "表格" }],
+    });
+
+    expect(results).toEqual([
+      { id: "b1", text: "下面的表格汇总了状态。" },
+    ]);
+    expect(calls).toHaveLength(2);
+    const body = JSON.parse(String(calls[1].init.body)) as {
+      messages: Array<{ role: string; content: string }>;
+    };
+    expect(body.messages[0].content).toContain(
+      'required glossary targets: "table" -> "表格"',
+    );
+  });
+
+  it("accepts a result after one glossary retry still misses the target", async () => {
+    const { provider, calls } = configuredProvider(async () =>
+      completion('{"items":[{"id":"b1","text":"下表汇总状态。"}]}'),
+    );
+
+    const results = await provider.translate({
+      ...request([item("b1", "The table below summarizes the state.")]),
+      glossary: [{ source: "table", target: "表格" }],
+    });
+
+    expect(results).toEqual([{ id: "b1", text: "下表汇总状态。" }]);
+    expect(calls).toHaveLength(2);
+  });
+
+  it("retries once when inline code is replaced by quoted prose", async () => {
+    const source =
+      "Use `Translate Current File` to create a translation.";
+    let attempt = 0;
+    const { provider, calls } = configuredProvider(async () => {
+      attempt += 1;
+      return completion(
+        JSON.stringify({
+          items: [
+            {
+              id: "b1",
+              text:
+                attempt === 1
+                  ? "使用“翻译当前文件”功能创建译稿。"
+                  : "使用 `Translate Current File` 功能创建译稿。",
+            },
+          ],
+        }),
+      );
+    });
+
+    const results = await provider.translate(request([item("b1", source)]));
+
+    expect(results).toEqual([
+      { id: "b1", text: "使用 `Translate Current File` 功能创建译稿。" },
+    ]);
+    expect(calls).toHaveLength(2);
+    const body = JSON.parse(String(calls[1].init.body)) as {
+      messages: Array<{ role: string; content: string }>;
+    };
+    expect(body.messages[0].content).toContain(
+      "removed or changed protected Markdown",
+    );
+    expect(body.messages[0].content).toContain("`Translate Current File`");
+  });
+
+  it("accepts a result after one inline-code retry still misses the span", async () => {
+    const { provider, calls } = configuredProvider(async () =>
+      completion(
+        '{"items":[{"id":"b1","text":"使用“翻译当前文件”功能创建译稿。"}]}',
+      ),
+    );
+
+    const results = await provider.translate(
+      request([item("b1", "Use `Translate Current File` to create a translation.")]),
+    );
+
+    expect(results).toEqual([
+      { id: "b1", text: "使用“翻译当前文件”功能创建译稿。" },
+    ]);
+    expect(calls).toHaveLength(2);
+  });
+
+  it("retries once when an alert marker is translated", async () => {
+    const source = "> [!WARNING]\n> Do not deploy during the freeze.";
+    let attempt = 0;
+    const { provider, calls } = configuredProvider(async () => {
+      attempt += 1;
+      return completion(
+        JSON.stringify({
+          items: [
+            {
+              id: "b1",
+              text:
+                attempt === 1
+                  ? "> [!警告]\n> 冻结期间请勿部署。"
+                  : "> [!WARNING]\n> 冻结期间请勿部署。",
+            },
+          ],
+        }),
+      );
+    });
+
+    const results = await provider.translate(request([item("b1", source)]));
+
+    expect(results).toEqual([
+      { id: "b1", text: "> [!WARNING]\n> 冻结期间请勿部署。" },
+    ]);
+    expect(calls).toHaveLength(2);
+    const body = JSON.parse(String(calls[1].init.body)) as {
+      messages: Array<{ role: string; content: string }>;
+    };
+    expect(body.messages[0].content).toContain("[!WARNING]");
+    expect(body.messages[0].content).toContain("protected Markdown");
+  });
+
+  it("lists batch glossary terms in the system prompt", async () => {
+    const { provider, calls } = configuredProvider(async () =>
+      completion(
+        '{"items":[{"id":"b1","text":"下面的表格汇总了状态。"}]}',
+      ),
+    );
+
+    await provider.translate({
+      ...request([item("b1", "The table below summarizes the state.")]),
+      glossary: [{ source: "table", target: "表格" }],
+    });
+
+    const body = JSON.parse(String(calls[0].init.body)) as {
+      messages: Array<{ role: string; content: string }>;
+    };
+    expect(body.messages[0].content).toContain(
+      "Required glossary for this batch",
+    );
+    expect(body.messages[0].content).toContain('"table" -> "表格"');
   });
 
   it("requires an API key before making a request", async () => {
@@ -607,6 +861,7 @@ describe("testConnection", () => {
     expect(result.latencyMs).toBeGreaterThanOrEqual(0);
     expect(result.sample).toContain("连接测试");
     expect(result.thinkingDisabled).toBe(true);
+    expect(result.thinkingMode).toBe("disabled");
     expect(calls).toHaveLength(1);
     expect(userPayload(calls[0]).items[0]).toMatchObject({
       id: "mbs-connection-test",

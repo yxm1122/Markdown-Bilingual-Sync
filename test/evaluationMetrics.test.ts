@@ -93,6 +93,23 @@ describe("translation evaluation metrics", () => {
     ).toBe(true);
   });
 
+  it("does not treat a translated link title as a protected token", () => {
+    const source = '[link](https://example.com/docs "Documentation")';
+    const candidate = '[链接](https://example.com/docs "文档")';
+    const result = evaluate(source, candidate);
+    expect(result.metrics.protectedTokenMissing).toEqual([]);
+    expect(result.metrics.pass).toBe(true);
+  });
+
+  it("recognizes double-backtick code spans", () => {
+    const source = "Use ``double `backticks` here`` now.";
+    const candidate = "现在使用 ``double `backticks` here``。";
+    const result = evaluate(source, candidate);
+    expect(result.metrics.protectedTokenTotal).toBe(1);
+    expect(result.metrics.protectedTokenMissing).toEqual([]);
+    expect(result.metrics.pass).toBe(true);
+  });
+
   it("checks glossary adherence per block", () => {
     const result = evaluate("The block is cached.", "该内容已缓存。", {
       glossary: [

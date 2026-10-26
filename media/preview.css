@@ -1635,3 +1635,22 @@ body.mbs-modal-open {
   line-height: 1.5;
   overflow-wrap: anywhere;
 }
+
+.mbs-summary-glossary {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  padding-top: 9px;
+  border-top: 1px solid var(--mbs-border);
+}
+
+.mbs-summary-glossary-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.mbs-summary-glossary-text {
+  min-height: 84px;
+}

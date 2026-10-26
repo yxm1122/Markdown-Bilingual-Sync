@@ -7,6 +7,7 @@ import { blockHash } from "../src/util/hash";
 import { syncDocument, SyncBlockedError } from "../src/sync/sync";
 import type {
   GlossaryEntry,
+  TranslationItem,
   TranslationProvider,
 } from "../src/translation/types";
 import { SOURCE, inspect, makeMd, translate } from "./helpers";
@@ -262,6 +263,138 @@ describe("syncDocument", () => {
         "未加锚点",
       );
     }
+  });
+
+  it("restores inline code that the provider translated", async () => {
+    const sourceText = "Use `Translate Current File` now.\n";
+    const provider: TranslationProvider = {
+      id: "spy",
+      label: "Spy",
+      async translate(request) {
+        return request.items.map((item) => ({
+          id: item.id,
+          text: item.text
+            .replace("Use", "使用")
+            .replace("Translate Current File", "翻译当前文件")
+            .replace(" now.", "。"),
+        }));
+      },
+    };
+
+    const result = await syncDocument({
+      md: makeMd(),
+      sourceText,
+      provider,
+      sourceLanguage: "en",
+      targetLanguage: "zh-CN",
+      retranslateStale: false,
+    });
+
+    expect(result.cacheText).toContain("`Translate Current File`");
+    expect(result.cacheText).not.toContain("翻译当前文件");
+  });
+
+  it("restores alert markers that the provider translated", async () => {
+    const sourceText = "> [!WARNING]\n> Do not deploy during the freeze.\n";
+    const provider: TranslationProvider = {
+      id: "spy",
+      label: "Spy",
+      async translate(request) {
+        return request.items.map((item) => ({
+          id: item.id,
+          text: "> [!警告]\n> 冻结期间请勿部署。",
+        }));
+      },
+    };
+
+    const result = await syncDocument({
+      md: makeMd(),
+      sourceText,
+      provider,
+      sourceLanguage: "en",
+      targetLanguage: "zh-CN",
+      retranslateStale: false,
+    });
+
+    expect(result.cacheText).toContain("[!WARNING]");
+    expect(result.cacheText).not.toContain("[!警告]");
+  });
+
+  it("translates footnote definitions and restores their labels", async () => {
+    const sourceText =
+      "A decision was recorded.[^lock]\n\n[^lock]: Locked translations are never overwritten.\n";
+    const provider: TranslationProvider = {
+      id: "spy",
+      label: "Spy",
+      async translate(request) {
+        return request.items.map((item) => ({
+          id: item.id,
+          text:
+            item.kind === "footnote"
+              ? item.text
+                  .replace("[^lock]", "[^锁定]")
+                  .replace(
+                    "Locked translations are never overwritten.",
+                    "已锁定的译文永远不会被覆盖。",
+                  )
+              : "记录了一项决定。[^lock]",
+        }));
+      },
+    };
+
+    const result = await syncDocument({
+      md: makeMd(),
+      sourceText,
+      provider,
+      sourceLanguage: "en",
+      targetLanguage: "zh-CN",
+      retranslateStale: false,
+    });
+
+    expect(result.cacheText).toContain(
+      "[^lock]: 已锁定的译文永远不会被覆盖。",
+    );
+    expect(result.cacheText).not.toContain("[^锁定]");
+    const footnote = inspect(sourceText, result.cacheText).alignment.blocks.find(
+      (block) => block.source.kind === "footnote",
+    );
+    expect(footnote?.status).toBe("translated");
+    expect(footnote?.translatable).toBe(true);
+  });
+
+  it("annotates blocks with document and section ids for batching", async () => {
+    const received: TranslationItem[] = [];
+    const provider: TranslationProvider = {
+      id: "spy",
+      label: "Spy",
+      async translate(request) {
+        received.push(...request.items);
+        return request.items.map((item) => ({
+          id: item.id,
+          text: item.text,
+        }));
+      },
+    };
+
+    await syncDocument({
+      md: makeMd(),
+      sourceText: "# A\n\nOne.\n\n## B\n\nTwo.\n\nThree.\n",
+      provider,
+      sourceLanguage: "en",
+      targetLanguage: "zh-CN",
+      retranslateStale: false,
+    });
+
+    expect(received).toHaveLength(5);
+    expect(new Set(received.map((item) => item.documentId)).size).toBe(1);
+    expect(received[0]?.documentId).toBeTruthy();
+    expect(received.map((item) => item.sectionId)).toEqual([
+      "section-1",
+      "section-1",
+      "section-2",
+      "section-2",
+      "section-2",
+    ]);
   });
 
   it("forwards glossary entries to the provider", async () => {

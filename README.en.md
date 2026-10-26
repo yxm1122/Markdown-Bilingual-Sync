@@ -11,7 +11,8 @@ Current version **0.12.0**: full localization of the extension (English by defau
 
 ## Features
 
-- **Blocks as translation units.** Translation works on top-level semantic blocks: headings, paragraphs, complete list sections, whole tables, and whole blockquotes.
+- **Blocks as translation units.** Translation works on top-level semantic blocks: headings, paragraphs, complete list sections, whole tables, whole blockquotes, and footnote definitions.
+- **Protected syntax.** Inline code, URLs, and footnote labels are restored before a cache write if the model rewrites them. Footnote definitions are translated while keeping their `[^id]` labels.
 - **Bilingual preview.** Side-by-side, stacked, and a true split layout. The split layout gives the source and the translation independent scrolling panes with block-level scroll sync. Renders GFM, syntax highlighting, KaTeX, footnotes, and GitHub Alerts.
 - **Any Markdown-like language ID.** Works with the standard Markdown language ID and with environment-specific IDs such as `skill` from Qoder; the file content stays Markdown.
 - **Swappable translation service.** OpenAI-compatible endpoints or any custom HTTP service, with built-in presets for common providers. API keys are stored only in VS Code SecretStorage.
@@ -24,11 +25,11 @@ Current version **0.12.0**: full localization of the extension (English by defau
 - **In-preview editing.** Click source or translation content to edit the underlying Markdown in place. A saved translation is locked immediately; source edits can be staged, reviewed as a diff, and then written back.
 - **Back-translate to rewrite the source.** Back-translating a block sends the result straight to source staging. Writing it back locks the translation to the new source so sync cannot overwrite it.
 - **Stable translation.** Retranslation references the previous translation and back-translation references the current source, which reduces wording drift after small edits. Controlled by a setting and a preview toggle.
-- **Full-document summary.** Manually generate a summary in the source language and use it as context for sync, retranslation, and back-translation. The summary is stored with the translation cache and can be viewed, edited, or cleared in the preview.
+- **Full-document summary and document glossary.** Manually generate a source-language summary and let the AI produce a glossary for the same document. Both are stored with the translation cache and can be viewed, edited, or cleared in the preview.
 - Retranslate a single block, all stale blocks, or all machine translations.
-- Global glossary and heading-context enhancement.
+- **Layered glossaries.** Global and workspace term lists plus an AI-generated document glossary stored with the summary. The preview toolbar can check machine translations for glossary and protected-Markdown issues and retranslate each affected block.
 - Export to a language-suffixed file in the same folder, after confirming a split diff.
-- Structural problems are reported before export or retranslation. The cache write is rejected when the model returns a system prompt, an echoed request, or untranslated source text.
+- Structural problems are reported before export or retranslation. The cache write is rejected when the model returns a system prompt, an echoed request, or untranslated source text. Missing inline code or glossary targets trigger one corrective retry first.
 - Full localization of the extension: English is the source language, Chinese is loaded when VS Code's display language is `zh-cn`, and the command and settings manifests switch with it.
 
 ## Installation
@@ -95,7 +96,7 @@ The build output is `artifacts/vsix/markdown-bilingual-sync.vsix`, which you can
 - To translate one block again, use **Retranslate** on that block.
 - Every translated block has a **Back-translate** button: it translates the translation back into the source language and puts the result directly into source staging, with no extra dialog. **Apply source changes** writes it to the source file and locks that translation to the new source. If the result matches the current source, nothing is staged.
 - **Stable translation** is on by default: retranslation (single block, stale blocks, or all) references the previous translation, back-translation references the current source, and explicitly retranslating a `human` block also references its previous translation. The *Reference previous translation* switch in the preview affects only the current session; the `stableTranslation` setting controls the default.
-- **Full-document summary** can only be generated manually (OpenAI-compatible and Mock providers); with a custom HTTP provider you write it by hand. The summary panel shows its status, token estimate, and a staleness notice; **AI generate**, **Save summary**, and **Clear summary** write to the cache. The *Use full-document summary context* switch in the preview affects only the current session; the `summaryContext` setting controls the default.
+- **Full-document summary** can only be generated manually (OpenAI-compatible and Mock providers); with a custom HTTP provider you write it by hand. Generation also produces a document glossary. The summary panel shows its status, token estimate, staleness notice, and an editable glossary textarea; **AI generate**, **Save summary**, **Save glossary**, and **Clear summary** write to the cache. The *Use full-document summary context* switch in the preview affects only the current session; the `summaryContext` setting controls the default.
 - The summary is stored as a dedicated marker in the cache and takes no part in block alignment or export. It is shown as *Possibly stale* after the source changes but is still used as context, and clearing the cache removes it. Summary generation accepts about 12k input tokens; beyond that, write the summary manually.
 
 ### Block Status and Cache Markers
@@ -177,7 +178,7 @@ Block statuses after alignment: `untranslated`, `copy-pending`, `translated`, `s
 ### Batch Translation and Export
 
 - **Batch Translate Folder…** recursively finds `.md` files under the selected folder, skips exports for the current target language (for example `*.zh.md`), and translates each file incrementally.
-- Batches are packed dynamically from the estimated token budget; `apiBatchSize` is only a hard limit on block count. Blocks waiting for translation are merged across files to keep concurrency saturated while avoiding batches smaller than about 25% of the budget.
+- Batches are packed dynamically from the estimated token budget; `apiBatchSize` is only a hard limit on block count. Concurrent calls are still coalesced across files, but each batch stays within one document and keeps a section whole unless that section alone exceeds the limits.
 - File-level concurrency, batches within one file, and manual sync requests all share the `translationConcurrency` limit (default 8, maximum 100).
 - Each successful batch is written to the cache immediately. If later batches for a file fail, the successful blocks are kept and the failed ones stay untranslated; the next sync fills only the gaps.
 - Before batch translation starts, open Markdown files in the folder are saved. The progress notification can be cancelled. One file failing does not stop the others, and details go to the **Output** panel.
@@ -236,10 +237,19 @@ Block statuses after alignment: `untranslated`, `copy-pending`, `translated`, `s
 | Batch Translate Folder… | Recursively translates Markdown files in a folder, skipping exports for the target language |
 | Batch Export Folder… | Queues exports for Markdown files in a folder that already have a cache |
 | Edit Global Glossary | Opens the user-level `glossary.json` |
+| Edit Glossary (Global or Workspace) | Choose the global list or the workspace-root `.mbs-glossary.json` |
 | Set AI Translation API Key | Writes the key to SecretStorage |
 | Apply Translation Provider Preset… | Switches to OpenAI/DeepSeek/SiliconFlow/Ollama/LM Studio/HTTP/Mock |
 | Test AI Translation Connection | Sends a short test request and reports the model or template, latency, and a sample translation |
 | Clear AI Translation API Key | Deletes the key from SecretStorage |
+
+### Glossaries and consistency check
+
+- **Global:** `globalStorage/glossary.json`, shared across all workspaces.
+- **Workspace:** `.mbs-glossary.json` in the workspace root; commit it with the project if the team should share terms. “Workspace” means the VS Code workspace folder; in a multi-root workspace the folder containing the source file is used. With no workspace open, only the global glossary applies.
+- **Document:** generated by the AI together with the full-document summary and stored in the cache's `mbs-summary` metadata. The preview summary panel shows the terms in an editable textarea; saving updates the cache. With a custom HTTP provider the glossary cannot be generated automatically, but you can edit it after writing a summary manually. Clearing the summary also clears the document glossary.
+- Merge order is **global → workspace → document**; a document entry overrides an earlier entry with the same `source`. The user glossaries are sent as constraints when the AI generates the document glossary to reduce conflicts. Regenerating the summary keeps existing document glossary entries; clear the summary first to rebuild from scratch.
+- The preview's **Check** action scans machine translations for missing glossary targets and protected Markdown. Results are grouped by block; selecting one retranslates that block. Locked translations are skipped, so manual work is never overwritten.
 
 ## Settings
 
@@ -248,7 +258,8 @@ Block statuses after alignment: `untranslated`, `copy-pending`, `translated`, `s
 | `markdownBilingualSync.provider` | `mock` | `mock`, `openai`, or `http` |
 | `markdownBilingualSync.apiBaseUrl` | `https://api.openai.com/v1` | OpenAI-compatible endpoint; `/chat/completions` is appended automatically; plain HTTP is allowed only for localhost/127.0.0.1/[::1] |
 | `markdownBilingualSync.apiModel` | `gpt-4o-mini` | Model name supported by the server |
-| `markdownBilingualSync.apiDisableThinking` | `false` | When enabled, sends `enable_thinking: false`; only for services that support the parameter |
+| `markdownBilingualSync.apiThinkingMode` | `default` | `default` omits `enable_thinking` and uses the provider default; `enabled` sends true; `disabled` sends false. Only some services support explicit modes |
+| `markdownBilingualSync.apiDisableThinking` | `false` | Legacy switch used only when `apiThinkingMode` is `default`; prefer `apiThinkingMode` |
 | `markdownBilingualSync.apiBatchSize` | `50` | Hard limit on blocks per batch; the actual batch size is determined by the token budget |
 | `markdownBilingualSync.apiBatchTokenBudget` | `2000` | Estimated token budget for the input of each batch; overly small batches are avoided; the full-document summary, reference translations, and glossary count toward it, output is counted separately |
 | `markdownBilingualSync.translationConcurrency` | `8` | Concurrency limit shared by file-level translation, in-file batches, and manual requests (1–100) |
@@ -277,7 +288,7 @@ Block statuses after alignment: `untranslated`, `copy-pending`, `translated`, `s
 - Raw HTML is not rendered. The Webview restricts scripts and resources with CSP and a nonce.
 - Translation caches live in the extension's `globalStorageUri`, not in the project folder.
 - Moving a project, clearing extension storage, or uninstalling the extension loses caches and lock state. Export anything you need to keep.
-- Glossaries are user-level resources and are not shared through the repository.
+- The global glossary is a user-level resource and is not shared through the repository. The workspace glossary lives in the project directory and is shared with the repository; the document glossary exists only in the local translation cache.
 
 ## Localization
 
@@ -304,10 +315,10 @@ Block statuses after alignment: `untranslated`, `copy-pending`, `translated`, `s
 - After a source block is deleted and written back, its translation is demoted to a standalone translation block (a `target` anchor), which avoids orphaned anchors and does not block later syncs.
 - Caches cannot be recovered inside the extension after clearing the current cache or all caches; export translations you need to keep first.
 - Back-translation runs per block and does not back-translate a whole document automatically.
-- Full-document summaries can only be generated manually; the custom HTTP provider cannot generate them and requires manual input, and very large documents (over about 12k tokens) are not summarized in segments.
+- Full-document summaries and document glossaries are generated only on explicit request; the custom HTTP provider cannot generate them and requires a manually written summary and glossary, and very large documents (over about 12k tokens) are not summarized in segments.
 - Summaries and stable references increase input tokens for every translation; summary context counts as a fixed overhead against each batch budget.
 - Mermaid diagrams, raw HTML, custom prompts, and streaming output are not supported.
-- The glossary is global; per-project overrides are not supported.
+- Glossaries merge global → workspace → document. The document glossary is AI-generated with the summary and should be reviewed before relying on it; clearing the summary also clears it.
 - The UI ships in English (the source language) and zh-cn, with other VS Code languages falling back to English. Interface, preview, and notification strings come from `src/i18n/en.ts` / `src/i18n/zh.ts`, errors and warnings from `src/i18n/errors/*`, and manifest strings from `package.nls*.json`.
 - The GitHub README is in Chinese, while this English README is used for the Marketplace listing; both are maintained. The UI itself supports English and zh-cn.
 - Sync is not real-time: saving only changes the state, and translation is triggered by explicit commands.

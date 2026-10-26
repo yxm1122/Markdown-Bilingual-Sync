@@ -24,7 +24,7 @@ import {
   parseCacheDocument,
   serializeAnchor,
 } from "../markdown/anchors";
-import { buildHeadingPaths } from "../markdown/headings";
+import { buildHeadingPaths, buildSectionIds } from "../markdown/headings";
 import { parseMarkdownDocument } from "../markdown/segmenter";
 import {
   type AlignmentResult,
@@ -47,7 +47,9 @@ import {
   type TranslationChunkHandler,
   type TranslationItem,
   type TranslationProvider,
+  type TranslationResultItem,
 } from "../translation/types";
+import { restoreProtectedSyntax } from "../util/protectedSyntax";
 import { tError } from "../i18n/errors";
 import { formatText, UI_TEXT } from "../i18n";
 
@@ -440,6 +442,9 @@ export async function syncDocument(options: SyncOptions): Promise<SyncResult> {
   }
 
   const headingPaths = buildHeadingPaths(source.blocks);
+  const sectionIds = buildSectionIds(source.blocks);
+  // 只用于分批的文档标识：内容哈希相同视为同一文档；不发送给模型。
+  const documentId = blockHash("document", sourceText);
   const usedIds = new Set<string>();
   for (const cached of cache.blocks) {
     usedIds.add(cached.anchor.id);
@@ -508,10 +513,24 @@ export async function syncDocument(options: SyncOptions): Promise<SyncResult> {
         text: sourceBlock.raw,
         kind: sourceBlock.kind,
         headingPath: headingPaths.get(sourceBlock.index) ?? [],
+        documentId,
+        sectionId: sectionIds.get(sourceBlock.index) ?? "section-0",
         ...(reference ? { reference } : {}),
       },
     });
   }
+
+  const taskById = new Map(tasks.map((task) => [task.item.id, task.item]));
+
+  /** 把模型改写过的行内代码与脚注标签还原为源文内容。 */
+  const restoreResult = (item: TranslationResultItem): TranslationResultItem => {
+    const source = taskById.get(item.id);
+    if (!source) {
+      return item;
+    }
+    const text = restoreProtectedSyntax(source.text, item.text, source.kind);
+    return text === item.text ? item : { ...item, text };
+  };
 
   /**
    * 根据当前已有的机器输出重新生成缓存草案。
@@ -639,7 +658,8 @@ export async function syncDocument(options: SyncOptions): Promise<SyncResult> {
       if (typeof item.text !== "string" || !item.text.trim()) {
         throw new Error(tError("translation.emptyBlock", { id: item.id }));
       }
-      candidate.set(item.id, item.text);
+      const restored = restoreResult(item);
+      candidate.set(restored.id, restored.text);
     }
     if (allowPartial) {
       buildCache(candidate);
@@ -698,7 +718,7 @@ export async function syncDocument(options: SyncOptions): Promise<SyncResult> {
       // 返回值必须覆盖全部任务；校验失败时保留之前已接收的流式结果。
       outputs = validateTranslationResult(
         tasks.map((task) => task.item),
-        rawResult,
+        rawResult.map(restoreResult),
       );
     } catch (error) {
       if (signal?.aborted) {

@@ -73,7 +73,7 @@ describe("package manifest localization", () => {
     expect(manifest.contributes.configuration.title).toBe(
       "%configuration.title%",
     );
-    expect(manifest.contributes.commands).toHaveLength(20);
+    expect(manifest.contributes.commands).toHaveLength(21);
     for (const command of manifest.contributes.commands) {
       expect(command.title).toMatch(/^%command\.[\w]+\.title%$/);
       expect(command.category).toBe("%command.category%");
@@ -83,7 +83,7 @@ describe("package manifest localization", () => {
     const view = manifest.contributes.views["markdownBilingualSync.tasks"][0];
     expect(view.name).toBe("%view.tasks.name%");
     const properties = Object.values(manifest.contributes.configuration.properties);
-    expect(properties).toHaveLength(19);
+    expect(properties).toHaveLength(20);
     for (const property of properties) {
       expect(property.description).toMatch(/^%configuration\.[\w]+\.description%$/);
     }

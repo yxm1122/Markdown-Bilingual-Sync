@@ -73,3 +73,24 @@ export function buildHeadingPaths(
   }
   return paths;
 }
+
+/**
+ * 为每个块生成所属小节标识。
+ *
+ * 每个标题开启一个新小节，标题本身与后续块共享同一个 id，直到下一个标题出现。
+ * 该标识只用于分批时保持“标题 + 正文”不被切断，不参与缓存或提示词。
+ * 第一个标题之前的块属于 `section-0`。
+ */
+export function buildSectionIds(
+  blocks: readonly MarkdownBlock[],
+): Map<number, string> {
+  const sections = new Map<number, string>();
+  let counter = 0;
+  for (const block of blocks) {
+    if (block.kind === "heading") {
+      counter += 1;
+    }
+    sections.set(block.index, `section-${counter}`);
+  }
+  return sections;
+}

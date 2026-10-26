@@ -55,11 +55,47 @@ npm run eval:translation -- \
 | `--filter <text>` | 只运行 id/tag 包含该文本的用例 |
 | `--model <name>` / `--base-url <url>` | 覆盖 OpenAI 兼容配置 |
 | `--api-key-env <name>` | 读取 Key 的环境变量名，默认 `MBS_API_KEY` |
+| `--case-concurrency <n>` | 同时评估的用例数，默认 4；设为 1 可复现旧的串行耗时 |
+| `--concurrency <n>` | Provider 请求并发上限，默认 `MBS_CONCURRENCY` 或 8 |
+| `--thinking <on\|off\|default>` | 显式思考模式：on 发送 `enable_thinking:true`，off 发送 false，default 省略字段 |
+| `--disable-thinking` / `--enable-thinking` | `--thinking off` / `--thinking on` 的简写 |
+| `--batch-size <n>` / `--batch-token-budget <n>` / `--timeout <ms>` | 覆盖分批与超时参数 |
 | `--help` | 查看完整帮助 |
 
-其他环境变量：`MBS_API_BASE_URL`、`MBS_API_MODEL`、`MBS_BATCH_SIZE`、`MBS_BATCH_TOKEN_BUDGET`、`MBS_TIMEOUT_MS`、`MBS_CONCURRENCY`、`MBS_DISABLE_THINKING=1`。
+其他环境变量：`MBS_API_BASE_URL`、`MBS_API_MODEL`、`MBS_BATCH_SIZE`、`MBS_BATCH_TOKEN_BUDGET`、`MBS_TIMEOUT_MS`、`MBS_CONCURRENCY`、`MBS_THINKING=enabled|disabled|default`、旧版 `MBS_DISABLE_THINKING=1`。
 
-## 3. 输出
+## 3. 速度与思考模式
+
+用例默认 **并行 4 个**，所有用例共享同一个 Provider 请求并发上限（默认 8）。报告新增 `timing` 字段：`wallDurationMs` 是实际墙钟时间，`totalCaseDurationMs` 是各用例耗时之和；并行后前者通常明显小于后者。
+
+```bash
+# 显式开启思考，并行 4 个用例
+MBS_API_KEY=... npm run eval:translation -- \
+  --provider openai --model deepseek-ai/DeepSeek-V3.2 \
+  --case-concurrency 4 --thinking on
+
+# 显式关闭思考
+MBS_API_KEY=... npm run eval:translation -- \
+  --provider openai --model deepseek-ai/DeepSeek-V3.2 \
+  --case-concurrency 4 --thinking off
+
+# 服务端默认（不发送 enable_thinking）
+npm run eval:translation -- --provider openai --model deepseek-ai/DeepSeek-V3.2 \
+  --case-concurrency 4 --thinking default
+```
+
+注意：
+
+- **default 不等于开启**：default 会省略 `enable_thinking`，由服务端决定；如果服务端默认非思考，这一组也不会思考。要确认是否真的思考，看报告里的 `Reasoning responses`（`responseCount` 中有多少响应包含 reasoning 内容或 reasoning token）。为 0 就说明模型从未思考。
+- `on` 会显式发送 `enable_thinking:true`；部分服务不支持该字段或会忽略它，可能报错或仍不思考。
+- `off` 发送 `enable_thinking:false`；同样取决于服务端是否支持。
+- 请以报告中的 `thinkingMode`、`Reasoning responses`、耗时和候选质量为准，不要只看命令行参数。
+- 用例并行会同时产生多个文件任务；如果服务端限流，降低 `--case-concurrency` 或 `--concurrency`。
+- 评估保留成功批次：单个 Provider 批次超时/失败时，已完成块仍会写入候选并参与指标，缺失块按 `candidate.missing` 报出，整篇候选不会因为一个批次失败而被清空。
+- 长文档或思考模型建议留出更长的 `--timeout`（例如 `180000`），并适当降低 `--case-concurrency`，避免并发拥塞把单批推过超时线。
+- 只改评估指标/报告格式、不改翻译逻辑时，用 `--candidate-dir` 复用旧候选，评估本身几乎不耗时。
+
+## 4. 输出
 
 默认写入 `eval/reports/<timestamp>/`（gitignored）：
 
@@ -82,16 +118,18 @@ npm run eval:translation -- \
 
 **Pass/fail 只由硬问题决定。** 参考相似度和长度比例不参与 pass/fail；机器指标也不能判断语义准确性和自然度，必须结合 `human-review.md` 的人工评分。
 
-## 4. 已知边界
+## 5. 已知边界
 
 - 评估集当前是 **en → zh-CN**，其他语言对需要新增对应参考译文；源词保留率等启发式依赖英文源文。
-- **脚注定义目前不参与扩展翻译**：切块器把 `[^id]: ...` 识别为 `footnote` 并原样复制。评估故意把脚注定义视为可翻译正文，因此真实 Provider 的候选会在 `links-images-footnotes` 上暴露该质量差距。这是有意设计，不是评估误报；修复扩展切块语义后再复查。
+- 脚注定义现在参与翻译，但只覆盖同一段连续行；跨空行的多段脚注只有第一段会被翻译。预览仍把脚注区单独渲染，不提供逐块编辑入口。
+- 文档术语表由摘要生成，只存在于缓存；评估 CLI 直接使用 `eval/manifest.json` 的术语表，不读取文档术语表。
+- 链接 title 视为可翻译正文，不作为受保护片段；评估只检查链接目标地址是否保留。行内代码按 CommonMark 反引号规则识别，支持双反引号片段；代码片段内反斜杠没有转义含义。
 - 源词保留率用于识别“只加标记、正文照抄”的输出，对大量保留英文专有名词的技术文本可能偏严；报告会给出具体块和比例。
 - 参考相似度是字符 bigram Dice，适合发现大幅偏离，不适合判定“哪种译法更好”。
 - `--provider mock` 的通过/失败只说明管线是否工作，不能作为翻译质量结论。
 - 真实 Provider 的评估是手动步骤，不进入 CI；CI 只运行评估指标与数据集的单元测试。
 
-## 5. 建议流程
+## 6. 建议流程
 
 1. 固定数据集、模型、参数，先跑一次基线。
 2. 阅读 `report.md` 的硬问题和人工评分，记录主要错误类型。

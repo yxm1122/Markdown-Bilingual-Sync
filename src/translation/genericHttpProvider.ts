@@ -750,6 +750,7 @@ export class GenericHttpTranslationProvider implements TranslationProvider {
       latencyMs: Date.now() - started,
       sample: text.slice(0, 160),
       thinkingDisabled: false,
+      thinkingMode: "default",
     };
   }
 

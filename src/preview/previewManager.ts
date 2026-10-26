@@ -38,6 +38,11 @@ import type {
   PreparedExport,
 } from "../export/exportService";
 import { summarySourceHash } from "../cache/summaryMarker";
+import { MAX_DOCUMENT_GLOSSARY_ENTRIES } from "../glossary/glossary";
+import {
+  formatDocumentGlossary,
+  parseDocumentGlossaryText,
+} from "../glossary/documentGlossary";
 import { formatText, getLocale, UI_TEXT } from "../i18n";
 import { createMarkdownRuntime } from "../markdown/markdown";
 import { parseMarkdownDocument } from "../markdown/segmenter";
@@ -49,6 +54,7 @@ import {
 } from "../source/editSource";
 import { CancelledError, SyncService } from "../sync/syncService";
 import { SyncBlockedError } from "../sync/sync";
+import type { ConsistencyIssue } from "../quality/consistency";
 import { estimateTokenCount } from "../translation/batching";
 import { languageSuffix } from "../util/language";
 import { buildPreviewModel, type PreviewModel } from "./previewModel";
@@ -107,6 +113,14 @@ function escapeHtml(value: string): string {
  * @param error 捕获到的异常。
  * @returns 同步阻塞错误返回全部原因（按行拼接），其余返回 message 或字符串化结果。
  */
+/** 把可能跨行的检查项压成单行，避免破坏 QuickPick 的 description。 */
+function singleLine(value: string, maxLength = 100): string {
+  const normalized = value.replace(/\s+/g, " ").trim();
+  return normalized.length > maxLength
+    ? `${normalized.slice(0, maxLength)}…`
+    : normalized;
+}
+
 function formatError(error: unknown): string {
   if (error instanceof SyncBlockedError) {
     return error.reasons.join("\n");
@@ -723,6 +737,8 @@ class PreviewPanelSession implements vscode.Disposable {
             ...(summary?.model ? { model: summary.model } : {}),
             tokens: estimateTokenCount(summaryText),
             canGenerate: this.syncService.summarySupported,
+            glossaryText: formatDocumentGlossary(summary?.glossary ?? []),
+            glossaryCount: summary?.glossary?.length ?? 0,
           },
         },
       });
@@ -845,6 +861,10 @@ class PreviewPanelSession implements vscode.Disposable {
       typeof message.summaryText === "string"
         ? message.summaryText
         : undefined;
+    const glossaryText =
+      typeof message.glossaryText === "string"
+        ? message.glossaryText
+        : undefined;
     const assistKey =
       message.key === "stableTranslation" ||
       message.key === "summaryContext"
@@ -877,6 +897,9 @@ class PreviewPanelSession implements vscode.Disposable {
           break;
         case "importTranslation":
           await this.beginImport();
+          break;
+        case "checkConsistency":
+          await this.checkConsistency();
           break;
         case "retranslateStale":
           await this.retranslateStale();
@@ -990,6 +1013,11 @@ class PreviewPanelSession implements vscode.Disposable {
         case "saveSummary":
           if (summaryText !== undefined) {
             await this.saveSummary(summaryText);
+          }
+          break;
+        case "saveGlossary":
+          if (glossaryText !== undefined) {
+            await this.saveGlossary(glossaryText);
           }
           break;
         case "clearSummary":
@@ -1960,6 +1988,45 @@ class PreviewPanelSession implements vscode.Disposable {
     }
   }
 
+  /**
+   * 保存文档术语表编辑；空文本表示清空术语表但保留摘要。
+   * 逐行格式错误时不写盘，直接提示行号，保留用户输入。
+   */
+  private async saveGlossary(text: string): Promise<void> {
+    const parsed = parseDocumentGlossaryText(text);
+    if (parsed.errorLines.length > 0) {
+      throw new Error(
+        formatText(UI_TEXT.notifications.glossaryInvalidLines, {
+          lines: parsed.errorLines.join(", "),
+        }),
+      );
+    }
+    if (parsed.overflow) {
+      throw new Error(
+        formatText(UI_TEXT.notifications.glossaryTooMany, {
+          max: MAX_DOCUMENT_GLOSSARY_ENTRIES,
+        }),
+      );
+    }
+    this.setBusy(true, UI_TEXT.notifications.glossarySaving);
+    try {
+      const cacheText = await this.syncService.saveDocumentGlossary(
+        this.sourceUri,
+        parsed.entries,
+      );
+      await this.update(
+        {
+          text: UI_TEXT.notifications.glossarySaved,
+          kind: "success",
+        },
+        undefined,
+        cacheText,
+      );
+    } finally {
+      this.setBusy(false);
+    }
+  }
+
   /** 清除摘要；若缓存只剩摘要，则缓存文件也会被删除。 */
   private async clearSummary(): Promise<void> {
     this.setBusy(true, UI_TEXT.notifications.summarySaving);
@@ -2241,16 +2308,96 @@ class PreviewPanelSession implements vscode.Disposable {
   }
 
   /**
+   * 译后一致性检查：按块汇总术语/受保护 Markdown 问题，选中即重译该块。
+   *
+   * 只检查机器译文；人工锁定块由 SyncService.checkConsistency 跳过，
+   * 避免一键重译覆盖手工成果。
+   */
+  private async checkConsistency(): Promise<void> {
+    const report = await this.syncService.checkConsistency(this.sourceUri);
+    if (!report.cacheExists) {
+      this.showToast(UI_TEXT.consistency.noCache, "info");
+      return;
+    }
+    if (report.issues.length === 0) {
+      this.showToast(
+        report.skippedHumanBlocks > 0
+          ? formatText(UI_TEXT.consistency.okWithSkipped, {
+              count: report.skippedHumanBlocks,
+            })
+          : UI_TEXT.consistency.ok,
+        "success",
+      );
+      return;
+    }
+
+    const byBlock = new Map<number, ConsistencyIssue[]>();
+    for (const issue of report.issues) {
+      const list = byBlock.get(issue.blockIndex) ?? [];
+      list.push(issue);
+      byBlock.set(issue.blockIndex, list);
+    }
+    const items: Array<vscode.QuickPickItem & { blockIndex: number }> = [];
+    for (const [blockIndex, issues] of byBlock) {
+      const first = issues[0];
+      if (!first) {
+        continue;
+      }
+      const summaries = issues.map((issue) =>
+        issue.kind === "glossary"
+          ? formatText(UI_TEXT.consistency.glossaryIssue, {
+              source: singleLine(issue.source),
+              target: singleLine(issue.target),
+            })
+          : formatText(UI_TEXT.consistency.protectedIssue, {
+              token: singleLine(issue.token, 80),
+            }),
+      );
+      const location = [
+        formatText(UI_TEXT.consistency.location, { line: first.sourceLine }),
+        first.headingPath,
+      ]
+        .filter((part) => part.trim())
+        .join(" · ");
+      items.push({
+        label: `$(warning) ${formatText(UI_TEXT.consistency.blockItem, {
+          index: blockIndex + 1,
+          count: issues.length,
+        })}`,
+        description: summaries.join("; "),
+        detail: `${location}\n${first.currentText}`,
+        blockIndex,
+      });
+    }
+
+    const picked = await vscode.window.showQuickPick(items, {
+      title: UI_TEXT.consistency.title,
+      placeHolder: UI_TEXT.consistency.retranslateNote,
+      matchOnDescription: true,
+      matchOnDetail: true,
+    });
+    if (!picked) {
+      return;
+    }
+    // 一致性检查只覆盖机器译文，且用户已在问题列表里明确选择，直接重译即可。
+    await this.retranslateBlock(picked.blockIndex, false);
+  }
+
+  /**
    * 单块重译（有缓存/已删除时先确认）。
    * @param blockIndex 源块索引。
+   * @param confirm 是否对已有译文弹出覆盖确认；一致性检查传入 false。
    * @returns 重译并刷新完成；用户取消时返回。
-   * @remarks 已删除的译文对应「恢复翻译」，有缓存的块会二次确认。
+   * @remarks 已删除的译文对应「恢复翻译」，有缓存的块默认会二次确认。
    */
-  private async retranslateBlock(blockIndex: number): Promise<void> {
+  private async retranslateBlock(
+    blockIndex: number,
+    confirm = true,
+  ): Promise<void> {
     const view = this.lastModel?.blocks.find(
       (block) => block.blockIndex === blockIndex,
     );
-    if (view?.hasCache) {
+    if (confirm && view?.hasCache) {
       const deleted = view.status === "deleted";
       const message = deleted
         ? UI_TEXT.notifications.confirmResumeBlock

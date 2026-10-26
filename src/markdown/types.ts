@@ -1,3 +1,5 @@
+import type { GlossaryEntry } from "../translation/types";
+
 /**
  * Markdown 双语数据模型。
  *
@@ -30,13 +32,17 @@ export type BlockKind =
   | "footnote"
   | "other";
 
-/** 允许送去翻译的块类型；其余类型在同步时按原文原样复制。 */
+/**
+ * 允许送去翻译的块类型；其余类型在同步时按原文原样复制。
+ * 脚注定义只翻译 `[^id]:` 之后的正文，标签由同步层做兜底还原。
+ */
 export const TRANSLATABLE_KINDS: ReadonlySet<BlockKind> = new Set<BlockKind>([
   "heading",
   "paragraph",
   "list",
   "table",
   "blockquote",
+  "footnote",
 ]);
 
 /** 所有合法的块类型，用于校验缓存锚点中记录的 `kind` 是否可信。 */
@@ -131,6 +137,8 @@ export interface CacheSummary {
   updatedAt: string;
   /** 生成摘要的模型或 Provider 标签；手动编辑时可缺省。 */
   model?: string;
+  /** 随摘要生成的文档术语表；可在预览中检查/修改，为本文档翻译提供术语约束。 */
+  glossary?: GlossaryEntry[];
 }
 
 /**

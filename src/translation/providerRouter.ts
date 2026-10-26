@@ -18,6 +18,7 @@ import type { OpenAITranslationProvider } from "./openaiProvider";
 import type {
   ConnectionTestResult,
   SummaryRequest,
+  SummaryResult,
   TranslationChunkHandler,
   TranslationProgress,
   TranslationProvider,
@@ -68,7 +69,7 @@ export class TranslationProviderRouter implements TranslationProvider {
   async summarize(
     request: SummaryRequest,
     signal?: AbortSignal,
-  ): Promise<string> {
+  ): Promise<SummaryResult> {
     const provider = this.current();
     if (!provider.summarize || provider.supportsSummary !== true) {
       throw new Error(

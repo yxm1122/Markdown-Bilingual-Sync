@@ -19,7 +19,13 @@ import { parseMarkdownDocument } from "../markdown/segmenter";
 import type { BlockKind, MarkdownBlock } from "../markdown/types";
 import { TRANSLATABLE_KINDS } from "../markdown/types";
 import type { GlossaryEntry } from "../translation/types";
+import { containsTerm } from "../util/glossaryMatch";
 import { normalizeNewlines } from "../util/hash";
+import {
+  countProtectedTokens,
+  extractProtectedTokens,
+  stripProtectedForGlossary,
+} from "../util/protectedMarkdown";
 import { normalizeBlockContent } from "../util/text";
 
 /** 一条评估问题；code 用于测试和报告分组，message 用于人读。 */
@@ -129,140 +135,11 @@ export interface EvaluationAggregate {
   averageReferenceSimilarity?: number;
 }
 
-// ---- 受保护 Markdown 片段 ----
-
-const FENCED_CODE = /```[\s\S]*?```|~~~[\s\S]*?~~~/g;
-const INLINE_CODE = /`[^`\n]*`/g;
-const LINK_DESTINATION = /!?\[[^\]]*\]\(([^)\n]*)\)/g;
-const REFERENCE_DEFINITION = /^ {0,3}\[(?!\^)[^\]]+\]:\s*(\S+)/gm;
-const BARE_URL = /https?:\/\/[^\s<>)]+/g;
-const FOOTNOTE_REF = /\[\^[^\]]+\]/g;
-const MATH_BLOCK = /\$\$[\s\S]*?\$\$/g;
-const MATH_INLINE = /\$[^$\n]+\$/g;
-const HTML_TAG = /<[^>\n]+>/g;
-const ALERT_MARKER = /\[!(?:NOTE|TIP|IMPORTANT|WARNING|CAUTION)\]/g;
-
-/**
- * 提取需要在译文中原样保留的片段。
- *
- * 覆盖围栏代码、行内代码、链接/图片目标、引用式链接目标、裸 URL、脚注引用、
- * 块级/行内公式、HTML 标签与 GitHub Alert 标记。链接文字和图片 alt 不在此列，
- * 它们应随正文翻译。返回按出现次数记录的片段（不去重），便于发现重复片段丢失。
- */
-export function extractProtectedTokens(text: string): string[] {
-  const tokens: string[] = [];
-  let remaining = text;
-  // 先取围栏代码并从后续扫描中移除，避免把代码内的反引号/URL 重复计数。
-  for (const match of remaining.matchAll(FENCED_CODE)) {
-    tokens.push(match[0]);
-  }
-  remaining = remaining.replace(FENCED_CODE, " ");
-  for (const match of remaining.matchAll(INLINE_CODE)) {
-    tokens.push(match[0]);
-  }
-  remaining = remaining.replace(INLINE_CODE, " ");
-  for (const match of remaining.matchAll(LINK_DESTINATION)) {
-    const destination = match[1]?.trim();
-    if (destination) tokens.push(destination);
-  }
-  remaining = remaining.replace(LINK_DESTINATION, " ");
-  for (const match of remaining.matchAll(REFERENCE_DEFINITION)) {
-    const destination = match[1]?.trim();
-    if (destination) tokens.push(destination);
-  }
-  remaining = remaining.replace(REFERENCE_DEFINITION, " ");
-  for (const match of remaining.matchAll(BARE_URL)) {
-    // 句末标点不属于 URL；否则中英混排时源/候选会因标点差异产生假缺失。
-    const url = match[0].replace(/[.,;:!?，。；：！？]+$/u, "");
-    if (url) tokens.push(url);
-  }
-  remaining = remaining.replace(BARE_URL, " ");
-  for (const match of remaining.matchAll(FOOTNOTE_REF)) {
-    tokens.push(match[0]);
-  }
-  remaining = remaining.replace(FOOTNOTE_REF, " ");
-  for (const match of remaining.matchAll(MATH_BLOCK)) {
-    tokens.push(match[0]);
-  }
-  remaining = remaining.replace(MATH_BLOCK, " ");
-  for (const match of remaining.matchAll(MATH_INLINE)) {
-    tokens.push(match[0]);
-  }
-  remaining = remaining.replace(MATH_INLINE, " ");
-  for (const match of remaining.matchAll(HTML_TAG)) {
-    tokens.push(match[0]);
-  }
-  remaining = remaining.replace(HTML_TAG, " ");
-  for (const match of remaining.matchAll(ALERT_MARKER)) {
-    tokens.push(match[0]);
-  }
-  return tokens;
-}
-
-/** 去掉受保护片段后的正文，用于术语出现位置判断。 */
-function stripProtectedForGlossary(text: string): string {
-  return text
-    .replace(FENCED_CODE, " ")
-    .replace(INLINE_CODE, " ")
-    .replace(LINK_DESTINATION, (match, destination: string) =>
-      destination ? match.replace(destination, () => " ") : match,
-    )
-    .replace(REFERENCE_DEFINITION, " ")
-    .replace(BARE_URL, " ")
-    .replace(FOOTNOTE_REF, " ")
-    .replace(MATH_BLOCK, " ")
-    .replace(MATH_INLINE, " ")
-    .replace(HTML_TAG, " ")
-    .replace(ALERT_MARKER, " ");
-}
-
 // ---- 文本比较工具 ----
+// 受保护片段的提取与去保护逻辑放在 util/protectedMarkdown，与 Provider 校验共用。
 
 function normalizeForCompare(text: string): string {
   return normalizeBlockContent(text).toLowerCase().replace(/\s+/g, " ").trim();
-}
-
-function escapeRegExp(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
-/**
- * 生成拉丁术语的常见词形（复数、过去式、进行时等）。
- *
- * 只做轻量词形覆盖，不引入词干分析器；目的是让 "blocks" 能命中 "block"、
- * "cached" 能命中 "cache"，而不是把术语限制为精确单数形式。
- */
-function termForms(term: string): string[] {
-  const clean = term.trim();
-  if (!/^[A-Za-z0-9][A-Za-z0-9 _-]*$/.test(clean)) {
-    return [];
-  }
-  const space = clean.lastIndexOf(" ");
-  const head = space >= 0 ? clean.slice(0, space + 1) : "";
-  const last = space >= 0 ? clean.slice(space + 1) : clean;
-  const forms = new Set<string>([clean]);
-  for (const suffix of ["s", "es", "ed", "ing", "d"]) {
-    forms.add(`${head}${last}${suffix}`);
-  }
-  if (/[^aeiou]y$/i.test(last)) {
-    forms.add(`${head}${last.slice(0, -1)}ies`);
-  }
-  return [...forms];
-}
-
-/** 拉丁术语按词边界和常见词形匹配；其他（含中文/混排）按子串匹配。 */
-function containsTerm(text: string, term: string): boolean {
-  const clean = term.trim();
-  if (!clean) return false;
-  if (/^[A-Za-z0-9][A-Za-z0-9 _-]*$/.test(clean)) {
-    return termForms(clean).some((form) =>
-      new RegExp(
-        `(?<![\\p{L}\\p{N}_])${escapeRegExp(form)}(?![\\p{L}\\p{N}_])`,
-        "iu",
-      ).test(text),
-    );
-  }
-  return text.toLowerCase().includes(clean.toLowerCase());
 }
 
 /** 英文常用功能词；用于区分“整段照抄”和“保留专有名词的合法译文”。 */
@@ -309,15 +186,6 @@ function latinWords(text: string): string[] {
     words.add(match[0]);
   }
   return [...words];
-}
-
-/** 统计片段出现次数，供受保护片段的多重出现检查。 */
-function tokenCounts(tokens: readonly string[]): Map<string, number> {
-  const counts = new Map<string, number>();
-  for (const token of tokens) {
-    counts.set(token, (counts.get(token) ?? 0) + 1);
-  }
-  return counts;
 }
 
 /** 字符 bigram Dice 相似度；仅作参考译文的辅助观察。 */
@@ -466,14 +334,9 @@ function frontmatterMatches(
 
 // ---- 主评估 ----
 
-/**
- * 评估时把脚注定义也视为可翻译正文。
- *
- * 生成侧当前把 `footnote` 当作不参与翻译的残行复制；但从翻译质量目标看，脚注正文
- * 应当被翻译。评估使用更严格的标准可以主动暴露这个已知差距，而不是把缺陷当成基线。
- */
+/** 评估按扩展当前的可翻译块类型判断；脚注定义已纳入翻译范围。 */
 function isEvaluatedAsTranslatable(kind: BlockKind): boolean {
-  return TRANSLATABLE_KINDS.has(kind) || kind === "footnote";
+  return TRANSLATABLE_KINDS.has(kind);
 }
 
 /**
@@ -544,11 +407,11 @@ export function evaluateCase(input: EvaluateCaseInput): CaseEvaluation {
     const candidateBlock = candidateBlocks[index];
     const referenceBlock = referenceBlocks[index];
     const protectedTokens = extractProtectedTokens(sourceBlock.raw);
-    const candidateTokens = tokenCounts(
+    const candidateTokens = countProtectedTokens(
       candidateBlock ? extractProtectedTokens(candidateBlock.raw) : [],
     );
     const missingTokens: string[] = [];
-    for (const [token, count] of tokenCounts(protectedTokens)) {
+    for (const [token, count] of countProtectedTokens(protectedTokens)) {
       const found = candidateTokens.get(token) ?? 0;
       if (found < count) {
         missingTokens.push(

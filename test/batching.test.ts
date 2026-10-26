@@ -12,6 +12,15 @@ function item(id: string, text: string): TranslationItem {
   return { id, text, kind: "paragraph", headingPath: [] };
 }
 
+function grouped(
+  id: string,
+  text: string,
+  documentId: string,
+  sectionId: string,
+): TranslationItem {
+  return { ...item(id, text), documentId, sectionId };
+}
+
 describe("dynamic translation batching", () => {
   it("estimates CJK text more densely than ASCII", () => {
     expect(estimateTokenCount("")).toBe(0);
@@ -104,6 +113,100 @@ describe("dynamic translation batching", () => {
       concurrency: 8,
     });
     expect(batches).toHaveLength(1);
+  });
+
+  it("never mixes blocks from different documents in one batch", () => {
+    const items = [
+      grouped("a1", "x".repeat(100), "doc-a", "s1"),
+      grouped("a2", "x".repeat(100), "doc-a", "s1"),
+      grouped("b1", "x".repeat(100), "doc-b", "s1"),
+      grouped("b2", "x".repeat(100), "doc-b", "s1"),
+    ];
+    const batches = planTranslationBatches(items, {
+      maxItems: 50,
+      tokenBudget: 100_000,
+      concurrency: 1,
+    });
+    expect(batches.map((batch) => batch.map((entry) => entry.id))).toEqual([
+      ["a1", "a2"],
+      ["b1", "b2"],
+    ]);
+  });
+
+  it("keeps a section whole and packs adjacent small sections together", () => {
+    const items = [
+      grouped("a1", "x".repeat(100), "doc", "s1"),
+      grouped("a2", "x".repeat(100), "doc", "s1"),
+      grouped("b1", "x".repeat(100), "doc", "s2"),
+      grouped("b2", "x".repeat(100), "doc", "s2"),
+      grouped("c1", "x".repeat(100), "doc", "s3"),
+      grouped("c2", "x".repeat(100), "doc", "s3"),
+    ];
+    const wide = planTranslationBatches(items, {
+      maxItems: 50,
+      tokenBudget: 100_000,
+      concurrency: 1,
+    });
+    expect(wide).toHaveLength(1);
+
+    const narrow = planTranslationBatches(items, {
+      maxItems: 3,
+      tokenBudget: 100_000,
+      concurrency: 1,
+    });
+    expect(narrow.map((batch) => batch.map((entry) => entry.id))).toEqual([
+      ["a1", "a2"],
+      ["b1", "b2"],
+      ["c1", "c2"],
+    ]);
+  });
+
+  it("splits an oversized section internally without leaving its document", () => {
+    const items = Array.from({ length: 6 }, (_, index) =>
+      grouped(`s${index}`, "x".repeat(100), "doc", "section"),
+    );
+    const batches = planTranslationBatches(items, {
+      maxItems: 2,
+      tokenBudget: 100_000,
+      concurrency: 1,
+    });
+    expect(batches.map((batch) => batch.map((entry) => entry.id))).toEqual([
+      ["s0", "s1"],
+      ["s2", "s3"],
+      ["s4", "s5"],
+    ]);
+    expect(
+      batches
+        .flat()
+        .every(
+          (entry) =>
+            entry.documentId === "doc" && entry.sectionId === "section",
+        ),
+    ).toBe(true);
+  });
+
+  it("uses concurrency by splitting at section boundaries", () => {
+    const items = ["s1", "s2", "s3", "s4"].flatMap((section) =>
+      [0, 1].map((index) =>
+        grouped(`${section}-${index}`, "x".repeat(1000), "doc", section),
+      ),
+    );
+    const batches = planTranslationBatches(items, {
+      maxItems: 50,
+      tokenBudget: 2000,
+      concurrency: 4,
+    });
+
+    expect(batches).toHaveLength(4);
+    for (const section of ["s1", "s2", "s3", "s4"]) {
+      const containing = batches.filter((batch) =>
+        batch.some((entry) => entry.sectionId === section),
+      );
+      expect(containing).toHaveLength(1);
+      expect(
+        containing[0].filter((entry) => entry.sectionId === section),
+      ).toHaveLength(2);
+    }
   });
 
   it("handles an empty item list", () => {

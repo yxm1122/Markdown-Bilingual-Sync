@@ -136,6 +136,10 @@ export interface PreviewSummaryView {
   tokens: number;
   /** 当前 Provider 是否支持自动生成摘要。 */
   canGenerate: boolean;
+  /** 缓存中的文档术语表，文本域每行 `source => target`。 */
+  glossaryText?: string;
+  /** 文档术语表条目数。 */
+  glossaryCount?: number;
 }
 
 /** 稳定翻译/摘要上下文的预览状态。 */
@@ -711,6 +715,8 @@ export function buildPreviewModel(input: PreviewModelInput): PreviewModel {
         stale: false,
         tokens: 0,
         canGenerate: false,
+        glossaryText: "",
+        glossaryCount: 0,
       },
     },
     blocks,

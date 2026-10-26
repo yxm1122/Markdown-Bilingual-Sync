@@ -34,4 +34,9 @@ export const GLOSSARY_ERRORS = [
     en: "The glossary supports at most {max} entries; extra entries were ignored.",
     zh: "术语表最多支持 {max} 条，额外的条目已忽略。",
   },
+  {
+    key: "glossary.fileError",
+    en: "Glossary file “{file}” could not be loaded: {message}",
+    zh: "术语表文件“{file}”加载失败：{message}",
+  },
 ] as const satisfies readonly ErrorMessage[];

@@ -139,6 +139,12 @@
         "icon": "$(book)"
       },
       {
+        "command": "markdownBilingualSync.editScopedGlossary",
+        "title": "%command.editScopedGlossary.title%",
+        "category": "%command.category%",
+        "icon": "$(book)"
+      },
+      {
         "command": "markdownBilingualSync.setApiKey",
         "title": "%command.setApiKey.title%",
         "category": "%command.category%",
@@ -325,12 +331,29 @@
           "description": "%configuration.apiModel.description%",
           "order": 3
         },
+        "markdownBilingualSync.apiThinkingMode": {
+          "type": "string",
+          "scope": "application",
+          "enum": [
+            "default",
+            "enabled",
+            "disabled"
+          ],
+          "enumDescriptions": [
+            "%configuration.apiThinkingMode.enumDescription.default%",
+            "%configuration.apiThinkingMode.enumDescription.enabled%",
+            "%configuration.apiThinkingMode.enumDescription.disabled%"
+          ],
+          "default": "default",
+          "description": "%configuration.apiThinkingMode.description%",
+          "order": 4
+        },
         "markdownBilingualSync.apiDisableThinking": {
           "type": "boolean",
           "scope": "application",
           "default": false,
           "description": "%configuration.apiDisableThinking.description%",
-          "order": 4
+          "order": 5
         },
         "markdownBilingualSync.apiBatchSize": {
           "type": "number",
@@ -339,7 +362,7 @@
           "minimum": 1,
           "maximum": 50,
           "description": "%configuration.apiBatchSize.description%",
-          "order": 5
+          "order": 6
         },
         "markdownBilingualSync.apiBatchTokenBudget": {
           "type": "number",
@@ -348,7 +371,7 @@
           "minimum": 500,
           "maximum": 32000,
           "description": "%configuration.apiBatchTokenBudget.description%",
-          "order": 6
+          "order": 7
         },
         "markdownBilingualSync.translationConcurrency": {
           "type": "number",
@@ -357,7 +380,7 @@
           "minimum": 1,
           "maximum": 100,
           "description": "%configuration.translationConcurrency.description%",
-          "order": 7
+          "order": 8
         },
         "markdownBilingualSync.apiTimeoutMs": {
           "type": "number",
@@ -366,7 +389,7 @@
           "minimum": 5000,
           "maximum": 600000,
           "description": "%configuration.apiTimeoutMs.description%",
-          "order": 8
+          "order": 9
         },
         "markdownBilingualSync.httpEndpoint": {
           "type": "string",

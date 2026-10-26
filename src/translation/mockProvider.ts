@@ -18,6 +18,7 @@ import {
   applyGlossary,
   validateTranslationResult,
   type SummaryRequest,
+  type SummaryResult,
   type TranslationChunkHandler,
   type TranslationItem,
   type TranslationProgress,
@@ -283,7 +284,7 @@ export class MockTranslationProvider implements TranslationProvider {
   async summarize(
     request: SummaryRequest,
     signal?: AbortSignal,
-  ): Promise<string> {
+  ): Promise<SummaryResult> {
     if (signal?.aborted) {
       throw new Error(tError("common.translationCancelled"));
     }
@@ -292,13 +293,29 @@ export class MockTranslationProvider implements TranslationProvider {
       .map((line) => line.trim())
       .filter(Boolean)
       .slice(0, 6);
-    return [
+    const summary = [
       "Mock document summary",
       request.title ? `Title: ${request.title}` : "",
       ...lines.map((line) => `- ${line.slice(0, 120)}`),
     ]
       .filter(Boolean)
       .join("\n");
+    // 演示术语表：只挑文档中出现的静态词条，便于离线验证“摘要 + 术语表”链路。
+    const lower = request.text.toLowerCase();
+    const glossary: SummaryResult["glossary"] = [];
+    const seen = new Set<string>();
+    for (const [source, target] of [...PHRASES, ...WORDS]) {
+      if (glossary.length >= 12) {
+        break;
+      }
+      const key = source.toLowerCase();
+      if (seen.has(key) || !lower.includes(key)) {
+        continue;
+      }
+      seen.add(key);
+      glossary.push({ source, target });
+    }
+    return { summary, glossary };
   }
 
   /**

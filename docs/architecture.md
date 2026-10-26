@@ -182,10 +182,10 @@ batchTranslateFolder
 并发分三层：
 
 1. 文件级：`runWithConcurrency`，并发数同样取自 `translationConcurrency`（默认 8，范围 1–100）。
-2. 文件内批次：`planTranslationBatches` 按 token 预算与块数上限分批，并按并发度均衡。
+2. 文件内批次：`planTranslationBatches` 按 token 预算与块数上限分批，并按并发度均衡；带文档/小节元数据时，同一批次只来自一个文档，并尽量保持小节完整（小节自身超限时才在内部拆分）。
 3. 全局请求：`ConcurrencyLimiter` 限制同时进行的 Provider HTTP 请求（`translationConcurrency`，默认 8）。
 
-跨文件合并：`BatchTranslationCoordinator` 在约 25ms 窗口内把同语言对、同摘要哈希的调用合并为一个请求，再按复合 id 路由回各文件。单个文件取消不影响同组其他文件。
+跨文件合并：`BatchTranslationCoordinator` 在约 25ms 窗口内把同语言对、同摘要哈希的调用合并为一个请求，再按复合 id 路由回各文件。合并后的块仍按 `documentId` 分批，不同文件不会进入同一 HTTP 请求；单个文件取消不影响同组其他文件。
 
 ### 3.7 摘要与稳定翻译
 
@@ -193,6 +193,14 @@ batchTranslateFolder
 - 摘要写入缓存 `mbs-summary` 元数据；清除缓存会一起删除摘要。
 - 摘要过期（源文哈希变化）仍作为上下文使用，只提示用户。
 - 同步/重译/全部重译/回译可以携带摘要；摘要 token 从每批预算中扣除；不同摘要的请求不会被合并。
+
+### 3.8 术语表与译后一致性
+
+- 用户术语表按 全局 `glossary.json` → 工作区根目录 `.mbs-glossary.json` 合并；同名 source 后加载的作用域为准。
+- 全文摘要生成会同时产出原文摘要和文档术语表（目标语言），两者一起写入缓存 `mbs-summary` 元数据；文档术语表可在预览摘要面板中编辑，清空摘要会一起清空。
+- 翻译请求使用“全局/工作区 → 文档”的合并术语表，文档术语表优先；生成文档术语表时会把用户术语表发给 AI 作为约束。
+- 术语匹配与一致性检查共用 `util/glossaryMatch` 与 `util/protectedMarkdown`，避免评估与运行时口径不一致。
+- 预览的“检查”动作通过 `SyncService.checkConsistency` 读取原文/缓存，只检查机器译文；人工锁定块跳过。问题按块汇总，选择后调用现有单块重译并刷新预览。
 - 稳定翻译：普通同步/重译时把旧译文作为 `previous-target` reference；回译把当前原文作为 `previous-source`。显式 `human` 块通常不会被普通同步选中，但用户手动单块重译时可以带旧译文参考。
 
 ### 3.8 任务面板语言快捷切换

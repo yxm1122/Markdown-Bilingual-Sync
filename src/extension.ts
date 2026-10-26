@@ -28,7 +28,10 @@ import { filterBatchMarkdownFiles, isFileInsideFolder } from "./batch/batchFiles
 import { runWithConcurrency } from "./batch/concurrency";
 import { CacheStore } from "./cache/cacheStore";
 import { ExportService, type PreparedExport } from "./export/exportService";
-import { GlossaryStore } from "./glossary/glossaryStore";
+import {
+  GlossaryStore,
+  type GlossaryScope,
+} from "./glossary/glossaryStore";
 import { formatText, UI_TEXT } from "./i18n";
 import { PreviewManager } from "./preview/previewManager";
 import { SyncBlockedError } from "./sync/sync";
@@ -200,6 +203,11 @@ async function loadOpenAIConfig(
 ): Promise<OpenAIProviderConfig> {
   const config = vscode.workspace.getConfiguration("markdownBilingualSync");
   const model = String(config.get<string>("apiModel", "gpt-4o-mini"));
+  const rawThinking = String(config.get<string>("apiThinkingMode", "default"));
+  const thinking =
+    rawThinking === "enabled" || rawThinking === "disabled"
+      ? rawThinking
+      : "default";
   return {
     baseUrl: String(
       config.get<string>("apiBaseUrl", "https://api.openai.com/v1"),
@@ -208,7 +216,11 @@ async function loadOpenAIConfig(
     batchSize: Number(config.get<number>("apiBatchSize", 50)),
     tokenBudget: Number(config.get<number>("apiBatchTokenBudget", 2_000)),
     timeoutMs: Number(config.get<number>("apiTimeoutMs", 120_000)),
-    disableThinking: config.get<boolean>("apiDisableThinking", false) === true,
+    thinking,
+    // 旧开关只在新的三态设置为 default 时作为兼容回退。
+    disableThinking:
+      thinking === "default" &&
+      config.get<boolean>("apiDisableThinking", false) === true,
     apiKey: await readApiKeyWithLegacyFallback(context, OPENAI_API_KEY_SECRET),
   };
 }
@@ -1113,6 +1125,45 @@ export function activate(context: vscode.ExtensionContext): void {
     }),
   );
 
+  // 用户术语表：全局或工作区；文档术语表随全文摘要保存在缓存中，在预览里编辑。
+  register("markdownBilingualSync.editScopedGlossary", () =>
+    handleErrors(async () => {
+      // 不强制要求活动编辑器是 Markdown：从命令面板打开全局/工作区术语表也应可用。
+      const activeUri = vscode.window.activeTextEditor?.document.uri;
+      const items: Array<vscode.QuickPickItem & { scope: GlossaryScope }> = [
+        {
+          label: UI_TEXT.extension.glossaryGlobal,
+          description: UI_TEXT.extension.glossaryGlobalDescription,
+          scope: "global",
+        },
+      ];
+      if (vscode.workspace.workspaceFolders?.length) {
+        items.push({
+          label: UI_TEXT.extension.glossaryWorkspace,
+          description: UI_TEXT.extension.glossaryWorkspaceDescription,
+          scope: "workspace",
+        });
+      }
+      const picked = await vscode.window.showQuickPick(items, {
+        title: UI_TEXT.extension.editScopedGlossaryTitle,
+        placeHolder: UI_TEXT.extension.editScopedGlossaryTitle,
+      });
+      if (!picked) {
+        return;
+      }
+      if (picked.scope === "global") {
+        await glossaryStore.open();
+        return;
+      }
+      const opened = await glossaryStore.openWorkspaceGlossary(activeUri);
+      if (!opened) {
+        void vscode.window.showWarningMessage(
+          UI_TEXT.extension.glossaryNoWorkspace,
+        );
+      }
+    }),
+  );
+
   // 应用翻译服务预设：provider 与预设设置都写入用户（Global）设置。
   register("markdownBilingualSync.applyProviderPreset", () =>
     handleErrors(async () => {
@@ -1281,15 +1332,18 @@ export function activate(context: vscode.ExtensionContext): void {
       }
       // endpoint 由 Provider 返回（自定义 HTTP 会对 Key 脱敏）；日志不包含 SecretStorage 中的 Key。
       output.appendLine(
-        `[${new Date().toISOString()}] connection test ok: model=${result.model}, latency=${result.latencyMs}ms, thinking=${result.thinkingDisabled ? "disabled" : "provider-default"}, endpoint=${result.endpoint}, sample=${JSON.stringify(result.sample)}`,
+        `[${new Date().toISOString()}] connection test ok: model=${result.model}, latency=${result.latencyMs}ms, thinking=${result.thinkingMode}, endpoint=${result.endpoint}, sample=${JSON.stringify(result.sample)}`,
       );
       void vscode.window.showInformationMessage(
         formatText(UI_TEXT.extension.testSuccess, {
           model: result.model,
           latency: result.latencyMs,
-          thinking: result.thinkingDisabled
-            ? UI_TEXT.extension.testThinkingDisabled
-            : "",
+          thinking:
+            result.thinkingMode === "enabled"
+              ? UI_TEXT.extension.testThinkingEnabled
+              : result.thinkingMode === "disabled"
+                ? UI_TEXT.extension.testThinkingDisabled
+                : "",
           sample: result.sample,
         }),
       );

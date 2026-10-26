@@ -18,6 +18,9 @@ import { tError } from "../i18n/errors";
 
 // ---- 请求与结果数据类型 ----
 
+/** 模型思考模式：default 省略 enable_thinking，enabled/disabled 显式请求。 */
+export type ThinkingMode = "default" | "enabled" | "disabled";
+
 /** 稳定翻译参考的角色：旧译文或回译前的原文。 */
 export type TranslationReferenceRole = "previous-target" | "previous-source";
 
@@ -46,6 +49,16 @@ export interface TranslationItem {
   kind: BlockKind;
   /** 从祖先标题组成的路径，仅作上下文提示。 */
   headingPath: string[];
+  /**
+   * 可选：仅用于分批的文档标识。同一文档的块不会与其他文档混入同一请求；
+   * 不会发送给模型，也不进入提示词或缓存。
+   */
+  documentId?: string;
+  /**
+   * 可选：仅用于分批的小节标识。分批器尽量保持同一小节完整，避免跨小节切断
+   * 标题与正文；不会发送给模型。
+   */
+  sectionId?: string;
   /** 可选：上一版结果，用于重新翻译或回译时减少措辞波动。 */
   reference?: TranslationReference;
 }
@@ -76,6 +89,14 @@ export interface SummaryRequest {
   targetLanguage: string;
   /** 文件名，仅用于提示模型文档标题；不是可信指令。 */
   title?: string;
+  /** 用户全局/工作区术语表；生成文档术语表时应优先沿用这些目标词。 */
+  glossary?: GlossaryEntry[];
+}
+
+/** 摘要生成结果：摘要正文 + 随摘要生成的文档术语表。 */
+export interface SummaryResult {
+  summary: string;
+  glossary: GlossaryEntry[];
 }
 
 /** Provider 返回的单块译文；id 必须与请求中某一项完全一致。 */
@@ -96,6 +117,8 @@ export interface ConnectionTestResult {
   sample: string;
   /** 请求是否显式关闭了思考模式（仅表示配置，不代表服务端行为）。 */
   thinkingDisabled: boolean;
+  /** 本次测试实际使用的思考模式配置。 */
+  thinkingMode: ThinkingMode;
 }
 
 /** 进度回调：completed 为已交付块数，total 为本次请求总块数；回调不应抛错。 */
@@ -149,7 +172,7 @@ export interface TranslationProvider {
   summarize?(
     request: SummaryRequest,
     signal?: AbortSignal,
-  ): Promise<string>;
+  ): Promise<SummaryResult>;
   /** 可选能力：测试连接；未实现时路由器会提示当前服务不支持。 */
   testConnection?(
     sourceLanguage: string,

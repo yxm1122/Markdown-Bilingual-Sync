@@ -71,6 +71,22 @@ describe("cache summary marker", () => {
     expect(parseSummaryMarker("<!-- mbs-summary: -->")).toBeUndefined();
   });
 
+  it("round-trips a document glossary and drops invalid entries", () => {
+    const marker = createSummaryMarker({
+      text: "summary",
+      sourceHash: "hash",
+      updatedAt: "now",
+      glossary: [
+        { source: "table", target: "表格" },
+        { source: "table", target: "数据表" },
+        { source: "", target: "空" },
+      ],
+    });
+    expect(parseSummaryMarker(marker)?.glossary).toEqual([
+      { source: "table", target: "数据表" },
+    ]);
+  });
+
   it("hashes normalized source text stably", () => {
     expect(summarySourceHash("a\r\nb")).toBe(summarySourceHash("a\nb"));
     expect(summarySourceHash("a")).not.toBe(summarySourceHash("b"));

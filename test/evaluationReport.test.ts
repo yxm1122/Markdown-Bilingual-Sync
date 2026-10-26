@@ -62,6 +62,34 @@ describe("translation evaluation report", () => {
     expect(formatHumanReviewMarkdown(report)).toContain("| demo |");
   });
 
+  it("includes timing and concurrency in Markdown and JSON", () => {
+    const report = createEvaluationReport({
+      provider: "test",
+      sourceLanguage: "en",
+      targetLanguage: "zh-CN",
+      cases: [caseReport()],
+      timing: {
+        caseConcurrency: 4,
+        requestConcurrency: 8,
+        thinkingMode: "disabled",
+        responseCount: 10,
+        reasoningResponses: 5,
+        totalCaseDurationMs: 10_000,
+        wallDurationMs: 3_000,
+      },
+    });
+    const markdown = formatEvaluationMarkdown(report);
+    expect(markdown).toContain("- Timing: 3.0s wall, 10.0s across cases");
+    expect(markdown).toContain(
+      "- Concurrency: 4 case(s), 8 request(s); thinking: disabled",
+    );
+    expect(markdown).toContain("- Reasoning responses: 5/10");
+    const json = JSON.parse(formatEvaluationJson(report)) as {
+      timing: { wallDurationMs: number };
+    };
+    expect(json.timing.wallDurationMs).toBe(3_000);
+  });
+
   it("escapes table separators in dynamic case ids", () => {
     const item = { ...caseReport(), id: "a|b" };
     const report = createEvaluationReport({

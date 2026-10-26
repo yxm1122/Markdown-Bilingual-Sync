@@ -211,7 +211,7 @@ export function parseMarkdownDocument(
         endLine,
         raw,
         hash: blockHash(kind, raw),
-        translatable: false,
+        translatable: TRANSLATABLE_KINDS.has(kind),
       });
     }
     runStart = -1;

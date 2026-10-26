@@ -37,7 +37,8 @@ cases/<case-id>/reference.zh.md
 
 - **Block parity.** Source and reference have the same top-level block count and block kinds, in the same order, because the runner aligns by block index. Frontmatter is a separate leading region and is not counted as a body block.
 - **Glossary.** Use the targets in `manifest.json` wherever the source term appears in prose. `token` stays Latin and keeps its space in `token 预算`.
-- **Verbatim content.** Code fences, inline code, math, URLs, HTML tags, footnote ids, and YAML frontmatter are unchanged between source and reference.
+- **Verbatim content.** Code fences, inline code, math, URLs, HTML tags, footnote ids, and YAML frontmatter are unchanged between source and reference. Link titles are prose and may be translated, so the reference keeps or translates them freely.
+- **Inline code.** Code spans follow CommonMark: a run of N backticks closes only at a run of N backticks, and backslashes do not escape backticks inside a code span. Use double-backtick delimiters when the code content contains a backtick.
 - **Translated content.** Prose, link text, image alt text, table headers and cells, list items, and alert bodies are translated. Alert markers such as `[!NOTE]` and task checkboxes are preserved.
 - **Chinese style.** References use natural Simplified Chinese, full-width punctuation, and a single space between CJK text and Latin words or code spans. They are not literal word-for-word renderings.
 - **Mixed language.** In `mixed-language`, existing Chinese sentences are kept as-is; only English text is translated.

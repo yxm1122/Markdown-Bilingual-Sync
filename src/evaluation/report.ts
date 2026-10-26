@@ -9,6 +9,7 @@
  * - Markdown 表格中的动态文本必须转义 `|` 和换行，避免破坏表格；
  * - 通过/失败只由硬问题决定，长度比例与参考相似度不参与 pass/fail。
  */
+import type { ThinkingMode } from "../translation/types";
 import {
   aggregateEvaluations,
   type CaseEvaluation,
@@ -24,6 +25,23 @@ export interface EvaluationCaseReport extends CaseEvaluation {
   error?: string;
 }
 
+/** 评估运行的耗时与并发配置，用于比较不同参数的吞吐。 */
+export interface EvaluationTiming {
+  /** 同时运行的用例数。 */
+  caseConcurrency: number;
+  /** Provider HTTP 请求并发上限（候选目录模式没有请求时为 undefined）。 */
+  requestConcurrency?: number;
+  /** 思考模式；undefined 表示未使用 Provider（Mock/候选目录）。 */
+  thinkingMode?: ThinkingMode;
+  /** 实际收到的模型响应数与其中包含 reasoning 的数量。 */
+  responseCount?: number;
+  reasoningResponses?: number;
+  /** 各用例耗时之和，反映总工作量。 */
+  totalCaseDurationMs: number;
+  /** 实际墙钟耗时，反映并行后的速度。 */
+  wallDurationMs: number;
+}
+
 /** 一次完整评估的报告数据。 */
 export interface EvaluationReport {
   generatedAt: string;
@@ -33,6 +51,7 @@ export interface EvaluationReport {
   targetLanguage: string;
   cases: EvaluationCaseReport[];
   aggregate: EvaluationAggregate;
+  timing?: EvaluationTiming;
   notes: string[];
 }
 
@@ -43,6 +62,7 @@ export function createEvaluationReport(input: {
   sourceLanguage: string;
   targetLanguage: string;
   cases: readonly EvaluationCaseReport[];
+  timing?: EvaluationTiming;
   notes?: readonly string[];
 }): EvaluationReport {
   return {
@@ -53,6 +73,7 @@ export function createEvaluationReport(input: {
     targetLanguage: input.targetLanguage,
     cases: [...input.cases],
     aggregate: aggregateEvaluations(input.cases),
+    ...(input.timing ? { timing: input.timing } : {}),
     notes: [...(input.notes ?? [])],
   };
 }
@@ -147,6 +168,17 @@ export function formatEvaluationMarkdown(report: EvaluationReport): string {
     `- Provider: \`${report.provider}\`${report.model ? ` / \`${report.model}\`` : ""}`,
     `- Language pair: \`${report.sourceLanguage}\` → \`${report.targetLanguage}\``,
     `- Cases: ${aggregate.caseCount} (${aggregate.passedCases} passed, ${aggregate.failedCases} failed)`,
+    ...(report.timing
+      ? [
+          `- Timing: ${(report.timing.wallDurationMs / 1000).toFixed(1)}s wall, ${(report.timing.totalCaseDurationMs / 1000).toFixed(1)}s across cases`,
+          `- Concurrency: ${report.timing.caseConcurrency} case(s), ${report.timing.requestConcurrency ?? "-"} request(s); thinking: ${report.timing.thinkingMode ?? "n/a"}`,
+          ...(report.timing.responseCount !== undefined
+            ? [
+                `- Reasoning responses: ${report.timing.reasoningResponses ?? 0}/${report.timing.responseCount}`,
+              ]
+            : []),
+        ]
+      : []),
     "",
     "## Summary",
     "",

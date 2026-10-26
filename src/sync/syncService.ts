@@ -20,7 +20,12 @@ import * as path from "node:path";
 import * as vscode from "vscode";
 import { CacheStore } from "../cache/cacheStore";
 import { buildImportedCache } from "../import/importTranslation";
-import type { GlossaryLoadResult } from "../glossary/glossary";
+import {
+  MAX_DOCUMENT_GLOSSARY_ENTRIES,
+  mergeGlossaryEntries,
+  normalizeGlossaryEntries,
+  type GlossaryLoadResult,
+} from "../glossary/glossary";
 import type { GlossaryStore } from "../glossary/glossaryStore";
 import {
   markCachedBlockSynced,
@@ -50,14 +55,20 @@ import {
 } from "./sync";
 import type { CacheDocument } from "../markdown/types";
 import type {
+  GlossaryEntry,
   TranslationProvider,
 } from "../translation/types";
 import {
   validateTranslationResult,
 } from "../translation/types";
 import { estimateTokenCount } from "../translation/batching";
+import {
+  checkDocumentConsistency,
+  type ConsistencyReport,
+} from "../quality/consistency";
 import { blockHash, newBlockId } from "../util/hash";
 import { LANGUAGE_TAG } from "../util/language";
+import { restoreProtectedSyntax } from "../util/protectedSyntax";
 import { tError } from "../i18n/errors";
 
 /** 摘要是一个手动触发的单次请求；超过该输入规模时提示手动填写，避免超出模型上下文。 */
@@ -290,6 +301,26 @@ export class SyncService {
     };
   }
 
+  /**
+   * 检查当前文件的机器译文是否满足术语表与受保护 Markdown 约束。
+   *
+   * 使用与同步相同的合并术语表；人工锁定块不会出现在结果中，避免一键重译覆盖
+   * 手工成果。无缓存时返回 `cacheExists: false`，由调用方提示先同步。
+   */
+  async checkConsistency(sourceUri: vscode.Uri): Promise<ConsistencyReport> {
+    const state = await this.loadPreviewState(sourceUri);
+    const glossary = await this.loadGlossary(sourceUri);
+    return checkDocumentConsistency({
+      md: this.md,
+      sourceText: state.sourceText,
+      cacheText: state.cacheText,
+      glossary: mergeGlossaryEntries([
+        glossary.entries,
+        state.summary?.glossary ?? [],
+      ]),
+    });
+  }
+
   // ---- 同步与重译 ----
 
   /**
@@ -454,13 +485,16 @@ export class SyncService {
       this.log(
         `retranslate block ${blockIndex} of ${path.basename(sourceUri.fsPath)} (${aligned.source.kind})`,
       );
-      const glossary = await this.loadGlossary();
+      const glossary = await this.loadGlossary(sourceUri);
       const rawResult = await this.provider.translate(
         {
           sourceLanguage: state.sourceLanguage,
           targetLanguage: state.targetLanguage,
           items: [item],
-          glossary: glossary.entries,
+          glossary: mergeGlossaryEntries([
+            glossary.entries,
+            cache.summary?.glossary ?? [],
+          ]),
           ...(summary ? { summary } : {}),
         },
         signal,
@@ -469,11 +503,16 @@ export class SyncService {
         throw new CancelledError();
       }
       const outputs = validateTranslationResult([item], rawResult);
+      const content = restoreProtectedSyntax(
+        item.text,
+        outputs.get(item.id) ?? "",
+        item.kind,
+      );
       const edited = replaceCachedBlock({
         cacheText: state.cacheText,
         cache,
         target: aligned.cache,
-        content: outputs.get(item.id) ?? "",
+        content,
         sourceHash: aligned.source.hash,
         sourceKind: aligned.source.kind,
         mode: "auto",
@@ -802,7 +841,11 @@ export class SyncService {
       throw new CancelledError();
     }
     const outputs = validateTranslationResult([item], rawResult);
-    const backText = outputs.get(item.id)?.trim() ?? "";
+    const backText = restoreProtectedSyntax(
+      item.text,
+      outputs.get(item.id) ?? "",
+      item.kind,
+    ).trim();
     if (!backText) {
       throw new Error(tError("sync.backEmpty"));
     }
@@ -860,7 +903,11 @@ export class SyncService {
       throw new CancelledError();
     }
     const outputs = validateTranslationResult([item], rawResult);
-    const result = outputs.get(item.id)?.trim() ?? "";
+    const result = restoreProtectedSyntax(
+      item.text,
+      outputs.get(item.id) ?? "",
+      item.kind,
+    ).trim();
     if (!result) {
       throw new Error(tError("sync.backEmpty"));
     }
@@ -907,20 +954,28 @@ export class SyncService {
         tError("sync.summaryTooLongInput", { tokens: SUMMARY_MAX_INPUT_TOKENS }),
       );
     }
-    const text = (
-      await this.provider.summarize(
-        {
-          text: state.sourceText,
-          sourceLanguage: state.sourceLanguage,
-          targetLanguage: state.targetLanguage,
-          title: path.basename(sourceUri.fsPath),
-        },
-        signal,
-      )
-    ).trim();
+    const scopedGlossary = await this.loadGlossary(sourceUri);
+    // 重新生成摘要时保留已有文档术语条目，避免覆盖用户在预览中的修改；
+    // 需要彻底重建时先清除摘要（会同时清除术语表）再生成。
+    const existingCache = parseCacheDocument(state.cacheText ?? "", this.md);
+    const existingGlossary = existingCache.summary?.glossary ?? [];
+    const result = await this.provider.summarize(
+      {
+        text: state.sourceText,
+        sourceLanguage: state.sourceLanguage,
+        targetLanguage: state.targetLanguage,
+        title: path.basename(sourceUri.fsPath),
+        glossary: mergeGlossaryEntries([
+          scopedGlossary.entries,
+          existingGlossary,
+        ]),
+      },
+      signal,
+    );
     if (signal?.aborted) {
       throw new CancelledError();
     }
+    const text = result.summary.trim();
     if (!text) {
       throw new Error(tError("sync.aiEmptySummary"));
     }
@@ -931,10 +986,11 @@ export class SyncService {
       state,
       text,
       this.provider.id.replace(/^batch:/, ""),
+      mergeGlossaryEntries([result.glossary, existingGlossary]),
     );
   }
 
-  /** 保存用户在预览中编辑的摘要；会按当前原文更新关联哈希。 */
+  /** 保存用户在预览中编辑的摘要；保留随摘要生成的文档术语表。 */
   async saveSummary(sourceUri: vscode.Uri, text: string): Promise<string> {
     if (!text.trim()) {
       throw new Error(tError("sync.summaryEmpty"));
@@ -944,7 +1000,39 @@ export class SyncService {
       true,
       tError("sync.purposeSaveSummary"),
     );
-    return this.writeSummary(state, text, "manual");
+    const cache = parseCacheDocument(state.cacheText ?? "", this.md);
+    return this.writeSummary(
+      state,
+      text,
+      "manual",
+      cache.summary?.glossary ?? [],
+    );
+  }
+
+  /**
+   * 保存预览中编辑的文档术语表；必须已有全文摘要（术语表属于摘要元数据）。
+   * 空数组表示只清空术语表，保留摘要。
+   */
+  async saveDocumentGlossary(
+    sourceUri: vscode.Uri,
+    entries: readonly GlossaryEntry[],
+  ): Promise<string> {
+    const state = await this.loadState(
+      sourceUri,
+      true,
+      tError("sync.purposeSaveGlossary"),
+    );
+    const cache = parseCacheDocument(state.cacheText ?? "", this.md);
+    if (!cache.summary?.text.trim()) {
+      throw new Error(tError("sync.glossaryNoSummary"));
+    }
+    return this.writeSummary(
+      state,
+      cache.summary.text,
+      cache.summary.model,
+      entries,
+      cache.summary.updatedAt,
+    );
   }
 
   /**
@@ -988,11 +1076,13 @@ export class SyncService {
     }
   }
 
-  /** 把摘要写入缓存；没有缓存文件时创建一个只含摘要元数据的缓存。 */
+  /** 把摘要与文档术语表写入缓存；没有缓存文件时创建只含元数据的缓存。 */
   private async writeSummary(
     state: LoadedState,
     text: string,
     model?: string,
+    glossary: readonly GlossaryEntry[] = [],
+    updatedAt = new Date().toISOString(),
   ): Promise<string> {
     const summaryText = text.trim();
     if (summaryText.length > MAX_SUMMARY_CHARS) {
@@ -1000,6 +1090,10 @@ export class SyncService {
         tError("sync.summaryTooLong", { chars: MAX_SUMMARY_CHARS }),
       );
     }
+    const normalizedGlossary = normalizeGlossaryEntries(
+      glossary,
+      MAX_DOCUMENT_GLOSSARY_ENTRIES,
+    );
     const cache = parseCacheDocument(state.cacheText ?? "", this.md);
     this.assertCacheSummaryWritable(cache);
     const entries = this.orderedCacheEntries(cache);
@@ -1009,8 +1103,11 @@ export class SyncService {
       {
         text: summaryText,
         sourceHash: summarySourceHash(state.sourceText),
-        updatedAt: new Date().toISOString(),
+        updatedAt,
         ...(model ? { model } : {}),
+        ...(normalizedGlossary.length > 0
+          ? { glossary: normalizedGlossary }
+          : {}),
       },
     );
     await this.cacheStore.write(state.cacheUri, nextText);
@@ -1867,7 +1964,7 @@ export class SyncService {
     this.log(
       `sync ${path.basename(state.sourceUri.fsPath)} (${retranslateAll ? "all" : retranslateStale ? "stale" : "missing"}, partial=${allowPartial})`,
     );
-    const glossary = await this.loadGlossary();
+    const glossary = await this.loadGlossary(state.sourceUri);
     const assistSettings = this.resolveAssist(assist);
     // 摘要上下文由缓存中的元数据提供；过期摘要仍按用户选择继续使用。
     const cache = state.cacheText?.trim()
@@ -1883,7 +1980,10 @@ export class SyncService {
       targetLanguage: state.targetLanguage,
       retranslateStale,
       retranslateAll,
-      glossary: glossary.entries,
+      glossary: mergeGlossaryEntries([
+        glossary.entries,
+        cache?.summary?.glossary ?? [],
+      ]),
       assist: {
         stableTranslation: assistSettings.stableTranslation,
         ...(summary ? { summary } : {}),
@@ -1913,9 +2013,13 @@ export class SyncService {
     };
   }
 
-  /** 加载全局术语表；告警写入输出通道但不阻断同步。 */
-  private async loadGlossary(): Promise<GlossaryLoadResult> {
-    const glossary = await this.glossaryStore.load();
+  /** 加载适用于指定文件的合并术语表；告警写入输出通道但不阻断同步。 */
+  private async loadGlossary(
+    sourceUri?: vscode.Uri,
+  ): Promise<GlossaryLoadResult> {
+    const glossary = sourceUri
+      ? await this.glossaryStore.loadFor(sourceUri)
+      : await this.glossaryStore.load();
     for (const warning of glossary.warnings) {
       this.log(`glossary: ${warning}`);
     }

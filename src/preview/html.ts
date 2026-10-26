@@ -778,14 +778,29 @@ function renderSummaryPanel(model: PreviewModel): string {
   </summary>
   <div class="mbs-summary-body">
     <div class="mbs-summary-actions">
-      <button type="button" class="mbs-button mbs-button-primary" data-action="generateSummary"${summary.canGenerate ? "" : ` disabled title="${escapeHtml(T.summary.unsupported)}"`}>${escapeHtml(T.summary.generate)}</button>
+      <button type="button" class="mbs-button mbs-button-primary" data-action="generateSummary"${summary.canGenerate ? ` title="${escapeHtml(T.summary.generateTitle)}"` : ` disabled title="${escapeHtml(T.summary.unsupported)}"`}>${escapeHtml(T.summary.generate)}</button>
       <button type="button" class="mbs-button" data-action="saveSummary">${escapeHtml(T.summary.save)}</button>
-      <button type="button" class="mbs-button" data-action="clearSummary"${hasSummary ? "" : " disabled"}>${escapeHtml(T.summary.clear)}</button>
+      <button type="button" class="mbs-button" data-action="clearSummary" title="${escapeHtml(T.summary.clearTitle)}"${hasSummary ? "" : " disabled"}>${escapeHtml(T.summary.clear)}</button>
       <label class="mbs-assist-toggle" title="${escapeHtml(T.summary.stableTranslationTitle)}"><input type="checkbox" data-assist-toggle="stableTranslation"${assist.stableTranslation ? " checked" : ""}> ${escapeHtml(T.summary.stableTranslation)}</label>
       <label class="mbs-assist-toggle" title="${escapeHtml(T.summary.useSummaryTitle)}"><input type="checkbox" data-assist-toggle="summaryContext"${assist.summaryContext ? " checked" : ""}${hasSummary ? "" : " disabled"}> ${escapeHtml(T.summary.useSummary)}</label>
     </div>
     <textarea class="mbs-summary-text" data-summary-text spellcheck="false" rows="8" placeholder="${escapeHtml(T.summary.placeholder)}">${escapeHtml(summary.text)}</textarea>
     <p class="mbs-summary-meta">${escapeHtml(meta.join(" · "))}${summary.stale ? ` · ${escapeHtml(T.summary.staleHint)}` : ""}</p>
+    ${
+      hasSummary
+        ? `<div class="mbs-summary-glossary">
+      <div class="mbs-summary-glossary-head">
+        <span class="mbs-summary-title">${escapeHtml(T.summary.glossaryTitle)}</span>
+        <span class="mbs-summary-state">${escapeHtml(formatText(T.summary.glossaryCount, { count: summary.glossaryCount ?? 0 }))}</span>
+      </div>
+      <textarea class="mbs-summary-text mbs-summary-glossary-text" data-glossary-text spellcheck="false" rows="5" placeholder="${escapeHtml(T.summary.glossaryPlaceholder)}">${escapeHtml(summary.glossaryText ?? "")}</textarea>
+      <div class="mbs-summary-actions">
+        <button type="button" class="mbs-button" data-action="saveGlossary">${escapeHtml(T.summary.saveGlossary)}</button>
+        <span class="mbs-summary-meta">${escapeHtml(T.summary.glossaryHint)}</span>
+      </div>
+    </div>`
+        : `<p class="mbs-summary-meta">${escapeHtml(T.summary.glossaryNeedsSummary)}</p>`
+    }
   </div>
 </details>`;
 }
@@ -894,6 +909,7 @@ export function buildPreviewHtml(input: PreviewHtmlInput): string {
     <div class="mbs-toolbar-actions">
       <button type="button" class="mbs-button mbs-button-primary" data-action="sync">${escapeHtml(T.toolbar.sync)}</button>
       <button type="button" class="mbs-button" data-action="importTranslation" title="${escapeHtml(T.toolbar.importTranslationTitle)}">${escapeHtml(T.toolbar.importTranslation)}</button>
+      <button type="button" class="mbs-button" data-action="checkConsistency"${model.cacheExists ? ` title="${escapeHtml(T.toolbar.checkConsistencyTitle)}"` : ` disabled title="${escapeHtml(UI_TEXT.consistency.noCache)}"`}>${escapeHtml(T.toolbar.checkConsistency)}</button>
       <button type="button" class="mbs-button" data-action="refresh">${escapeHtml(T.toolbar.refresh)}</button>
       <button type="button" class="mbs-button" data-action="editCache">${escapeHtml(T.toolbar.editCache)}</button>
       <button type="button" class="mbs-button" data-action="export"${model.cacheExists ? "" : ` disabled title="${escapeHtml(T.toolbar.exportDisabledTitle)}"`}>${escapeHtml(T.toolbar.export)}</button>

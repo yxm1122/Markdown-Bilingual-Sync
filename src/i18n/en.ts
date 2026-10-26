@@ -58,6 +58,7 @@ export const UI_TEXT = {
     testSuccess:
       "Translation connection succeeded: {model} · {latency} ms{thinking} · Sample translation: {sample}",
     testThinkingDisabled: " · thinking mode disabled",
+    testThinkingEnabled: " · thinking mode enabled",
     noApiKey: "No AI translation API key has been saved.",
     confirmClearApiKey: "Clear the saved AI translation API key?",
     clearApiKeyAction: "Clear key",
@@ -101,6 +102,13 @@ export const UI_TEXT = {
       "The selected provider and endpoint settings will be written to user settings",
     providerPresetApplied: "{name} preset applied.",
     providerPresetTestAction: "Test connection",
+    editScopedGlossaryTitle: "Edit glossary",
+    glossaryGlobal: "Global glossary",
+    glossaryGlobalDescription: "Shared across all workspaces",
+    glossaryWorkspace: "Workspace glossary",
+    glossaryWorkspaceDescription:
+      "Stored as .mbs-glossary.json in the workspace root",
+    glossaryNoWorkspace: "Open a folder before editing a workspace glossary.",
   },
   // Bilingual preview: structure is rendered by src/preview/html.ts; some modal/editor
   // fields are also injected into media/preview.js.
@@ -207,10 +215,20 @@ export const UI_TEXT = {
     summary: {
       title: "Full-document summary",
       placeholder:
-        "No summary yet. Click “AI generate” or write one manually.",
+        "No summary yet. Click “AI generate” to create both a summary and a document glossary, or write a summary manually.",
       generate: "AI generate",
+      generateTitle: "Generate a summary and a document glossary",
       save: "Save summary",
       clear: "Clear summary",
+      clearTitle: "Clear the summary and its document glossary",
+      glossaryTitle: "Document glossary",
+      glossaryCount: "{count} terms",
+      glossaryPlaceholder: "One term per line, for example: table => 表格",
+      glossaryHint:
+        "Generated with the summary; existing entries are kept when you regenerate. A document term overrides a global/workspace term with the same source.",
+      glossaryNeedsSummary:
+        "Generate the summary first to create a document glossary.",
+      saveGlossary: "Save glossary",
       stale: "Possibly stale",
       tokens: "About {count} tokens",
       generatedAt: "Generated at {time}",
@@ -283,6 +301,9 @@ export const UI_TEXT = {
         "Import an existing translation and mark it as locked",
       refresh: "Refresh",
       editCache: "Edit cache",
+      checkConsistency: "Check",
+      checkConsistencyTitle:
+        "Check glossary terms and protected Markdown in machine translations",
       export: "Export",
       exportDisabledTitle: "Generate a translation cache first",
       openCacheFolder: "Open cache folder",
@@ -349,6 +370,21 @@ export const UI_TEXT = {
     },
   },
   // Async operation results shown through toasts or message boxes.
+  // Post-translation consistency check (preview toolbar action).
+  consistency: {
+    title: "Translation consistency check",
+    blockItem: "Block {index} · {count} issue(s)",
+    glossaryIssue: "Glossary: {source} → {target}",
+    protectedIssue: "Protected Markdown: {token}",
+    location: "Line {line}",
+    noCache:
+      "Generate a translation cache before running the consistency check.",
+    ok: "No glossary or protected-Markdown issues found.",
+    okWithSkipped:
+      "No glossary or protected-Markdown issues found in machine translations; {count} locked translation(s) were skipped.",
+    retranslateNote:
+      "Selecting a block retranslates it. Locked translations are not checked.",
+  },
   notifications: {
     exportPreparing: "Preparing export preview…",
     exportUnchanged:
@@ -426,6 +462,11 @@ export const UI_TEXT = {
     summarySaved: "Full-document summary saved.",
     summaryCleared: "Full-document summary cleared.",
     summaryEmpty: "Summary cannot be empty.",
+    glossarySaving: "Saving document glossary…",
+    glossarySaved: "Document glossary saved.",
+    glossaryInvalidLines:
+      "Glossary lines {lines} are invalid. Use one “source => target” entry per line.",
+    glossaryTooMany: "The document glossary supports at most {max} entries.",
     backStaged:
       "Back-translation staged as a source change. Click “Apply source changes” to write the file.",
     backSame:

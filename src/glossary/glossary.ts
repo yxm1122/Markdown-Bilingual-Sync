@@ -15,12 +15,88 @@ import type { GlossaryEntry } from "../translation/types";
 import { tError } from "../i18n/errors";
 
 const MAX_ENTRIES = 1000;
-const MAX_TERM_LENGTH = 200;
+export const MAX_TERM_LENGTH = 200;
+/** 单篇文档随摘要保存的术语上限；远小于用户术语表，避免把摘要元数据撑大。 */
+export const MAX_DOCUMENT_GLOSSARY_ENTRIES = 200;
 
 /** 解析结果：有效条目 + 可展示警告（不会包含重复项）。 */
 export interface GlossaryLoadResult {
   entries: GlossaryEntry[];
   warnings: string[];
+}
+
+/** 一个已解析的术语表来源，用于按作用域顺序合并。 */
+export interface NamedGlossary {
+  /** 文件名/作用域标签，用于给告警加前缀。 */
+  label: string;
+  result: GlossaryLoadResult;
+}
+
+/**
+ * 按给定顺序合并多个术语表：后出现的同名 source 覆盖前面的条目。
+ * 告警会带上来源标签，便于用户定位是哪个文件出了问题。
+ */
+export function mergeGlossaryResults(
+  sources: readonly NamedGlossary[],
+): GlossaryLoadResult {
+  const warnings: string[] = [];
+  const groups: GlossaryEntry[][] = [];
+  for (const source of sources) {
+    for (const warning of source.result.warnings) {
+      warnings.push(`${source.label}: ${warning}`);
+    }
+    groups.push(source.result.entries);
+  }
+  return { entries: mergeGlossaryEntries(groups), warnings };
+}
+
+/**
+ * 按给定顺序合并术语组：后出现的同名 source 覆盖前面的条目。
+ * 用于把用户术语表与缓存中的文档术语表合并；不产生警告。
+ */
+export function mergeGlossaryEntries(
+  groups: readonly (readonly GlossaryEntry[])[],
+): GlossaryEntry[] {
+  const entries = new Map<string, GlossaryEntry>();
+  for (const group of groups) {
+    for (const entry of group) {
+      if (!entry.source || !entry.target) {
+        continue;
+      }
+      entries.set(entry.source.toLowerCase(), entry);
+    }
+  }
+  return [...entries.values()];
+}
+
+/**
+ * 校验并归一化不可信术语数组（摘要模型输出、缓存元数据）。
+ * 非数组、非对象、空字段、超长项会被忽略；同名 source 以最后一条为准。
+ */
+export function normalizeGlossaryEntries(
+  raw: unknown,
+  maxEntries = MAX_DOCUMENT_GLOSSARY_ENTRIES,
+): GlossaryEntry[] {
+  if (!Array.isArray(raw)) {
+    return [];
+  }
+  const entries = new Map<string, GlossaryEntry>();
+  for (const item of raw) {
+    if (!isRecord(item)) {
+      continue;
+    }
+    const source = readTerm(item.source);
+    const target = readTerm(item.target);
+    if (!source || !target) {
+      continue;
+    }
+    const key = source.toLowerCase();
+    if (!entries.has(key) && entries.size >= maxEntries) {
+      break;
+    }
+    entries.set(key, { source, target });
+  }
+  return [...entries.values()];
 }
 
 /** 判断值是否为普通对象（排除 null 与数组）。 */
