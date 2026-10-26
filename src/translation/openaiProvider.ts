@@ -41,6 +41,10 @@ import {
 import { tError } from "../i18n/errors";
 import { UI_TEXT } from "../i18n";
 import {
+  containsTerm,
+  findMissingGlossaryTerms,
+} from "../util/glossaryMatch";
+import {
   findMissingProtectedTokens,
   stripProtectedForGlossary,
 } from "../util/protectedMarkdown";
@@ -199,13 +203,10 @@ function clampInteger(
 export function resolveThinkingMode(
   config: Pick<OpenAIProviderConfig, "thinking" | "disableThinking">,
 ): ThinkingMode {
-  if (
-    config.thinking === "default" ||
-    config.thinking === "enabled" ||
-    config.thinking === "disabled"
-  ) {
+  if (config.thinking === "enabled" || config.thinking === "disabled") {
     return config.thinking;
   }
+  // thinking 为 default/未设置时，旧开关仍然生效（扩展读取 apiDisableThinking 的兼容路径）。
   return config.disableThinking === true ? "disabled" : "default";
 }
 
@@ -744,14 +745,14 @@ export function selectGlossary(
   if (glossary.length === 0 || items.length === 0) {
     return [];
   }
-  const haystack = items.map((item) => item.text).join("\n").toLowerCase();
+  const haystack = items.map((item) => item.text).join("\n");
   const selected: GlossaryEntry[] = [];
   let characters = 0;
   for (const entry of glossary) {
     if (!entry.source || !entry.target) {
       continue;
     }
-    if (!haystack.includes(entry.source.toLowerCase())) {
+    if (!containsTerm(haystack, entry.source)) {
       continue;
     }
     const cost = entry.source.length + entry.target.length;
@@ -785,7 +786,7 @@ function findMissingGlossary(
   const sources = new Map(
     requested.map((entry) => [
       entry.id,
-      stripProtectedForGlossary(entry.text).toLowerCase(),
+      stripProtectedForGlossary(entry.text),
     ]),
   );
   const missing = new Map<string, GlossaryEntry>();
@@ -794,14 +795,11 @@ function findMissingGlossary(
     if (!source) {
       continue;
     }
-    const translated = stripProtectedForGlossary(entry.text).toLowerCase();
-    for (const term of glossary) {
-      if (!source.includes(term.source.toLowerCase())) {
-        continue;
-      }
-      if (translated.includes(term.target.toLowerCase())) {
-        continue;
-      }
+    for (const term of findMissingGlossaryTerms(
+      source,
+      entry.text,
+      glossary,
+    )) {
       missing.set(`${term.source}\u0000${term.target}`, term);
     }
   }

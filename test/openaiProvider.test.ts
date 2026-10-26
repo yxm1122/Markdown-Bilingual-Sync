@@ -293,6 +293,23 @@ describe("OpenAITranslationProvider", () => {
     expect(
       (await bodyFor({ disableThinking: true })).enable_thinking,
     ).toBe(false);
+    // 扩展同时传 thinking:"default" 和旧 disableThinking:true 时必须仍然关闭。
+    expect(
+      (
+        await bodyFor({
+          thinking: "default",
+          disableThinking: true,
+        })
+      ).enable_thinking,
+    ).toBe(false);
+    expect(
+      (
+        await bodyFor({
+          thinking: "enabled",
+          disableThinking: true,
+        })
+      ).enable_thinking,
+    ).toBe(true);
   });
 
   it("reports whether a response contains reasoning", async () => {
@@ -620,6 +637,23 @@ describe("OpenAITranslationProvider", () => {
       "Required glossary for this batch",
     );
     expect(body.messages[0].content).toContain('"table" -> "表格"');
+  });
+
+  it("does not match a glossary term inside a longer word", async () => {
+    let calls = 0;
+    const { provider } = configuredProvider(async () => {
+      calls += 1;
+      return completion(
+        '{"items":[{"id":"b1","text":"这篇文章解释了流程。"}]}',
+      );
+    });
+
+    await provider.translate({
+      ...request([item("b1", "This article explains the process.")]),
+      glossary: [{ source: "art", target: "艺术" }],
+    });
+
+    expect(calls).toBe(1);
   });
 
   it("requires an API key before making a request", async () => {

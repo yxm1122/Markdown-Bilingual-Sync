@@ -702,11 +702,13 @@ function groupedBalancedPack(
       break;
     }
     const [left, right] = splitParts;
+    const batch = unitBatches[splitBatchIndex];
+    // 只拆目标 unit，保留同批其他 unit；直接用 [left],[right] 替换整批会丢块。
     unitBatches.splice(
       splitBatchIndex,
       1,
-      [left],
-      [right],
+      [...batch.slice(0, splitUnitIndex), left],
+      [right, ...batch.slice(splitUnitIndex + 1)],
     );
   }
 

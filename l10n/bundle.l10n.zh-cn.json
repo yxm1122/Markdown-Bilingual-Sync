@@ -520,6 +520,7 @@
   "This source block was marked for deletion.": "已标记删除该原文块。",
   "This translation block no longer exists or is already linked to a source.": "这个译文块已不存在或已经关联原文。",
   "This translation block no longer exists.": "这个译文块已不存在。",
+  "This translation is locked and was not retranslated. Edit it manually instead.": "该译文已锁定，未执行重译。请手动编辑该块。",
   "Too many requests or insufficient quota; retry later.": "请求过于频繁或额度不足，请稍后重试。",
   "Translate the target back to the source language and stage it as source changes": "把译文翻回原文语言，并暂存为原文修改",
   "Translate this block": "翻译此块",

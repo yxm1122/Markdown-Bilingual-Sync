@@ -209,6 +209,23 @@ describe("dynamic translation batching", () => {
     }
   });
 
+  it("keeps every block when splitting a large unit inside a multi-unit batch", () => {
+    const items = [
+      ...Array.from({ length: 4 }, (_, index) =>
+        grouped(`large-${index}`, "x".repeat(1000), "doc", "large"),
+      ),
+      grouped("small", "y".repeat(100), "doc", "small"),
+    ];
+    const batches = planTranslationBatches(items, {
+      maxItems: 50,
+      tokenBudget: 2000,
+      concurrency: 4,
+    });
+    expect(batches.flat().map((entry) => entry.id)).toEqual(
+      items.map((entry) => entry.id),
+    );
+  });
+
   it("handles an empty item list", () => {
     expect(
       planTranslationBatches([], { maxItems: 50, tokenBudget: 6000 }),

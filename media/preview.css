@@ -97,7 +97,8 @@ input {
 }
 
 .mbs-root.mbs-busy .mbs-toolbar-actions,
-.mbs-root.mbs-busy .mbs-actions {
+.mbs-root.mbs-busy .mbs-actions,
+.mbs-root.mbs-busy .mbs-summary-actions {
   opacity: 0.55;
   pointer-events: none;
 }

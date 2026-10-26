@@ -105,6 +105,11 @@ export const SYNC_ERRORS = [
     zh: "这个块不参与翻译（代码、公式、脚注或结构块）。",
   },
   {
+    key: "sync.blockLockedRetranslate",
+    en: "This translation is locked and was not retranslated. Edit it manually instead.",
+    zh: "该译文已锁定，未执行重译。请手动编辑该块。",
+  },
+  {
     key: "sync.noTranslationSyncFirst",
     en: "This block has no translation yet. Sync the translation first.",
     zh: "这个块还没有译文，请先同步译文。",

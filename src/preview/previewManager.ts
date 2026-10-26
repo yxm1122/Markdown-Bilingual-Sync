@@ -2337,7 +2337,13 @@ class PreviewPanelSession implements vscode.Disposable {
       list.push(issue);
       byBlock.set(issue.blockIndex, list);
     }
-    const items: Array<vscode.QuickPickItem & { blockIndex: number }> = [];
+    const items: Array<
+      vscode.QuickPickItem & {
+        blockIndex: number;
+        sourceHash: string;
+        cacheId: string;
+      }
+    > = [];
     for (const [blockIndex, issues] of byBlock) {
       const first = issues[0];
       if (!first) {
@@ -2367,6 +2373,8 @@ class PreviewPanelSession implements vscode.Disposable {
         description: summaries.join("; "),
         detail: `${location}\n${first.currentText}`,
         blockIndex,
+        sourceHash: first.sourceHash,
+        cacheId: first.cacheId,
       });
     }
 
@@ -2379,20 +2387,31 @@ class PreviewPanelSession implements vscode.Disposable {
     if (!picked) {
       return;
     }
-    // 一致性检查只覆盖机器译文，且用户已在问题列表里明确选择，直接重译即可。
-    await this.retranslateBlock(picked.blockIndex, false);
+    // 一致性检查只覆盖机器译文，且用户已在问题列表里明确选择，直接重译即可；
+    // 传入检查时的哈希/id，防止等待期间块被锁定或缓存被清后误覆盖。
+    await this.retranslateBlock(picked.blockIndex, false, {
+      sourceHash: picked.sourceHash,
+      cacheId: picked.cacheId,
+      requireMachine: true,
+    });
   }
 
   /**
    * 单块重译（有缓存/已删除时先确认）。
    * @param blockIndex 源块索引。
    * @param confirm 是否对已有译文弹出覆盖确认；一致性检查传入 false。
+   * @param expected 可选的乐观并发校验/仅机器译文限制。
    * @returns 重译并刷新完成；用户取消时返回。
    * @remarks 已删除的译文对应「恢复翻译」，有缓存的块默认会二次确认。
    */
   private async retranslateBlock(
     blockIndex: number,
     confirm = true,
+    expected?: {
+      sourceHash?: string;
+      cacheId?: string;
+      requireMachine?: boolean;
+    },
   ): Promise<void> {
     const view = this.lastModel?.blocks.find(
       (block) => block.blockIndex === blockIndex,
@@ -2438,6 +2457,7 @@ class PreviewPanelSession implements vscode.Disposable {
               stableTranslation: this.stableTranslation,
               summaryContext: this.summaryContext,
             },
+            expected,
           );
         },
       );

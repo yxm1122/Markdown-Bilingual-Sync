@@ -24,6 +24,7 @@ import {
   MAX_DOCUMENT_GLOSSARY_ENTRIES,
   mergeGlossaryEntries,
   normalizeGlossaryEntries,
+  prioritizeGlossaryEntries,
   type GlossaryLoadResult,
 } from "../glossary/glossary";
 import type { GlossaryStore } from "../glossary/glossaryStore";
@@ -418,10 +419,19 @@ export class SyncService {
     blockIndex: number,
     signal?: AbortSignal,
     assist?: Partial<TranslationAssistSettings>,
+    expected?: {
+      sourceHash?: string;
+      cacheId?: string;
+      /** 质检/一致性检查使用：禁止覆盖人工译文，也不允许退化为全量同步。 */
+      requireMachine?: boolean;
+    },
   ): Promise<{ mode: "sync" | "block"; outcome?: SyncOutcome }> {
     return this.withLock(sourceUri, async () => {
       const state = await this.loadState(sourceUri, true);
       if (!state.cacheText || !state.cacheText.trim()) {
+        if (expected?.requireMachine) {
+          throw new Error(tError("sync.noTranslationSyncFirst"));
+        }
         return {
           mode: "sync",
           outcome: await this.syncInternal(
@@ -446,6 +456,18 @@ export class SyncService {
       }
       if (!aligned.source.translatable) {
         throw new Error(tError("sync.blockNotTranslatable"));
+      }
+      if (expected?.requireMachine && aligned.human) {
+        throw new Error(tError("sync.blockLockedRetranslate"));
+      }
+      if (expected?.sourceHash && aligned.source.hash !== expected.sourceHash) {
+        throw new Error(tError("sync.sourceUpdatedRefresh"));
+      }
+      if (expected?.cacheId && aligned.cache?.anchor.id !== expected.cacheId) {
+        throw new Error(tError("sync.translationChangedRefresh"));
+      }
+      if (expected?.requireMachine && !aligned.cache) {
+        throw new Error(tError("sync.noTranslationSyncFirst"));
       }
       if (!aligned.cache) {
         return {
@@ -491,10 +513,7 @@ export class SyncService {
           sourceLanguage: state.sourceLanguage,
           targetLanguage: state.targetLanguage,
           items: [item],
-          glossary: mergeGlossaryEntries([
-            glossary.entries,
-            cache.summary?.glossary ?? [],
-          ]),
+          glossary: this.requestGlossary(glossary.entries, cache),
           ...(summary ? { summary } : {}),
         },
         signal,
@@ -933,6 +952,15 @@ export class SyncService {
     sourceUri: vscode.Uri,
     signal?: AbortSignal,
   ): Promise<string> {
+    return this.withLock(sourceUri, () =>
+      this.generateSummaryUnlocked(sourceUri, signal),
+    );
+  }
+
+  private async generateSummaryUnlocked(
+    sourceUri: vscode.Uri,
+    signal?: AbortSignal,
+  ): Promise<string> {
     if (signal?.aborted) {
       throw new CancelledError();
     }
@@ -992,6 +1020,15 @@ export class SyncService {
 
   /** 保存用户在预览中编辑的摘要；保留随摘要生成的文档术语表。 */
   async saveSummary(sourceUri: vscode.Uri, text: string): Promise<string> {
+    return this.withLock(sourceUri, () =>
+      this.saveSummaryUnlocked(sourceUri, text),
+    );
+  }
+
+  private async saveSummaryUnlocked(
+    sourceUri: vscode.Uri,
+    text: string,
+  ): Promise<string> {
     if (!text.trim()) {
       throw new Error(tError("sync.summaryEmpty"));
     }
@@ -1017,6 +1054,15 @@ export class SyncService {
     sourceUri: vscode.Uri,
     entries: readonly GlossaryEntry[],
   ): Promise<string> {
+    return this.withLock(sourceUri, () =>
+      this.saveDocumentGlossaryUnlocked(sourceUri, entries),
+    );
+  }
+
+  private async saveDocumentGlossaryUnlocked(
+    sourceUri: vscode.Uri,
+    entries: readonly GlossaryEntry[],
+  ): Promise<string> {
     const state = await this.loadState(
       sourceUri,
       true,
@@ -1032,6 +1078,7 @@ export class SyncService {
       cache.summary.model,
       entries,
       cache.summary.updatedAt,
+      cache.summary.sourceHash,
     );
   }
 
@@ -1040,6 +1087,14 @@ export class SyncService {
    * 返回最新缓存文本（缓存文件被删除时为 undefined）。
    */
   async clearSummary(
+    sourceUri: vscode.Uri,
+  ): Promise<string | undefined> {
+    return this.withLock(sourceUri, () =>
+      this.clearSummaryUnlocked(sourceUri),
+    );
+  }
+
+  private async clearSummaryUnlocked(
     sourceUri: vscode.Uri,
   ): Promise<string | undefined> {
     const state = await this.loadState(sourceUri, false);
@@ -1083,6 +1138,7 @@ export class SyncService {
     model?: string,
     glossary: readonly GlossaryEntry[] = [],
     updatedAt = new Date().toISOString(),
+    sourceHash = summarySourceHash(state.sourceText),
   ): Promise<string> {
     const summaryText = text.trim();
     if (summaryText.length > MAX_SUMMARY_CHARS) {
@@ -1102,7 +1158,7 @@ export class SyncService {
       entries,
       {
         text: summaryText,
-        sourceHash: summarySourceHash(state.sourceText),
+        sourceHash,
         updatedAt,
         ...(model ? { model } : {}),
         ...(normalizedGlossary.length > 0
@@ -1980,10 +2036,7 @@ export class SyncService {
       targetLanguage: state.targetLanguage,
       retranslateStale,
       retranslateAll,
-      glossary: mergeGlossaryEntries([
-        glossary.entries,
-        cache?.summary?.glossary ?? [],
-      ]),
+      glossary: this.requestGlossary(glossary.entries, cache),
       assist: {
         stableTranslation: assistSettings.stableTranslation,
         ...(summary ? { summary } : {}),
@@ -2011,6 +2064,18 @@ export class SyncService {
         targetLanguage: state.targetLanguage,
       },
     };
+  }
+
+  /** 合并用户术语与文档术语，并把文档条目排在前面，避免请求配额优先截掉它们。 */
+  private requestGlossary(
+    scoped: readonly GlossaryEntry[],
+    cache?: CacheDocument,
+  ): GlossaryEntry[] {
+    const documentGlossary = cache?.summary?.glossary ?? [];
+    return prioritizeGlossaryEntries(
+      mergeGlossaryEntries([scoped, documentGlossary]),
+      documentGlossary.map((entry) => entry.source),
+    );
   }
 
   /** 加载适用于指定文件的合并术语表；告警写入输出通道但不阻断同步。 */

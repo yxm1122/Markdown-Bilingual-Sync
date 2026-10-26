@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   mergeGlossaryResults,
   parseGlossaryText,
+  prioritizeGlossaryEntries,
 } from "../src/glossary/glossary";
 
 describe("parseGlossaryText", () => {
@@ -92,6 +93,21 @@ describe("parseGlossaryText", () => {
     ]);
     expect(result.warnings).toContain("glossary.json: global warning");
     expect(result.warnings).toContain(".mbs-glossary.json: project warning");
+  });
+
+  it("prioritizes document terms without changing their values", () => {
+    const entries = [
+      { source: "api", target: "接口" },
+      { source: "cache", target: "缓存" },
+      { source: "table", target: "表格" },
+    ];
+    expect(
+      prioritizeGlossaryEntries(entries, ["table", "API"]),
+    ).toEqual([
+      { source: "api", target: "接口" },
+      { source: "table", target: "表格" },
+      { source: "cache", target: "缓存" },
+    ]);
   });
 
   it("caps entries at 1000", () => {

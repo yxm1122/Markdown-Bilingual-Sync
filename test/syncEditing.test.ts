@@ -651,6 +651,38 @@ describe("SyncService block editing and back-translation", () => {
     expect(cache.targetBlocks[0].block.raw).toBe("人工锁定译文。");
   });
 
+  it("rejects the consistency-check retranslate path for locked blocks", async () => {
+    const uri = mocks.FakeUri.file("/project/demo.md") as unknown as Uri;
+    const paragraph = inspect(SOURCE, cacheStore.text!).alignment.blocks.find(
+      (block) => block.source.kind === "paragraph" && block.cache,
+    )!;
+    await service.saveTargetEdit(
+      uri,
+      paragraph.source.index,
+      "人工锁定译文。",
+    );
+
+    await expect(
+      service.retranslateBlock(
+        uri,
+        paragraph.source.index,
+        undefined,
+        undefined,
+        { requireMachine: true },
+      ),
+    ).rejects.toThrow(/已锁定/);
+  });
+
+  it("rejects the consistency-check retranslate path without a cache", async () => {
+    cacheStore.text = undefined;
+    const uri = mocks.FakeUri.file("/project/demo.md") as unknown as Uri;
+    await expect(
+      service.retranslateBlock(uri, 0, undefined, undefined, {
+        requireMachine: true,
+      }),
+    ).rejects.toThrow(/还没有译文/);
+  });
+
   it("stores summaries in cache and sends them with stable translation references", async () => {
     const uri = mocks.FakeUri.file("/project/demo.md") as unknown as Uri;
     const paragraph = inspect(SOURCE, cacheStore.text!).alignment.blocks.find(
@@ -747,6 +779,36 @@ describe("SyncService block editing and back-translation", () => {
       { source: "summary", target: "摘要" },
       { source: "custom", target: "自定义" },
     ]);
+  });
+
+  it("keeps the summary source hash when only the glossary changes", async () => {
+    const uri = mocks.FakeUri.file("/project/demo.md") as unknown as Uri;
+    const generatedText = await service.generateSummary(uri);
+    const before = parseCacheDocument(generatedText, makeMd()).summary!;
+
+    mocks.documentState.text = SOURCE.replace(
+      "First paragraph.",
+      "First paragraph changed.",
+    );
+    const updatedText = await service.saveDocumentGlossary(uri, [
+      { source: "custom", target: "自定义" },
+    ]);
+    const after = parseCacheDocument(updatedText, makeMd()).summary!;
+
+    expect(after.sourceHash).toBe(before.sourceHash);
+    expect(after.text).toBe(before.text);
+    expect(after.glossary).toEqual([
+      { source: "custom", target: "自定义" },
+    ]);
+  });
+
+  it("serializes summary writes with the file lock", async () => {
+    const uri = mocks.FakeUri.file("/project/demo.md") as unknown as Uri;
+    const pending = service.generateSummary(uri);
+    await expect(service.saveSummary(uri, "并发摘要")).rejects.toThrow(
+      /同步任务/,
+    );
+    await pending;
   });
 
   it("requires a summary before saving a document glossary", async () => {

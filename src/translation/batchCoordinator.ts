@@ -30,6 +30,19 @@ import type {
 } from "./types";
 import { tError } from "../i18n/errors";
 
+/** 术语表分组键：内容相同（顺序无关）才允许合并，避免文档术语跨文件串用。 */
+function glossaryGroupKey(glossary: readonly GlossaryEntry[]): string {
+  if (glossary.length === 0) {
+    return "";
+  }
+  return shortHash(
+    glossary
+      .map((entry) => `${entry.source.toLowerCase()}\u0000${entry.target}`)
+      .sort()
+      .join("\u0001"),
+  );
+}
+
 // ---- 内部数据结构 ----
 
 /** 一次合并执行的分组：共享一个 AbortController，calls 为同语言对的调用。 */
@@ -204,12 +217,13 @@ export class BatchTranslationCoordinator implements TranslationProvider {
       if (calls.length === 0) {
         return;
       }
-      // 以“源语言\0目标语言\0摘要哈希”为键分组：不同语言对或不同全文摘要不能合并，
-      // 否则固定上下文会串台。摘要只存哈希，避免把长文本放进 Map 键。
+      // 以“源语言\0目标语言\0摘要哈希\0术语表哈希”为键分组：语言对、全文摘要或
+      // 合并术语表不同都不能合并，否则固定上下文/文档术语会串台。
       const groups = new Map<string, PendingCall[]>();
       for (const call of calls) {
         const summaryKey = shortHash(call.request.summary?.trim() ?? "");
-        const key = `${call.request.sourceLanguage}\u0000${call.request.targetLanguage}\u0000${summaryKey}`;
+        const glossaryKey = glossaryGroupKey(call.request.glossary);
+        const key = `${call.request.sourceLanguage}\u0000${call.request.targetLanguage}\u0000${summaryKey}\u0000${glossaryKey}`;
         const group = groups.get(key) ?? [];
         group.push(call);
         groups.set(key, group);

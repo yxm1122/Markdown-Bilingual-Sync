@@ -179,6 +179,60 @@
     }
   }
 
+  // ---- 摘要/术语表草稿 ----
+  // 保存其中一个文本域会触发宿主整页重绘；用 sessionStorage 保留另一个文本域的
+  // 未保存内容，避免“保存摘要时丢掉术语表编辑”这类静默丢失。
+  function summaryDraftKey(kind) {
+    return "mbs-summary-draft:" + document.title + ":" + kind;
+  }
+
+  function readSummaryDraft(kind) {
+    try {
+      return sessionStorage.getItem(summaryDraftKey(kind));
+    } catch {
+      return null;
+    }
+  }
+
+  function writeSummaryDraft(kind, value) {
+    try {
+      sessionStorage.setItem(summaryDraftKey(kind), value);
+    } catch {
+      /* 存储不可用时退化为不保留草稿 */
+    }
+  }
+
+  function clearSummaryDraft(kind) {
+    try {
+      sessionStorage.removeItem(summaryDraftKey(kind));
+    } catch {
+      /* ignore */
+    }
+  }
+
+  function setupSummaryDrafts() {
+    const panel = document.querySelector("[data-summary-panel]");
+    if (!panel) {
+      return;
+    }
+    [
+      ["summary", "[data-summary-text]"],
+      ["glossary", "[data-glossary-text]"],
+    ].forEach(function ([kind, selector]) {
+      const textarea = panel.querySelector(selector);
+      if (!(textarea instanceof HTMLTextAreaElement)) {
+        return;
+      }
+      const stored = readSummaryDraft(kind);
+      if (stored !== null && stored !== textarea.value) {
+        textarea.value = stored;
+      }
+      textarea.addEventListener("input", function () {
+        writeSummaryDraft(kind, textarea.value);
+      });
+    });
+  }
+
   function setupScrollPersistence() {
     const panes = splitContents();
     if (panes.source instanceof HTMLElement) {
@@ -1126,6 +1180,7 @@
   setMode(state.mode || "bilingual");
   setupSplitScrollSync();
   setupScrollPersistence();
+  setupSummaryDrafts();
 
   // ---- 事件委托：工具栏、模式、布局、块操作与链接 ----
   // 块内容会随宿主重绘整体替换，因此不在每个按钮上绑定监听，统一委托到 root。
@@ -1239,6 +1294,7 @@
           showToast(text("summaryEmpty"), "error");
           return;
         }
+        clearSummaryDraft("summary");
         post({ type: "saveSummary", summaryText: textarea.value });
         return;
       }
@@ -1248,10 +1304,13 @@
         if (!(textarea instanceof HTMLTextAreaElement)) {
           return;
         }
+        clearSummaryDraft("glossary");
         post({ type: "saveGlossary", glossaryText: textarea.value });
         return;
       }
       if (type === "generateSummary" || type === "clearSummary") {
+        clearSummaryDraft("summary");
+        clearSummaryDraft("glossary");
         post({ type: type });
         return;
       }

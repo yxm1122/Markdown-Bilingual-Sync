@@ -103,6 +103,15 @@ describe("restoreFootnoteLabel", () => {
     );
   });
 
+  it("restores every footnote label in a block with multiple definitions", () => {
+    expect(
+      restoreFootnoteLabel(
+        "[^a]: First.\n[^b]: Second.",
+        "[^甲]: 第一。\n[^乙]: 第二。",
+      ),
+    ).toBe("[^a]: 第一。\n[^b]: 第二。");
+  });
+
   it("only applies label restoration to footnote blocks", () => {
     const source = "[^lock]: Locked.";
     expect(restoreProtectedSyntax(source, "已锁定。", "footnote")).toBe(

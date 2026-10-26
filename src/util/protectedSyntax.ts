@@ -154,28 +154,49 @@ export function restoreAlertMarkers(
   return result;
 }
 
+/** 匹配行首的脚注定义标签（多行模式，用于连续定义合成的块）。 */
+const FOOTNOTE_LABEL_LINE = /^ {0,3}\[\^[^\]\n]+\]:/gm;
+
+/** 找到文本中所有行首脚注标签及其下标。纯函数。 */
+function findFootnoteLabels(
+  text: string,
+): Array<{ start: number; end: number; raw: string }> {
+  return [...text.matchAll(FOOTNOTE_LABEL_LINE)].map((match) => ({
+    start: match.index,
+    end: match.index + match[0].length,
+    raw: match[0],
+  }));
+}
+
 /**
  * 还原脚注定义标签。
  *
- * 源文块以 `[^id]:` 开头时，确保译文使用同一个 id；若译文使用了别的 id 则替换标签，
- * 若译文完全丢了标签则在开头补回。标签后的正文保持模型输出不变。
+ * 支持一个块内包含多个连续脚注定义：标签数量一致时按行位置替换；
+ * 只有一个源标签且译文完全丢失标签时在开头补回。标签后的正文保持不变。
  */
 export function restoreFootnoteLabel(source: string, translated: string): string {
-  const sourceLabel = /^ {0,3}(\[\^[^\]\n]+\]:)/.exec(source);
-  if (!sourceLabel) {
+  const sourceLabels = findFootnoteLabels(source);
+  if (sourceLabels.length === 0) {
     return translated;
   }
-  const targetLabel = /^ {0,3}\[\^[^\]\n]+\]:/.exec(translated);
-  if (targetLabel) {
-    if (targetLabel[0] === sourceLabel[0]) {
-      return translated;
+  const targetLabels = findFootnoteLabels(translated);
+  if (sourceLabels.length === targetLabels.length) {
+    let result = translated;
+    for (let index = sourceLabels.length - 1; index >= 0; index -= 1) {
+      const target = targetLabels[index];
+      const origin = sourceLabels[index];
+      if (target.raw === origin.raw) {
+        continue;
+      }
+      result =
+        result.slice(0, target.start) + origin.raw + result.slice(target.end);
     }
-    return translated.replace(
-      /^ {0,3}\[\^[^\]\n]+\]:/,
-      () => sourceLabel[1],
-    );
+    return result;
   }
-  return `${sourceLabel[1]} ${translated.trimStart()}`;
+  if (sourceLabels.length === 1 && targetLabels.length === 0) {
+    return `${sourceLabels[0].raw} ${translated.trimStart()}`;
+  }
+  return translated;
 }
 
 /**

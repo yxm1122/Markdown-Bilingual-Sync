@@ -150,6 +150,39 @@ describe("BatchTranslationCoordinator", () => {
     ]);
   });
 
+  it("does not coalesce calls with different glossaries", async () => {
+    const calls: TranslationRequest[] = [];
+    const delegate: TranslationProvider = {
+      id: "fake",
+      label: "Fake",
+      async translate(requested, _signal, _progress, onChunk) {
+        calls.push(requested);
+        const results = requested.items.map((entry) => ({
+          id: entry.id,
+          text: `译:${entry.text}`,
+        }));
+        await onChunk?.(results, results.length, requested.items.length);
+        return results;
+      },
+    };
+    const coordinator = new BatchTranslationCoordinator(delegate, {
+      flushDelayMs: 0,
+    });
+
+    await Promise.all([
+      coordinator.translate({
+        ...request([item("a1", "A1")]),
+        glossary: [{ source: "API", target: "接口" }],
+      }),
+      coordinator.translate({
+        ...request([item("b1", "B1")]),
+        glossary: [{ source: "API", target: "API 端点" }],
+      }),
+    ]);
+
+    expect(calls).toHaveLength(2);
+  });
+
   it("coalesces calls that share the same document summary", async () => {
     const calls: TranslationRequest[] = [];
     const delegate: TranslationProvider = {

@@ -70,6 +70,24 @@ export function mergeGlossaryEntries(
 }
 
 /**
+ * 把指定 source 的条目排到前面，供请求侧在条数/字符上限内优先保留文档术语。
+ * 不改变条目内容，只调整顺序。
+ */
+export function prioritizeGlossaryEntries(
+  entries: readonly GlossaryEntry[],
+  prioritySources: readonly string[],
+): GlossaryEntry[] {
+  if (prioritySources.length === 0) {
+    return [...entries];
+  }
+  const keys = new Set(prioritySources.map((source) => source.toLowerCase()));
+  return [
+    ...entries.filter((entry) => keys.has(entry.source.toLowerCase())),
+    ...entries.filter((entry) => !keys.has(entry.source.toLowerCase())),
+  ];
+}
+
+/**
  * 校验并归一化不可信术语数组（摘要模型输出、缓存元数据）。
  * 非数组、非对象、空字段、超长项会被忽略；同名 source 以最后一条为准。
  */

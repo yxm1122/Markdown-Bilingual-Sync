@@ -30,6 +30,10 @@ export type ConsistencyIssue =
       sourceLine: number;
       headingPath: string;
       blockKind: BlockKind;
+      /** 检查时的原文哈希，供重译前做乐观并发校验。 */
+      sourceHash: string;
+      /** 检查时的缓存锚点 id，供重译前做乐观并发校验。 */
+      cacheId: string;
       /** 源文出现但译文未遵循的术语源词。 */
       source: string;
       /** 术语表要求的目标词。 */
@@ -43,6 +47,10 @@ export type ConsistencyIssue =
       sourceLine: number;
       headingPath: string;
       blockKind: BlockKind;
+      /** 检查时的原文哈希，供重译前做乐观并发校验。 */
+      sourceHash: string;
+      /** 检查时的缓存锚点 id，供重译前做乐观并发校验。 */
+      cacheId: string;
       /** 缺失/被改写的受保护片段，可能带 (found/expected) 计数。 */
       token: string;
       currentText: string;
@@ -120,6 +128,8 @@ export function checkDocumentConsistency(input: {
       sourceLine: aligned.source.startLine + 1,
       headingPath: (headingPaths.get(aligned.source.index) ?? []).join(" › "),
       blockKind: aligned.source.kind,
+      sourceHash: aligned.source.hash,
+      cacheId: aligned.cache.anchor.id,
       currentText: excerpt(targetText),
     };
 
