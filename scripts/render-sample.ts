@@ -6,12 +6,12 @@
  * preview-states.html（原文变更 + 译文锁定）以及两份 .zh.md 缓存。
  *
  * 运行环境：Node / 本地开发脚本，不启动 VS Code。生成的 HTML 直接引用 ../media 下的
- * preview.js、preview.css 与 KaTeX，因此在浏览器里以 standalone 模式运行：
- * media/preview.js 检测不到 acquireVsCodeApi 时会改用 localStorage 保存状态，并把
+ * 原生预览脚本与 KaTeX，因此在浏览器里以 standalone 模式运行：
+ * Webview 脚本检测不到 acquireVsCodeApi 时会改用 localStorage 保存状态，并把
  * postMessage 记录到 window.__mbsMessages，同时用 toast 显示动作类型。
  *
  * 与扩展主进程的通信：无。这里只调用 src 下的纯逻辑（syncDocument、buildPreviewModel、
- * buildPreviewHtml），模拟扩展宿主生成的页面结构与 CSP。
+ * buildPreviewAppShell），模拟扩展宿主生成的首屏状态与 CSP。
  *
  * 前提：从仓库根目录运行（projectRoot 取 process.cwd()），samples/demo.md 存在。
  */
@@ -28,7 +28,8 @@ import {
   buildExportDiff,
   type ExportConfirmationView,
 } from "../src/export/diffPreview";
-import { buildPreviewHtml } from "../src/preview/html";
+import * as vscode from "vscode";
+import { buildPreviewAppShell } from "../src/preview/appShell";
 import {
   buildPreviewModel,
   type PreviewModel,
@@ -55,27 +56,86 @@ function resolveImage(source: string): string {
   return pathToFileURL(path.resolve(projectRoot, "samples", source)).href;
 }
 
-/**
- * 生成 standalone 预览使用的 CSP。
- *
- * 与真实 Webview 的 nonce CSP 不同：页面从 file:// 打开，脚本、样式与字体都必须显式允许
- * file: 来源；script-src 里的 file: 同时意味着任意本地脚本都能执行，因此此 CSP 仅用于
- * 本机演示，不应照搬到扩展（扩展 Webview 只允许带 nonce 的脚本）。
- * @param nonce 本次 HTML 的脚本 nonce。
- * @returns 可直接写入 meta 标签的 CSP 字符串。
- */
-function standaloneCsp(nonce: string): string {
-  return [
-    "default-src 'none'",
-    "img-src file: data: https:",
-    "style-src file: 'unsafe-inline'",
-    "font-src file: data:",
-    `script-src 'nonce-${nonce}' file:`,
-  ].join("; ");
+/** standalone 页面没有 VS Code 注入的主题变量；只用于本机静态预览。 */
+const STATIC_THEME = `
+:root {
+  color-scheme: dark;
+  --vscode-font-family: "Segoe UI", "Microsoft YaHei UI", "Microsoft YaHei", sans-serif;
+  --vscode-editor-font-family: "Cascadia Code", Consolas, "Courier New", monospace;
+  --vscode-markdown-font-family: var(--vscode-font-family);
+  --vscode-markdown-font-size: 14px;
+  --vscode-markdown-line-height: 1.6;
+  --vscode-foreground: #cccccc;
+  --vscode-descriptionForeground: #9d9d9d;
+  --vscode-disabledForeground: #cccccc80;
+  --vscode-errorForeground: #f85149;
+  --vscode-editorWarning-foreground: #cca700;
+  --vscode-editorInfo-foreground: #3794ff;
+  --vscode-icon-foreground: #cccccc;
+  --vscode-focusBorder: #0078d4;
+  --vscode-widget-border: #313131;
+  --vscode-widget-shadow: rgba(0,0,0,.36);
+  --vscode-editor-background: #1f1f1f;
+  --vscode-editor-foreground: #cccccc;
+  --vscode-editorWidget-background: #202020;
+  --vscode-editorWidget-border: #454545;
+  --vscode-panel-border: #2b2b2b;
+  --vscode-button-background: #0078d4;
+  --vscode-button-foreground: #ffffff;
+  --vscode-button-hoverBackground: #026ec1;
+  --vscode-button-secondaryBackground: #313131;
+  --vscode-button-secondaryForeground: #cccccc;
+  --vscode-button-secondaryHoverBackground: #3c3c3c;
+  --vscode-input-background: #313131;
+  --vscode-input-foreground: #cccccc;
+  --vscode-input-border: #3c3c3c;
+  --vscode-list-hoverBackground: #2a2d2e;
+  --vscode-list-activeSelectionBackground: #04395e;
+  --vscode-badge-background: #616161;
+  --vscode-badge-foreground: #f8f8f8;
+  --vscode-textLink-foreground: #4daafc;
+  --vscode-textLink-activeForeground: #4daafc;
+  --vscode-textCodeBlock-background: #2b2b2b;
+  --vscode-textPreformat-foreground: #d7ba7d;
+  --vscode-textPreformat-background: #2b2b2b;
+  --vscode-textBlockQuote-background: #2b2b2b;
+  --vscode-textBlockQuote-border: #616161;
+  --vscode-menu-background: #1f1f1f;
+  --vscode-menu-foreground: #cccccc;
+  --vscode-menu-border: #454545;
+  --vscode-menu-selectionBackground: #0078d4;
+  --vscode-menu-selectionForeground: #ffffff;
+  --vscode-menu-separatorBackground: #454545;
+  --vscode-notifications-background: #202020;
+  --vscode-notifications-border: #454545;
+  --vscode-notifications-foreground: #cccccc;
+  --vscode-diffEditor-insertedLineBackground: #20442c;
+  --vscode-diffEditor-removedLineBackground: #4b1818;
+  --vscode-diffEditor-insertedTextBackground: #2ea04326;
+  --vscode-diffEditor-removedTextBackground: #f8514926;
+  --vscode-testing-iconPassed: #73c991;
+  --vscode-charts-blue: #3794ff;
+  --vscode-symbolIcon-keywordForeground: #c586c0;
+  --vscode-symbolIcon-stringForeground: #ce9178;
+  --vscode-symbolIcon-numberForeground: #b5cea8;
+  --vscode-symbolIcon-commentForeground: #6a9955;
+  --vscode-symbolIcon-functionForeground: #dcdcaa;
+  --vscode-symbolIcon-classForeground: #4ec9b0;
+  --vscode-inputValidation-warningBackground: #352a05;
+  --vscode-inputValidation-warningBorder: #b89500;
+  --vscode-inputValidation-infoBackground: #063b49;
+  --vscode-inputValidation-infoBorder: #007acc;
+  --vscode-inputValidation-errorBackground: #5a1d1d;
+  --vscode-inputValidation-errorBorder: #be1100;
+  --vscode-scrollbarSlider-background: #79797966;
+  --vscode-scrollbarSlider-hoverBackground: #646464b3;
+  --vscode-scrollbarSlider-activeBackground: #bfbfbf66;
 }
+body { margin: 0; }
+`;
 
 /**
- * 构建一份静态预览 HTML。
+ * 构建一份原生静态预览 HTML。
  * @param model 预览模型（块、统计、脚注等）。
  * @param exportConfirmation 可选的导出确认弹窗数据，用于预置导出 diff。
  * @param layout 默认使用 columns，另可生成 split 分栏预览。
@@ -87,16 +147,22 @@ function renderHtml(
   layout: "columns" | "stacked" | "split" = "columns",
 ): string {
   const nonce = randomBytes(18).toString("base64");
-  return buildPreviewHtml({
-    model,
-    layout,
+  const webview = {
+    cspSource: "file:",
+    asWebviewUri: (uri: { fsPath: string }) => pathToFileURL(uri.fsPath).href,
+  };
+  const html = buildPreviewAppShell({
+    webview: webview as never,
+    extensionUri: vscode.Uri.file(projectRoot),
     nonce,
-    csp: standaloneCsp(nonce),
-    cssHref: "../media/preview.css",
-    scriptHref: "../media/preview.js",
-    katexHref: "../media/katex/katex.min.css",
+    state: {
+      model,
+      layout,
+      readonly: { source: false, target: false },
+    },
     exportConfirmation,
   });
+  return html.replace("</head>", `<style>${STATIC_THEME}</style></head>`);
 }
 
 /**

@@ -1,8 +1,8 @@
 /**
  * 文案插值工具（纯函数，扩展宿主与测试共用）。
  *
- * 模板使用 `{name}` 占位符（只匹配 \w+）。Webview 侧 media/preview.js 与
- * media/taskView.js 各自保留同名实现，行为必须与本文件保持一致。
+ * 模板使用 `{name}` 占位符（只匹配 \w+）。Webview 侧的 `formatText` 与
+ * Webview 静态脚本中的同名实现必须与本文件保持一致。
  */
 
 /**

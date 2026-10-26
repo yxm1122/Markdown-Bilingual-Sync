@@ -11,9 +11,11 @@
  *
  * 数据流：
  * source/cache 文本（SyncService.loadPreviewState）
- * --> buildPreviewModel --> buildWebviewHtml --> panel.webview.html
+ * --> buildPreviewModel
+ * --> 首次：buildPreviewAppShell --> panel.webview.html；脚本 ready 后：
+ *     postMessage({ type: "state", state })
  * --> 用户操作 postMessage --> onMessage 校验并按 type 分发
- * --> SyncService/ExportService 写盘 --> 重新 update() 渲染；
+ * --> SyncService/ExportService 写盘 --> 重新 update() 局部渲染；
  * 原文编辑采用「先暂存、再确认、最后统一写回」，暂存状态只存在本类内存中。
  *
  * 关键不变量：
@@ -22,7 +24,8 @@
  * - 写回顺序固定为：应用 WorkspaceEdit -> 保存源文件 -> 解除被删源块的缓存锚点
  *   -> 提升（promote）译文独占块 -> 锁定（lock）回译块；后三步失败只告警不中断；
  * - `sourceWriteInFlight` 期间跳过一切刷新，避免读到写回中途的中间态；
- * - `updateVersion` 递增用于丢弃过期的异步渲染结果，只有最后一次 update 能写 HTML；
+ * - `updateVersion` 递增用于丢弃过期的异步渲染结果，只有最后一次 update 能落地；
+ * - `webviewReady` 之前只写完整壳，之后只发 state 消息，绝不再重载页面；
  * - 每个消息都按字段做运行时校验，未知 type 静默忽略，业务错误统一走 toast/错误弹窗。
  */
 import { randomBytes } from "node:crypto";
@@ -31,7 +34,6 @@ import * as vscode from "vscode";
 import {
   buildExportDiff,
   type ExportConfirmationView,
-  type SourceConfirmationView,
 } from "../export/diffPreview";
 import type {
   ExportService,
@@ -63,7 +65,8 @@ import {
   PREVIEW_LAYOUT_STATE_KEY,
   type PreviewLayout,
 } from "./layout";
-import { buildWebviewHtml } from "./webviewHtml";
+import { buildPreviewAppShell } from "./appShell";
+import type { PreviewHostMessage, PreviewNotice } from "./protocol";
 import { failedTaskPatch, type TranslationTaskMonitor } from "../status/taskMonitor";
 import { tError } from "../i18n/errors";
 
@@ -237,8 +240,12 @@ export class PreviewManager implements vscode.Disposable {
     }
 
     const localRoots = new Set<string>();
-    // Webview 只能加载这些根下的资源：扩展 media、当前文件目录、以及所有工作区根。
+    // Webview 只能加载这些根下的资源：扩展 media、构建后的 Webview 脚本、当前文件目录、
+    // 以及所有工作区根。
     localRoots.add(vscode.Uri.joinPath(this.context.extensionUri, "media").toString());
+    localRoots.add(
+      vscode.Uri.joinPath(this.context.extensionUri, "dist", "webview").toString(),
+    );
     localRoots.add(vscode.Uri.joinPath(sourceUri, "..").toString());
     for (const folder of vscode.workspace.workspaceFolders ?? []) {
       localRoots.add(folder.uri.toString());
@@ -346,6 +353,10 @@ class PreviewPanelSession implements vscode.Disposable {
   private exportConfirmPending = false;
   /** 最近一次成功构建的模型；用于按块索引查找 human 状态等。 */
   private lastModel?: PreviewModel;
+  /** Webview 脚本已完成首次挂载；之后的刷新走 state 消息，不再整页替换。 */
+  private webviewReady = false;
+  /** Webview 尚未 ready 时暂存的控制消息，避免首次加载期间丢失。 */
+  private pendingMessages: PreviewHostMessage[] = [];
   /** 首次渲染完成的信号；所有外部入口先等待它。 */
   private readonly ready: Promise<void>;
   /** 已准备但尚未确认的导出（提交/取消后清空）。 */
@@ -620,42 +631,60 @@ class PreviewPanelSession implements vscode.Disposable {
   // ---- 渲染：模型构建与整页刷新 ----
 
   /**
-   * 重新加载状态、重建模型并整页替换 Webview HTML。
+   * 重新加载状态、重建模型并下发 Webview 状态。
    *
    * @param notice 初始提示（渲染进 toast 的 data 属性）。
    * @param exportConfirmation 非空表示本次渲染要弹出导出确认框。
    * @param cacheTextOverride 写缓存后直接传入最新缓存文本，避免立刻回读。
-   * @param sourceConfirmation 非空表示要弹出原文写回确认框。
    * @returns 渲染完成；面板已销毁、写回进行中或版本过期时提前返回。
    * @remarks
-   * - 整页替换会重建 DOM：滚动位置由 media/preview.js 从 Webview state 恢复，
-   *   但未提交的内联编辑器内容会丢失（刷新由保存/动作触发，属预期行为）；
+   * - 首次写入壳后不再整页替换；Preact 按块 key 复用 DOM，滚动与草稿由页面自行保持；
    * - 更新串行执行；不带 exportConfirmation 的刷新会取消已展示的导出确认，
    *   但 beginExport 的确认框尚未渲染完成时不会被后台刷新提前清空；
    * - 源文件与暂存基准不一致时清空暂存并提示，绝不渲染过期暂存；
    * - 构建失败时渲染错误页，错误同时写入输出通道。
    */
   async update(
-    notice?: {
-      text: string;
-      kind: "info" | "success" | "error";
-    },
+    notice?: PreviewNotice,
     exportConfirmation?: ExportConfirmationView,
     cacheTextOverride?: string,
-    sourceConfirmation?: SourceConfirmationView,
   ): Promise<void> {
     // 串行化渲染：避免并发的 loadPreviewState 用版本号互相丢弃，
     // 尤其是 beginExport 的确认框不能被稍后启动的后台刷新吞掉。
     const task = this.updateQueue.then(() =>
-      this.performUpdate(
-        notice,
-        exportConfirmation,
-        cacheTextOverride,
-        sourceConfirmation,
-      ),
+      this.performUpdate(notice, exportConfirmation, cacheTextOverride),
     );
     this.updateQueue = task.catch(() => undefined);
     return task;
+  }
+
+  /**
+   * 向 Webview 发送控制消息。
+   *
+   * Webview 脚本尚未完成首次挂载时先入队，ready 后按顺序补发，避免首次加载期间
+   * 「忙碌 / 提示 / 确认结果」丢失。完整壳只由 {@link performUpdate} 在未 ready 时
+   * 写入一次，之后一律走本方法与 `state` 消息。
+   */
+  private postToWebview(message: PreviewHostMessage): void {
+    if (this.disposed) {
+      return;
+    }
+    if (!this.webviewReady) {
+      this.pendingMessages.push(message);
+      return;
+    }
+    void this.panel.webview.postMessage(message);
+  }
+
+  /** ready 后按顺序补发首次加载期间排队的控制消息。 */
+  private flushPendingMessages(): void {
+    if (this.disposed) {
+      return;
+    }
+    const messages = this.pendingMessages.splice(0);
+    for (const message of messages) {
+      void this.panel.webview.postMessage(message);
+    }
   }
 
   /**
@@ -663,13 +692,9 @@ class PreviewPanelSession implements vscode.Disposable {
    * 行为约定见 update 的 JSDoc。
    */
   private async performUpdate(
-    notice?: {
-      text: string;
-      kind: "info" | "success" | "error";
-    },
+    notice?: PreviewNotice,
     exportConfirmation?: ExportConfirmationView,
     cacheTextOverride?: string,
-    sourceConfirmation?: SourceConfirmationView,
   ): Promise<void> {
     if (this.disposed) {
       return;
@@ -678,7 +703,7 @@ class PreviewPanelSession implements vscode.Disposable {
     if (this.sourceWriteInFlight) {
       return;
     }
-    // 普通刷新意味着导出确认框将要被整页替换掉，主动取消待提交的导出；
+    // 普通刷新会让已展示的导出确认失效，主动取消待提交的导出；
     // 但 beginExport 的确认框尚未渲染完成时（exportConfirmPending），
     // 允许先前排队的后台刷新先跑，不得提前清空 pendingExport。
     if (!exportConfirmation && this.pendingExport) {
@@ -746,21 +771,31 @@ class PreviewPanelSession implements vscode.Disposable {
         return;
       }
       this.lastModel = model;
-      // 整页替换：新 nonce、新布局快照与新只读状态一起生效。
-      this.panel.webview.html = buildWebviewHtml({
-        webview: this.panel.webview,
-        extensionUri: this.context.extensionUri,
-        model,
-        layout: this.manager.previewLayout,
-        readonly: {
-          source: this.sourceReadonly,
-          target: this.targetReadonly,
-        },
-        nonce: getNonce(),
-        notice,
-        exportConfirmation,
-        sourceConfirmation,
-      });
+      const layout = this.manager.previewLayout;
+      const readonly = {
+        source: this.sourceReadonly,
+        target: this.targetReadonly,
+      };
+      const appState = { model, layout, readonly };
+      if (!this.webviewReady) {
+        // 首次加载（或脚本尚未 ready）才写入完整壳；之后只发 state 消息。
+        this.panel.webview.html = buildPreviewAppShell({
+          webview: this.panel.webview,
+          extensionUri: this.context.extensionUri,
+          nonce: getNonce(),
+          state: appState,
+          notice,
+          exportConfirmation,
+        });
+      } else {
+        // 模型 + 面板状态整体下发，Preact 按 key 复用 DOM。
+        this.postToWebview({
+          type: "state",
+          state: appState,
+          notice,
+          exportConfirmation,
+        });
+      }
     } catch (error) {
       if (this.disposed || version !== this.updateVersion) {
         return;
@@ -873,6 +908,13 @@ class PreviewPanelSession implements vscode.Disposable {
     const assistValue = message.value === true;
     try {
       switch (type) {
+        // ---- 原生预览握手：脚本完成首次挂载后，后续刷新改走 state 消息 ----
+        case "ready":
+          this.webviewReady = true;
+          this.flushPendingMessages();
+          // Webview 可能被重新加载；用当前模型/待确认导出重新同步，避免旧快照。
+          void this.update(undefined, this.pendingExport?.confirmation);
+          break;
         // ---- 布局与只读：只影响当前面板的渲染参数 ----
         case "setLayout": {
           const layout = normalizePreviewLayout(
@@ -910,7 +952,11 @@ class PreviewPanelSession implements vscode.Disposable {
         // ---- 原文暂存：编辑 / 删除 / 插入 / 撤销，均只改内存，不发请求 ----
         case "stageSourceEdit":
           if (blockIndex !== undefined && typeof message.text === "string") {
-            await this.stageSourceEdit(blockIndex, message.text);
+            await this.stageSourceEdit(
+              blockIndex,
+              message.text,
+              sourceHash,
+            );
           }
           break;
         case "deleteSourceBlock":
@@ -1144,6 +1190,7 @@ class PreviewPanelSession implements vscode.Disposable {
   private async stageSourceEdit(
     blockIndex: number,
     text: string,
+    expectedSourceHash?: string,
   ): Promise<void> {
     if (!text.trim()) {
       throw new Error(UI_TEXT.notifications.sourceEditEmpty);
@@ -1158,6 +1205,9 @@ class PreviewPanelSession implements vscode.Disposable {
     const block = parsed.blocks.find((item) => item.index === blockIndex);
     if (!block) {
       throw new Error(tError("common.missingSourceBlock", { index: blockIndex + 1 }));
+    }
+    if (expectedSourceHash && block.hash !== expectedSourceHash) {
+      throw new Error(UI_TEXT.notifications.sourceBlockChanged);
     }
     const normalized = text.replace(/\r\n?/g, "\n");
     // 用户手动改写后不再沿用回译锁：避免写回时把译文锁到用户改过的文本上。
@@ -1599,7 +1649,7 @@ class PreviewPanelSession implements vscode.Disposable {
       this.md,
     );
     const diff = buildExportDiff(state.sourceText, proposed.text);
-    await this.panel.webview.postMessage({
+    this.postToWebview({
       type: "sourceConfirm",
       data: {
         destination: path.basename(this.sourceUri.fsPath),
@@ -1629,7 +1679,7 @@ class PreviewPanelSession implements vscode.Disposable {
    */
   private async writeSourceEdits(): Promise<void> {
     if (!this.hasPendingSource()) {
-      await this.panel.webview.postMessage({ type: "sourceSettled" });
+      this.postToWebview({ type: "sourceSettled" });
       return;
     }
     // 从这一刻到 finally 之间，源文件/缓存都处于中间态，禁止刷新。
@@ -1664,7 +1714,7 @@ class PreviewPanelSession implements vscode.Disposable {
       // 暂存应用后与原文完全一致：无实际变化，清空暂存即可。
       if (nextText === document.getText()) {
         this.clearStagedSource();
-        await this.panel.webview.postMessage({ type: "sourceSettled" });
+        this.postToWebview({ type: "sourceSettled" });
         this.sourceWriteInFlight = false;
         await this.update();
         return;
@@ -1760,7 +1810,7 @@ class PreviewPanelSession implements vscode.Disposable {
       });
       // 写回成功后清空暂存，并通知 Webview 关闭原文确认框。
       this.clearStagedSource();
-      await this.panel.webview.postMessage({ type: "sourceSettled" });
+      this.postToWebview({ type: "sourceSettled" });
       this.showToast(UI_TEXT.notifications.sourceApplied, "success");
       // 缓存后处理失败：源文件已经写入，只能告警并保留日志，不能回滚。
       if (attachError) {
@@ -1782,7 +1832,7 @@ class PreviewPanelSession implements vscode.Disposable {
         error,
       );
       // 保留原文确认框并展示错误，用户可修正后重试。
-      await this.panel.webview.postMessage({
+      this.postToWebview({
         type: "sourceError",
         message: formatError(error),
       });
@@ -2145,6 +2195,7 @@ class PreviewPanelSession implements vscode.Disposable {
     }
     const pending = this.pendingExport;
     if (!pending) {
+      this.postToWebview({ type: "exportSettled", action: "cancel" });
       this.showToast(UI_TEXT.notifications.noPendingExport, "info");
       return;
     }
@@ -2159,7 +2210,7 @@ class PreviewPanelSession implements vscode.Disposable {
         `[${new Date().toISOString()}] export confirmed: ${pending.prepared.target.fsPath}`,
       );
       if (!this.disposed) {
-        void this.panel.webview.postMessage({
+        this.postToWebview({
           type: "exportSettled",
           action: "write",
         });
@@ -2176,7 +2227,7 @@ class PreviewPanelSession implements vscode.Disposable {
         error,
       );
       if (!this.disposed) {
-        void this.panel.webview.postMessage({
+        this.postToWebview({
           type: "exportError",
           message: formatError(error),
         });
@@ -2205,7 +2256,7 @@ class PreviewPanelSession implements vscode.Disposable {
       `[${new Date().toISOString()}] export cancelled: ${pending.prepared.target.fsPath}`,
     );
     if (!this.disposed) {
-      void this.panel.webview.postMessage({
+      this.postToWebview({
         type: "exportSettled",
         action: "cancel",
       });
@@ -2518,7 +2569,7 @@ class PreviewPanelSession implements vscode.Disposable {
     if (this.disposed) {
       return;
     }
-    void this.panel.webview.postMessage({ type: "busy", busy, message });
+    this.postToWebview({ type: "busy", busy, message });
   }
 
   /**
@@ -2530,7 +2581,7 @@ class PreviewPanelSession implements vscode.Disposable {
     if (this.disposed) {
       return;
     }
-    void this.panel.webview.postMessage({ type: "toast", text, kind });
+    this.postToWebview({ type: "toast", text, kind });
     this.output.appendLine(
       `[${new Date().toISOString()}] toast(${kind}): ${text}`,
     );
@@ -2543,6 +2594,9 @@ class PreviewPanelSession implements vscode.Disposable {
    */
   private renderError(message: string): void {
     const text = UI_TEXT.preview.errorPage;
+    // 错误页不加载预览脚本：停止走 state 消息，并丢弃尚未来得及补发的控制消息。
+    this.webviewReady = false;
+    this.pendingMessages.length = 0;
     this.panel.webview.html = `<!DOCTYPE html>
 <html lang="${escapeHtml(getLocale())}">
 <head>

@@ -110,8 +110,8 @@ export const UI_TEXT = {
       "Stored as .mbs-glossary.json in the workspace root",
     glossaryNoWorkspace: "Open a folder before editing a workspace glossary.",
   },
-  // Bilingual preview: structure is rendered by src/preview/html.ts; some modal/editor
-  // fields are also injected into media/preview.js.
+  // Bilingual preview: structure is rendered by src/webview/preview/app.tsx; the host
+  // serializes this catalog into the Webview UI text JSON.
   preview: {
     titleSuffix: "Bilingual Preview",
     mark: "T",
@@ -200,6 +200,8 @@ export const UI_TEXT = {
       deleteTargetTitle:
         "Delete this translation, keep the anchor, and mark it deleted",
       deleteBlock: "Delete",
+      deleteTranslation: "Delete translation",
+      deleteSourceBlock: "Delete source block",
       deleteBlockTitle:
         "Mark this source block for deletion and write it back when applied",
       undoDelete: "Undo delete",
@@ -307,6 +309,7 @@ export const UI_TEXT = {
       export: "Export",
       exportDisabledTitle: "Generate a translation cache first",
       openCacheFolder: "Open cache folder",
+    moreActions: "More actions",
     },
     subbar: {
       retranslateAll: "Retranslate all",
@@ -447,6 +450,8 @@ export const UI_TEXT = {
     sourceInsertRemoved: "Pending source block removed.",
     sourceBlockDeletedConflict:
       "This block is marked for deletion. Undo the deletion first.",
+    sourceBlockChanged:
+      "The source block changed while you were editing. Please edit it again.",
     sourceStagedInvalidated:
       "The source file changed, so staged source edits were cleared. Please edit again.",
     sourceEditsDiscarded: "Staged source edits discarded.",
@@ -519,19 +524,12 @@ export const UI_TEXT = {
     activeTaskCount: "Tasks: {count}",
     activeTaskBadgeTooltip: "Active translation tasks",
     languageUpdateFailed: "Failed to change languages: {message}",
-    openOutput: "Open output log",
-    clearFinished: "Clear task history",
-    cancelAll: "Cancel all tasks",
-    cancelTask: "Cancel",
     openSource: "Open source file",
-    openPreview: "Open bilingual preview",
     progress: "{completed}/{total} blocks",
     noBlocks: "No blocks to translate",
     failedSuffix: " · {failed} blocks failed",
     elapsed: "{duration} elapsed",
     noActive: "No tasks are currently running",
-    moveHint:
-      "If the view is on the left, drag “Translation Tasks” to the right auxiliary sidebar; the layout will be remembered.",
     phases: {
       waiting: "Waiting to start",
       preparing: "Preparing translation…",

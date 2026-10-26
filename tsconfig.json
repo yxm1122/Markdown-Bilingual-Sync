@@ -1,18 +1,33 @@
 {
   "compilerOptions": {
     "target": "ES2022",
-    "lib": ["ES2022"],
+    "lib": [
+      "ES2022",
+      "DOM",
+      "DOM.Iterable"
+    ],
     "module": "ESNext",
     "moduleResolution": "Bundler",
-    "types": ["node"],
+    "types": [
+      "node"
+    ],
     "strict": true,
     "noEmit": true,
     "esModuleInterop": true,
     "allowSyntheticDefaultImports": true,
     "forceConsistentCasingInFileNames": true,
     "skipLibCheck": true,
-    "resolveJsonModule": true
+    "resolveJsonModule": true,
+    "jsx": "react-jsx",
+    "jsxImportSource": "preact"
   },
-  "include": ["src", "scripts", "test"],
-  "exclude": ["dist", "node_modules"]
+  "include": [
+    "src",
+    "scripts",
+    "test"
+  ],
+  "exclude": [
+    "dist",
+    "node_modules"
+  ]
 }

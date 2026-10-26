@@ -51,5 +51,12 @@
   "displayName": "Markdown Bilingual Sync",
   "description": "AI-powered bilingual Markdown translation and preview for VS Code: block-anchored cache, translation locking, split views, glossary, and export.",
   "configuration.title": "Markdown Bilingual Sync",
-  "command.category": "Markdown Bilingual Sync"
+  "command.category": "Markdown Bilingual Sync",
+  "task.cancelAll.title": "Cancel All Tasks",
+  "task.clearFinished.title": "Clear Task History",
+  "task.openOutput.title": "Open Task Output",
+  "task.languages.title": "Change Languages",
+  "task.openSource.title": "Open Source File",
+  "task.openPreview.title": "Open Bilingual Preview",
+  "task.cancel.title": "Cancel Task"
 }

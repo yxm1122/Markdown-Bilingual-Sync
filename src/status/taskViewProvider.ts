@@ -1,23 +1,23 @@
 /**
- * 翻译任务视图模块（status/taskViewProvider）。
+ * 翻译任务视图（原生 TreeView）。
  *
- * 职责：解析 WebviewView、路由页面消息、把任务与并发快照推送到前端。
+ * 职责：把 TranslationTaskMonitor 的快照映射成 TreeItem 树，并把视图标题/行内操作
+ * 接到取消、清理、打开源文件/预览、语言切换等命令。
  *
- * 生命周期：每个视图实例对应一次 resolveWebviewView；clearView 释放当前视图的监听与
- * 去抖定时器；dispose 额外释放任务/并发/配置订阅。
+ * 生命周期：随 activate 创建，订阅 monitor/limiter/config，100ms 去抖刷新；
+ * TreeView 由扩展入口 createTreeView 后通过 setTreeView 注入。
  *
  * 关键不变量：
- * - 状态只由 monitor.snapshot() 派生，provider 不维护任务数据；
- * - webview 只收到展示字段与 hasUri，不包含本机绝对路径或密钥；
- * - 消息按 type 白名单路由，未知消息直接忽略。
+ * - 树节点只由 monitor.snapshot()、limiter 与配置派生，provider 不保存任务数据；
+ * - 任务节点的 command 和 inline 命令都通过 node / TreeItem.id 解析任务，不依赖绝对路径；
+ * - 语言更新串行化，失败只提示并刷新真实配置，不留下半交换状态。
  */
-import { randomBytes } from "node:crypto";
 import * as vscode from "vscode";
 import { formatText, UI_TEXT } from "../i18n";
-import { buildTaskViewHtml } from "./taskViewHtml";
 import type {
   TranslationTaskMonitor,
   TranslationTaskView,
+  TranslationTaskStatus,
 } from "./taskMonitor";
 import type { ConcurrencyLimiter } from "../translation/concurrency";
 import {
@@ -27,260 +27,564 @@ import {
   type TaskViewLanguages,
 } from "./taskViewState";
 
-// ---- 类型 ----
+type SectionId = "overview" | "active" | "history" | "system";
 
-/** 语言切换的目标侧。 */
-type LanguageRole = "source" | "target";
-
-/** 任务视图“运行状态”区展示的系统信息（不含任何密钥）。 */
-export interface TaskViewSystemInfo {
-  /** 当前翻译服务展示名。 */
-  provider: string;
-  /** 模型名或模板说明。 */
-  model: string;
-  /** 单批 token 预算（仅 OpenAI 兼容服务使用）。 */
-  tokenBudget: number;
-  /** 单批块数上限（仅 OpenAI 兼容服务使用）。 */
-  batchSize: number;
+interface SectionNode {
+  kind: "section";
+  id: SectionId;
+  label: string;
+  icon: string;
+  description?: string;
 }
 
-/** 构造 TaskViewProvider 所需依赖；全部由 activate 注入。 */
+interface StatNode {
+  kind: "stat";
+  id: string;
+  label: string;
+  description?: string;
+  icon: string;
+  color?: vscode.ThemeColor;
+}
+
+interface DetailNode {
+  kind: "detail";
+  id: string;
+  label: string;
+  description?: string;
+  icon: string;
+  color?: vscode.ThemeColor;
+}
+
+interface TaskNode {
+  kind: "task";
+  id: string;
+  task: TranslationTaskView;
+  section: "active" | "finished";
+  children: DetailNode[];
+}
+
+export type TaskTreeNode = SectionNode | StatNode | DetailNode | TaskNode;
+
+/** 视图配置：不包含 extensionUri，TreeView 不需要自行加载 Webview 资源。 */
 export interface TaskViewProviderOptions {
-  extensionUri: vscode.Uri;
   monitor: TranslationTaskMonitor;
-  /** 请求并发限制器，用于展示 active/waiting/limit。 */
   limiter: ConcurrencyLimiter;
-  /** 输出通道，“打开输出日志”按钮使用。 */
   output: vscode.OutputChannel;
-  /** 打开指定源文件的双语预览。 */
   openPreview: (uri: vscode.Uri) => void;
-  /** 惰性读取系统信息，保证配置修改后立即生效。 */
-  getSystemInfo: () => TaskViewSystemInfo;
+  getSystemInfo: () => {
+    provider: string;
+    model: string;
+    tokenBudget: number;
+    batchSize: number;
+  };
 }
 
-/** 发送给 webview 的任务数据：去掉 URI，只保留是否有源文件。 */
-interface TaskViewStateTask extends Omit<TranslationTaskView, "uri"> {
-  hasUri: boolean;
+function statusIcon(status: TranslationTaskStatus): {
+  icon: string;
+  color: vscode.ThemeColor;
+} {
+  switch (status) {
+    case "queued":
+      return {
+        icon: "clock",
+        color: new vscode.ThemeColor("descriptionForeground"),
+      };
+    case "running":
+      return {
+        icon: "sync~spin",
+        color: new vscode.ThemeColor("charts.blue"),
+      };
+    case "partial":
+      return {
+        icon: "warning",
+        color: new vscode.ThemeColor("editorWarning.foreground"),
+      };
+    case "success":
+      return {
+        icon: "pass-filled",
+        color: new vscode.ThemeColor("testing.iconPassed"),
+      };
+    case "failed":
+      return {
+        icon: "error",
+        color: new vscode.ThemeColor("errorForeground"),
+      };
+    case "cancelled":
+      return {
+        icon: "circle-slash",
+        color: new vscode.ThemeColor("disabledForeground"),
+      };
+  }
 }
 
-/**
- * 把任务视图转换成可序列化的 webview 数据。
- * 不发送 uri，避免把本机绝对路径暴露给页面。
- */
-function toStateTask(task: TranslationTaskView): TaskViewStateTask {
-  const { uri, ...rest } = task;
-  return { ...rest, hasUri: Boolean(uri) };
+function statusLabel(status: TranslationTaskStatus): string {
+  return UI_TEXT.taskPanel.statusLabels[status];
 }
 
-/**
- * 翻译任务视图 Provider（右侧/侧边栏 WebviewView）。
- *
- * 职责：
- * - 解析 webview（写入 HTML、设置资源根目录、注册消息与可见性监听）；
- * - 订阅任务监控器、并发限制器与扩展配置，100ms 去抖后推送完整快照；
- * - 处理页面按钮：取消全部/单个任务、清空历史、打开输出、打开源文件/预览；
- * - 校验并写回任务面板的译文语言切换（选项、源语言冲突与设置作用域）。
- *
- * 生命周期：
- * - 随 activate 注册到 `markdownBilingualSync.tasksView`，并加入 context.subscriptions；
- * - resolveWebviewView 可被多次调用（视图被移动/重新打开时），每次都先 clearView；
- * - dispose 时清理去抖定时器、webview 监听与外部订阅。
- *
- * 关键不变量：
- * - state 只由 monitor.snapshot() 与当前配置派生，provider 不自行维护任务状态；
- * - webview 消息里的 id 必须为整数，路由按 type 精确匹配，未知消息忽略；
- * - 不向 webview 传递 URI 或密钥，仅传 hasUri 与相对路径标签。
- */
+function durationText(startedAt?: number, finishedAt?: number): string {
+  if (!startedAt) {
+    return "";
+  }
+  const end = finishedAt ?? Date.now();
+  const seconds = Math.max(0, (end - startedAt) / 1000);
+  if (seconds < 60) {
+    return `${seconds.toFixed(1)}s`;
+  }
+  const minutes = Math.floor(seconds / 60);
+  const rest = Math.round(seconds % 60);
+  return `${minutes}m ${rest}s`;
+}
+
+function taskProgress(task: TranslationTaskView): string {
+  if (task.total > 0) {
+    return formatText(UI_TEXT.taskPanel.progress, {
+      completed: Math.min(task.completed, task.total),
+      total: task.total,
+    });
+  }
+  // 只有确实结束且没有任何块的终态才显示“无块”；queued/running/failed 的阶段
+  // 由状态标签与 phase 表达，不能误报成 noBlocks。
+  if (
+    task.status === "success" ||
+    task.status === "partial" ||
+    task.status === "cancelled"
+  ) {
+    return UI_TEXT.taskPanel.noBlocks;
+  }
+  return "";
+}
+
+function taskDescription(task: TranslationTaskView): string {
+  const parts: string[] = [];
+  const progress = taskProgress(task);
+  if (progress) {
+    parts.push(progress);
+  }
+  parts.push(statusLabel(task.status));
+  if (task.startedAt) {
+    parts.push(
+      formatText(UI_TEXT.taskPanel.elapsed, {
+        duration: durationText(task.startedAt, task.finishedAt),
+      }),
+    );
+  }
+  if (task.failed > 0) {
+    parts.push(
+      formatText(UI_TEXT.taskPanel.failedSuffix, {
+        failed: task.failed,
+      }).replace(/^\s*·\s*/, ""),
+    );
+  }
+  return parts.join(" · ");
+}
+
+function taskTooltip(task: TranslationTaskView): vscode.MarkdownString {
+  const tooltip = new vscode.MarkdownString();
+  tooltip.appendText(task.label);
+  tooltip.appendMarkdown("\n\n");
+  tooltip.appendText(statusLabel(task.status));
+  tooltip.appendMarkdown("  \n");
+  tooltip.appendText(taskProgress(task));
+  if (task.phase.trim()) {
+    tooltip.appendMarkdown("  \n");
+    tooltip.appendText(task.phase);
+  }
+  if (task.error) {
+    tooltip.appendMarkdown("  \n");
+    tooltip.appendText(task.error);
+  }
+  if (task.startedAt) {
+    tooltip.appendMarkdown("  \n");
+    tooltip.appendText(
+      formatText(UI_TEXT.taskPanel.elapsed, {
+        duration: durationText(task.startedAt, task.finishedAt),
+      }),
+    );
+  }
+  return tooltip;
+}
+
 export class TaskViewProvider
-  implements vscode.WebviewViewProvider, vscode.Disposable
+  implements vscode.TreeDataProvider<TaskTreeNode>, vscode.Disposable
 {
-  /** 当前已解析的视图；不存在时 scheduleUpdate 直接跳过。 */
-  private view?: vscode.WebviewView;
-  /** 外部订阅（monitor/limiter/config）的退订函数。 */
-  private readonly unsubscribers: Array<() => void> = [];
-  /** 当前视图生命周期内的 webview 监听。 */
-  private viewDisposables: vscode.Disposable[] = [];
-  /** 状态推送去抖定时器；避免高频进度更新刷爆 postMessage。 */
+  private readonly onDidChangeTreeDataEmitter = new vscode.EventEmitter<
+    TaskTreeNode | undefined | void
+  >();
+  readonly onDidChangeTreeData = this.onDidChangeTreeDataEmitter.event;
+  private treeView?: vscode.TreeView<TaskTreeNode>;
   private updateTimer?: ReturnType<typeof setTimeout>;
-  /** 语言切换写入队列；避免快速连续选择时 config.update 乱序落盘。 */
+  private readonly unsubscribers: Array<() => void> = [];
+  private readonly commandDisposables: vscode.Disposable[] = [];
   private languageUpdateQueue: Promise<void> = Promise.resolve();
+  private readonly sections: SectionNode[] = [
+    {
+      kind: "section",
+      id: "overview",
+      label: UI_TEXT.taskPanel.overviewTitle,
+      icon: "graph",
+    },
+    {
+      kind: "section",
+      id: "active",
+      label: UI_TEXT.taskPanel.activeSection,
+      icon: "sync",
+    },
+    {
+      kind: "section",
+      id: "history",
+      label: UI_TEXT.taskPanel.historySection,
+      icon: "history",
+    },
+    {
+      kind: "section",
+      id: "system",
+      label: UI_TEXT.taskPanel.systemTitle,
+      icon: "server-environment",
+    },
+  ];
 
-  /** 订阅任务、并发与配置变化；实际推送由 scheduleUpdate 去抖。 */
   constructor(private readonly options: TaskViewProviderOptions) {
-    // monitor 负责任务状态，limiter 负责并发计数，两者变化都只调度一次刷新。
     this.unsubscribers.push(
       options.monitor.onDidChange(() => this.scheduleUpdate()),
       options.limiter.onDidChange(() => this.scheduleUpdate()),
     );
-    // 配置变化会影响“运行状态”区的模型/预算展示，同样触发刷新。
-    const configListener = vscode.workspace.onDidChangeConfiguration(
-      (event) => {
-        if (event.affectsConfiguration("markdownBilingualSync")) {
-          this.scheduleUpdate();
-        }
-      },
-    );
+    const configListener = vscode.workspace.onDidChangeConfiguration((event) => {
+      if (event.affectsConfiguration("markdownBilingualSync")) {
+        this.scheduleUpdate();
+      }
+    });
     this.unsubscribers.push(() => configListener.dispose());
+  }
+
+  // ---- TreeDataProvider ----
+
+  getTreeItem(node: TaskTreeNode): vscode.TreeItem {
+    switch (node.kind) {
+      case "section": {
+        const item = new vscode.TreeItem(
+          node.label,
+          node.id === "system"
+            ? vscode.TreeItemCollapsibleState.Collapsed
+            : vscode.TreeItemCollapsibleState.Expanded,
+        );
+        item.id = `section:${node.id}`;
+        item.description = node.description;
+        item.iconPath = new vscode.ThemeIcon(node.icon);
+        item.contextValue = "section";
+        return item;
+      }
+      case "stat": {
+        const item = new vscode.TreeItem(
+          node.label,
+          vscode.TreeItemCollapsibleState.None,
+        );
+        item.id = node.id;
+        item.description = node.description;
+        item.iconPath = new vscode.ThemeIcon(
+          node.icon,
+          node.color,
+        );
+        item.contextValue = "stat";
+        return item;
+      }
+      case "detail": {
+        const item = new vscode.TreeItem(
+          node.label,
+          vscode.TreeItemCollapsibleState.None,
+        );
+        item.id = node.id;
+        item.description = node.description;
+        item.iconPath = new vscode.ThemeIcon(node.icon, node.color);
+        item.contextValue = "detail";
+        return item;
+      }
+      case "task": {
+        const icon = statusIcon(node.task.status);
+        const item = new vscode.TreeItem(
+          node.task.label,
+          node.children.length > 0
+            ? vscode.TreeItemCollapsibleState.Collapsed
+            : vscode.TreeItemCollapsibleState.None,
+        );
+        item.id = node.id;
+        item.description = taskDescription(node.task);
+        item.tooltip = taskTooltip(node.task);
+        item.iconPath = new vscode.ThemeIcon(icon.icon, icon.color);
+        item.contextValue = node.section === "active" ? "taskActive" : "taskFinished";
+        if (node.task.uri) {
+          item.command = {
+            command: "markdownBilingualSync.task.openSource",
+            title: UI_TEXT.taskPanel.openSource,
+            arguments: [node],
+          };
+        }
+        return item;
+      }
+    }
+  }
+
+  getChildren(node?: TaskTreeNode): TaskTreeNode[] {
+    if (!node) {
+      const snapshot = this.options.monitor.snapshot();
+      const activeCount = snapshot.activeCount;
+      this.setSectionDescription(
+        "overview",
+        formatText(UI_TEXT.taskPanel.activeTaskCount, { count: activeCount }),
+      );
+      this.setSectionDescription(
+        "active",
+        formatText(UI_TEXT.taskPanel.activeTaskCount, { count: activeCount }),
+      );
+      this.setSectionDescription(
+        "history",
+        formatText(UI_TEXT.taskPanel.activeTaskCount, {
+          count: snapshot.finished.length,
+        }),
+      );
+      const info = this.options.getSystemInfo();
+      this.setSectionDescription(
+        "system",
+        `${info.provider} · ${info.model}`,
+      );
+      return this.sections;
+    }
+    switch (node.kind) {
+      case "section":
+        return this.sectionChildren(node.id);
+      case "task":
+        return node.children;
+      default:
+        return [];
+    }
+  }
+
+  private setSectionDescription(id: SectionId, description: string): void {
+    const section = this.sections.find((item) => item.id === id);
+    if (section) {
+      section.description = description;
+    }
+  }
+
+  private sectionChildren(id: SectionId): TaskTreeNode[] {
+    const snapshot = this.options.monitor.snapshot();
+    switch (id) {
+      case "overview": {
+        const totalCompleted = snapshot.active.reduce(
+          (sum, task) => sum + task.completed,
+          0,
+        );
+        const totalBlocks = snapshot.active.reduce(
+          (sum, task) => sum + task.total,
+          0,
+        );
+        const failed = snapshot.active.reduce(
+          (sum, task) => sum + task.failed,
+          0,
+        );
+        return [
+          {
+            kind: "stat",
+            id: "overview:files",
+            label: UI_TEXT.taskPanel.activeTasksLabel,
+            description: String(snapshot.activeCount),
+            icon: "files",
+          },
+          {
+            kind: "stat",
+            id: "overview:concurrency",
+            label: UI_TEXT.taskPanel.concurrencyLabel,
+            description: formatText(UI_TEXT.taskPanel.concurrency, {
+              active: this.options.limiter.activeCount,
+              limit: this.options.limiter.limit,
+              waiting: this.options.limiter.waitingCount,
+            }),
+            icon: "dashboard",
+          },
+          {
+            kind: "stat",
+            id: "overview:blocks",
+            label: UI_TEXT.taskPanel.activeBlocksLabel,
+            description: totalBlocks > 0 ? `${totalCompleted}/${totalBlocks}` : "—",
+            icon: "layers",
+          },
+          {
+            kind: "stat",
+            id: "overview:failed",
+            label: UI_TEXT.taskPanel.failedBlocksLabel,
+            description: String(failed),
+            icon: "error",
+            color: new vscode.ThemeColor("errorForeground"),
+          },
+        ];
+      }
+      case "active":
+        if (snapshot.active.length === 0) {
+          return [
+            {
+              kind: "detail",
+              id: "active:empty",
+              label: UI_TEXT.taskPanel.noActive,
+              description: UI_TEXT.taskPanel.emptyHint,
+              icon: "info",
+              color: new vscode.ThemeColor("descriptionForeground"),
+            },
+          ];
+        }
+        return snapshot.active.map((task) => this.taskNode(task, "active"));
+      case "history":
+        if (snapshot.finished.length === 0) {
+          return [
+            {
+              kind: "detail",
+              id: "history:empty",
+              label: UI_TEXT.taskPanel.empty,
+              description: UI_TEXT.taskPanel.emptyHint,
+              icon: "info",
+              color: new vscode.ThemeColor("descriptionForeground"),
+            },
+          ];
+        }
+        return snapshot.finished.map((task) => this.taskNode(task, "finished"));
+      case "system": {
+        const info = this.options.getSystemInfo();
+        return [
+          {
+            kind: "stat",
+            id: "system:provider",
+            label: UI_TEXT.taskPanel.providerLabel,
+            description: info.provider,
+            icon: "server",
+          },
+          {
+            kind: "stat",
+            id: "system:model",
+            label: UI_TEXT.taskPanel.modelLabel,
+            description: info.model,
+            icon: "symbol-method",
+          },
+          {
+            kind: "stat",
+            id: "system:budget",
+            label: UI_TEXT.taskPanel.tokenBudgetLabel,
+            description: String(info.tokenBudget),
+            icon: "dashboard",
+          },
+          {
+            kind: "stat",
+            id: "system:batch",
+            label: UI_TEXT.taskPanel.batchLimitLabel,
+            description: String(info.batchSize),
+            icon: "layers",
+          },
+        ];
+      }
+      default:
+        return [];
+    }
+  }
+
+  private taskNode(
+    task: TranslationTaskView,
+    section: "active" | "finished",
+  ): TaskNode {
+    const children: DetailNode[] = [];
+    if (task.error) {
+      children.push({
+        kind: "detail",
+        id: `task:${task.id}:error`,
+        label: task.error,
+        icon: "error",
+        color: new vscode.ThemeColor("errorForeground"),
+      });
+    } else if (section === "active" && task.phase.trim()) {
+      children.push({
+        kind: "detail",
+        id: `task:${task.id}:phase`,
+        label: task.phase,
+        icon: "sync",
+        color: new vscode.ThemeColor("descriptionForeground"),
+      });
+    }
+    return {
+      kind: "task",
+      id: `task:${task.id}`,
+      task,
+      section,
+      children,
+    };
   }
 
   // ---- 视图生命周期 ----
 
-  /**
-   * VS Code 解析视图时调用：重建页面并推送首帧状态。
-   *
-   * @sideeffect 替换 webview HTML、注册消息/可见性/dispose 监听
-   * @failure media 资源缺失表现为 webview 加载失败，不在此抛错；URI 构造异常会向上传播
-   */
-  resolveWebviewView(view: vscode.WebviewView): void {
-    // 同一 provider 可能先后解析多个视图实例，先释放旧实例的监听与定时器。
-    this.clearView();
-    this.view = view;
-    const mediaRoot = vscode.Uri.joinPath(
-      this.options.extensionUri,
-      "media",
-    );
-    view.webview.options = {
-      enableScripts: true,
-      localResourceRoots: [mediaRoot],
-    };
-    view.webview.html = buildTaskViewHtml({
-      webview: view.webview,
-      extensionUri: this.options.extensionUri,
-      nonce: randomBytes(18).toString("base64"),
-    });
-    this.viewDisposables.push(
-      // 页面脚本通过 postMessage 上报 ready / 按钮动作；这里异步处理，不阻塞消息通道。
-      view.webview.onDidReceiveMessage((message: unknown) => {
-        void this.onMessage(message);
-      }),
-      // 视图从隐藏变为可见时补发一次状态，避免隐藏期间丢失的进度。
-      view.onDidChangeVisibility(() => {
-        if (view.visible) {
-          this.sendState();
-        }
-      }),
-      // 视图销毁时只清理“当前”实例，防止旧实例的延迟事件误清新视图。
-      view.onDidDispose(() => {
-        if (this.view === view) {
-          this.clearView();
-        }
-      }),
-    );
+  setTreeView(view: vscode.TreeView<TaskTreeNode>): void {
+    this.treeView = view;
     this.updateViewMeta();
-    this.sendState();
   }
 
   /**
    * 状态栏命令入口：可见则收起，已解析但隐藏则显示，未解析则打开容器。
-   *
-   * 注意：收起逻辑依赖 VS Code 内置命令（辅助侧边栏/侧边栏），并延迟 80ms 兜底；
-   * 该延迟定时器未纳入 dispose 管理。
    */
   async toggle(): Promise<void> {
-    const view = this.view;
+    const view = this.treeView;
+    // 与状态栏文案一致：可见时收起所在侧栏，隐藏时打开容器并 reveal。
     if (view?.visible) {
-      await vscode.commands.executeCommand(
-        "workbench.action.closeAuxiliaryBar",
-      );
+      await vscode.commands.executeCommand("workbench.action.closeAuxiliaryBar");
       setTimeout(() => {
-        if (this.view?.visible) {
-          void vscode.commands.executeCommand(
-            "workbench.action.closeSidebar",
-          );
+        if (view.visible) {
+          void vscode.commands.executeCommand("workbench.action.closeSidebar");
         }
       }, 80);
       return;
     }
-    if (view) {
-      view.show(false);
-      return;
-    }
     await vscode.commands.executeCommand(
-      "workbench.view.extension.markdownBilingualSync.tasks",
+      "workbench.view.extension.markdownBilingualSyncTasks",
     );
-  }
-
-  /** 释放定时器、当前视图监听与外部订阅；可安全重复调用。 */
-  dispose(): void {
-    this.clearView();
-    for (const unsubscribe of this.unsubscribers.splice(0)) {
-      unsubscribe();
+    if (view) {
+      try {
+        await view.reveal(this.sections[1], {
+          expand: true,
+          select: false,
+          focus: true,
+        });
+      } catch {
+        /* 视图尚未渲染时忽略 */
+      }
     }
   }
 
-  /** 清空去抖定时器、释放当前视图监听并重置 view 引用。 */
-  private clearView(): void {
+  dispose(): void {
     if (this.updateTimer) {
       clearTimeout(this.updateTimer);
       this.updateTimer = undefined;
     }
-    for (const disposable of this.viewDisposables.splice(0)) {
+    for (const disposable of this.commandDisposables.splice(0)) {
       disposable.dispose();
     }
-    this.view = undefined;
+    for (const unsubscribe of this.unsubscribers.splice(0)) {
+      unsubscribe();
+    }
+    this.onDidChangeTreeDataEmitter.dispose();
   }
 
-  // ---- 状态推送 ----
+  // ---- 刷新 ----
 
-  /**
-   * 100ms 去抖调度一次状态推送。
-   * 视图不存在或已有待执行定时器时直接返回（合并高频事件）。
-   */
   private scheduleUpdate(): void {
-    if (!this.view || this.updateTimer) {
+    if (this.updateTimer) {
       return;
     }
     this.updateTimer = setTimeout(() => {
       this.updateTimer = undefined;
-      this.sendState();
+      this.refresh();
     }, 100);
   }
 
-  /**
-   * 读取任务视图语言状态。
-   * 每次推送都重新读取设置，保证设置页或快捷切换后立即生效；非法配置由纯函数兜底，
-   * 这里不抛错，避免任务面板因语言设置问题整体无法渲染。
-   */
-  private getLanguages(): TaskViewLanguages {
-    const config = vscode.workspace.getConfiguration(
-      "markdownBilingualSync",
-    );
-    return buildTaskViewLanguages(
-      config.get<unknown>("sourceLanguage", "en"),
-      config.get<unknown>("targetLanguage", "zh-CN"),
-      config.get<unknown>("supportedLanguages", ["zh-CN"]),
-    );
-  }
-
-  /**
-   * 推送完整状态快照（任务、并发、系统信息与语言设置）。
-   * @sideeffect postMessage；视图已销毁时静默返回
-   */
-  private sendState(): void {
-    const view = this.view;
-    if (!view) {
-      return;
-    }
-    const snapshot = this.options.monitor.snapshot();
-    view.webview.postMessage({
-      type: "state",
-      state: {
-        generatedAt: Date.now(),
-        ...this.getLanguages(),
-        active: snapshot.active.map(toStateTask),
-        finished: snapshot.finished.map(toStateTask),
-        activeRequests: this.options.limiter.activeCount,
-        waiting: this.options.limiter.waitingCount,
-        limit: this.options.limiter.limit,
-        system: this.options.getSystemInfo(),
-      },
-    });
+  refresh(): void {
+    this.onDidChangeTreeDataEmitter.fire();
     this.updateViewMeta();
   }
 
-  /** 同步视图标题描述与活动任务徽标；没有活动任务时清除。 */
   private updateViewMeta(): void {
-    const view = this.view;
+    const view = this.treeView;
     if (!view) {
       return;
     }
@@ -300,26 +604,61 @@ export class TaskViewProvider
         : undefined;
   }
 
-  // ---- Webview 消息 ----
+  // ---- 命令 ----
 
   /**
-   * 路由 webview 消息。
-   *
-   * 支持：ready、cancelAll、clearFinished、openOutput、cancelTask、
-   * openSource、openPreview、setSourceLanguage、setTargetLanguage、swapLanguages；
-   * 其余消息忽略。
-   * 统一捕获分发过程中的异常（例如源文件已被删除导致 openTextDocument 失败），
-   * 写入输出通道并弹出错误提示，避免未处理的 Promise 拒绝。
+   * 注册视图标题与行内操作命令。
+   * @returns 无；disposable 由 provider 的 dispose 统一释放。
    */
-  private async onMessage(raw: unknown): Promise<void> {
+  registerCommands(): void {
+    const register = (
+      id: string,
+      handler: (...args: unknown[]) => unknown,
+    ): void => {
+      this.commandDisposables.push(
+        vscode.commands.registerCommand(id, handler),
+      );
+    };
+    register("markdownBilingualSync.task.cancelAll", () => {
+      this.options.monitor.cancelAll();
+    });
+    register("markdownBilingualSync.task.clearFinished", () => {
+      this.options.monitor.clearFinished();
+    });
+    register("markdownBilingualSync.task.openOutput", () => {
+      this.options.output.show(true);
+    });
+    register("markdownBilingualSync.task.languages", () => {
+      void this.showLanguagePicker();
+    });
+    register("markdownBilingualSync.task.openSource", (arg) => {
+      const task = this.resolveTask(arg);
+      if (task?.uri) {
+        void this.openSource(task.uri);
+      }
+    });
+    register("markdownBilingualSync.task.openPreview", (arg) => {
+      const task = this.resolveTask(arg);
+      if (task?.uri) {
+        this.options.openPreview(task.uri);
+      }
+    });
+    register("markdownBilingualSync.task.cancel", (arg) => {
+      const task = this.resolveTask(arg);
+      if (task) {
+        this.options.monitor.cancel(task.id);
+      }
+    });
+  }
+
+  private async openSource(uri: vscode.Uri): Promise<void> {
     try {
-      await this.handleMessage(raw);
+      const document = await vscode.workspace.openTextDocument(uri);
+      await vscode.window.showTextDocument(document, { preview: false });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      const stack =
-        error instanceof Error ? (error.stack ?? message) : message;
       this.options.output.appendLine(
-        `[${new Date().toISOString()}] task view message failed: ${stack}`,
+        `[${new Date().toISOString()}] task open source failed: ${message}`,
       );
       void vscode.window.showErrorMessage(
         `${UI_TEXT.extension.messagePrefix}${message}`,
@@ -327,95 +666,133 @@ export class TaskViewProvider
     }
   }
 
-  /** 按 type 白名单分发消息；异常统一由 onMessage 捕获处理。 */
-  private async handleMessage(raw: unknown): Promise<void> {
-    if (!raw || typeof raw !== "object") {
+  /**
+   * 从 TreeItem 的 command arguments、element 或 id 中解析任务。
+   * VS Code 在行内命令中可能传 element 或 TreeItem，两种都兼容。
+   */
+  private resolveTask(arg: unknown): TranslationTaskView | undefined {
+    if (Array.isArray(arg)) {
+      return this.resolveTask(arg[0]);
+    }
+    if (!arg || typeof arg !== "object") {
+      return undefined;
+    }
+    const node = arg as {
+      kind?: string;
+      task?: TranslationTaskView;
+      id?: unknown;
+      command?: { arguments?: unknown[] };
+      status?: string;
+      label?: string;
+    };
+    if (node.kind === "task" && node.task) {
+      return node.task;
+    }
+    if (Array.isArray(node.command?.arguments)) {
+      return this.resolveTask(node.command.arguments[0]);
+    }
+    if (typeof node.id === "number") {
+      return this.options.monitor.getTask(node.id);
+    }
+    if (typeof node.id === "string" && node.id.startsWith("task:")) {
+      const id = Number(node.id.slice("task:".length).split(":")[0]);
+      if (Number.isInteger(id)) {
+        return this.options.monitor.getTask(id);
+      }
+    }
+    if (
+      typeof node.id === "number" &&
+      typeof node.status === "string" &&
+      typeof node.label === "string"
+    ) {
+      return this.options.monitor.getTask(node.id);
+    }
+    return undefined;
+  }
+
+  // ---- 语言 ----
+
+  private getLanguages(): TaskViewLanguages {
+    const config = vscode.workspace.getConfiguration("markdownBilingualSync");
+    return buildTaskViewLanguages(
+      config.get<unknown>("sourceLanguage", "en"),
+      config.get<unknown>("targetLanguage", "zh-CN"),
+      config.get<unknown>("supportedLanguages", ["zh-CN"]),
+    );
+  }
+
+  private async showLanguagePicker(): Promise<void> {
+    const languages = this.getLanguages();
+    const pick = await vscode.window.showQuickPick(
+      [
+        {
+          label: `$(globe) ${UI_TEXT.taskPanel.sourceLanguageLabel}`,
+          description: languages.sourceLanguage,
+          detail: UI_TEXT.taskPanel.sourceLanguageTitle,
+          role: "source" as const,
+        },
+        {
+          label: `$(globe) ${UI_TEXT.taskPanel.targetLanguageLabel}`,
+          description: languages.targetLanguage,
+          detail: UI_TEXT.taskPanel.targetLanguageTitle,
+          role: "target" as const,
+        },
+        {
+          label: `$(arrow-swap) ${UI_TEXT.taskPanel.swapLanguagesTitle}`,
+          description: `${languages.sourceLanguage} ↔ ${languages.targetLanguage}`,
+          role: "swap" as const,
+        },
+      ],
+      { title: UI_TEXT.taskPanel.languageSection },
+    );
+    if (!pick) {
       return;
     }
-    const message = raw as Record<string, unknown>;
-    const type = typeof message.type === "string" ? message.type : "";
-    // 只接受整数 id，避免页面传入任意对象/字符串触发非预期任务操作。
-    const id =
-      typeof message.id === "number" && Number.isInteger(message.id)
-        ? message.id
-        : undefined;
-    switch (type) {
-      case "ready":
-        // 页面脚本就绪后主动拉取首帧，弥补 HTML 渲染与消息监听的时序差。
-        this.sendState();
-        return;
-      case "cancelAll":
-        this.options.monitor.cancelAll();
-        this.sendState();
-        return;
-      case "clearFinished":
-        this.options.monitor.clearFinished();
-        this.sendState();
-        return;
-      case "setSourceLanguage":
-        await this.enqueueLanguageUpdate(() =>
-          this.setLanguage("source", message.language),
-        );
-        return;
-      case "setTargetLanguage":
-        await this.enqueueLanguageUpdate(() =>
-          this.setLanguage("target", message.language),
-        );
-        return;
-      case "swapLanguages":
-        await this.enqueueLanguageUpdate(() => this.swapLanguages());
-        return;
-      case "openOutput":
-        this.options.output.show(true);
-        return;
-      case "cancelTask":
-        if (id !== undefined) {
-          this.options.monitor.cancel(id);
-          this.sendState();
-        }
-        return;
-      case "openSource": {
-        const task = id === undefined ? undefined : this.options.monitor.getTask(id);
-        if (task?.uri) {
-          // 源文件可能已被删除/重命名，抛错由 onMessage 统一记录并提示。
-          const document = await vscode.workspace.openTextDocument(task.uri);
-          await vscode.window.showTextDocument(document, { preview: false });
-        }
-        return;
-      }
-      case "openPreview": {
-        const task = id === undefined ? undefined : this.options.monitor.getTask(id);
-        if (task?.uri) {
-          this.options.openPreview(task.uri);
-        }
-        return;
-      }
-      default:
-        return;
+    if (pick.role === "swap") {
+      await this.swapLanguages();
+      return;
+    }
+    const role = pick.role;
+    const current =
+      role === "source" ? languages.sourceLanguage : languages.targetLanguage;
+    const options = languages.supportedLanguages.map((language) => ({
+      label: language,
+      description: language === current ? "✓" : undefined,
+    }));
+    const selected = await vscode.window.showQuickPick(options, {
+      title:
+        role === "source"
+          ? UI_TEXT.taskPanel.sourceLanguageLabel
+          : UI_TEXT.taskPanel.targetLanguageLabel,
+    });
+    if (selected) {
+      await this.setLanguage(role, selected.label);
     }
   }
 
-  /**
-   * 串行化语言切换。页面可能连续提交多次选择或点击交换，config.update 是异步的；
-   * 排队可以保证最终写入顺序与用户最后一次操作一致，避免旧请求晚到后把设置改回去。
-   */
   private enqueueLanguageUpdate(action: () => Promise<void>): Promise<void> {
     const next = this.languageUpdateQueue.then(action);
     this.languageUpdateQueue = next.catch(() => {
-      /* 具体操作的错误已在内部处理，不阻塞后续选择。 */
+      /* 具体错误已在内部处理 */
     });
     return next;
   }
 
-  /**
-   * 校验并写回任务面板选择的单侧语言。
-   *
-   * 只接受当前 supportedLanguages 中的值，且不能与另一侧语言相同；写回作用域沿用
-   * 该设置是否已有工作区值：有则 Workspace，否则 Global。非法或写入失败只提示并
-   * 回推当前状态，不修改设置。
-   */
-  private async setLanguage(
-    role: LanguageRole,
+  /** 校验并写回单侧语言；串行化避免快速选择乱序。 */
+  setLanguage(
+    role: "source" | "target",
+    requested: unknown,
+  ): Promise<void> {
+    return this.enqueueLanguageUpdate(() => this.applyLanguage(role, requested));
+  }
+
+  /** 交换原文/译文语言；串行化并提供半交换回滚。 */
+  swapLanguages(): Promise<void> {
+    return this.enqueueLanguageUpdate(() => this.applySwap());
+  }
+
+  private async applyLanguage(
+    role: "source" | "target",
     requested: unknown,
   ): Promise<void> {
     const languages = this.getLanguages();
@@ -435,17 +812,14 @@ export class TaskViewProvider
           : role === "source"
             ? UI_TEXT.taskPanel.sourceLanguageSameAsTarget
             : UI_TEXT.taskPanel.targetLanguageSameAsSource;
-      const message = formatText(template, {
-        language: selection.language || "-",
-      });
       void vscode.window.showErrorMessage(
-        `${UI_TEXT.extension.messagePrefix}${message}`,
+        `${UI_TEXT.extension.messagePrefix}${formatText(template, {
+          language: selection.language || "-",
+        })}`,
       );
-      // 页面可能已把下拉框切到提交值；回推配置状态以还原选中项。
-      this.sendState();
+      this.refresh();
       return;
     }
-
     try {
       await this.writeLanguageSetting(
         role === "source" ? "sourceLanguage" : "targetLanguage",
@@ -463,19 +837,11 @@ export class TaskViewProvider
       void vscode.window.showErrorMessage(
         `${UI_TEXT.extension.messagePrefix}${formatText(template, { message })}`,
       );
-      this.sendState();
-      return;
     }
-    this.sendState();
+    this.refresh();
   }
 
-  /**
-   * 交换原文与译文语言。
-   *
-   * 两次 config.update 没有事务：先写成功的一侧在后续失败时需要回滚，避免留下
-   * “只交换了一半”的配置。回滚失败只记录日志，最终仍回推当前真实配置。
-   */
-  private async swapLanguages(): Promise<void> {
+  private async applySwap(): Promise<void> {
     const languages = this.getLanguages();
     const swapped = swapTaskViewLanguages(
       languages.sourceLanguage,
@@ -486,10 +852,9 @@ export class TaskViewProvider
       void vscode.window.showErrorMessage(
         `${UI_TEXT.extension.messagePrefix}${UI_TEXT.taskPanel.swapLanguagesUnavailable}`,
       );
-      this.sendState();
+      this.refresh();
       return;
     }
-
     const applied: Array<{
       key: "sourceLanguage" | "targetLanguage";
       previous: string;
@@ -530,27 +895,16 @@ export class TaskViewProvider
         }
       }
       const message = error instanceof Error ? error.message : String(error);
-      this.options.output.appendLine(
-        `[${new Date().toISOString()}] swap languages failed: ${message}`,
-      );
       void vscode.window.showErrorMessage(
         `${UI_TEXT.extension.messagePrefix}${formatText(
           UI_TEXT.taskPanel.languageUpdateFailed,
           { message },
         )}`,
       );
-      this.sendState();
-      return;
     }
-    this.sendState();
+    this.refresh();
   }
 
-  /**
-   * 写入单个语言设置，保持其现有的用户/工作区作用域。
-   *
-   * 不因一次快捷切换额外创建工作区设置：只有该设置已显式写入工作区时才写 Workspace，
-   * 否则写 Global。返回实际使用的目标，供交换失败时回滚。
-   */
   private async writeLanguageSetting(
     key: "sourceLanguage" | "targetLanguage",
     value: string,

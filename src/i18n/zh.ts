@@ -112,7 +112,7 @@ export const UI_TEXT = {
     glossaryWorkspaceDescription: "保存在工作区根目录的 .mbs-glossary.json",
     glossaryNoWorkspace: "请先打开一个文件夹，再编辑工作区术语表。",
   },
-  // 双语预览页：结构由 src/preview/html.ts 渲染，部分弹窗/编辑器字段再注入 media/preview.js。
+  // 双语预览页：结构由 src/webview/preview/app.tsx 渲染，文案由宿主序列化进 Webview。
   preview: {
     titleSuffix: "双语预览",
     mark: "译",
@@ -195,6 +195,8 @@ export const UI_TEXT = {
       insertTargetTitle: "在该块后插入一个新的译文块",
       deleteTargetTitle: "删除该译文，保留锚点并标记为已删除",
       deleteBlock: "删除",
+      deleteTranslation: "删除译文",
+      deleteSourceBlock: "删除原文块",
       deleteBlockTitle: "标记删除该原文块，应用后写回文件",
       undoDelete: "撤销删除",
       undoDeleteTitle: "撤销该块的删除标记",
@@ -296,6 +298,7 @@ export const UI_TEXT = {
       export: "导出",
       exportDisabledTitle: "需要先生成译文缓存",
       openCacheFolder: "打开缓存目录",
+    moreActions: "更多操作",
     },
     subbar: {
       retranslateAll: "全部重译",
@@ -312,7 +315,7 @@ export const UI_TEXT = {
       phase: "Markdown 双语同步 · 第 3 阶段",
       note: "机器译文保存在扩展全局存储；导出会生成同目录语言后缀文件。",
     },
-    // 导出确认模态框；其中静态字段会注入 media/preview.js 的 #mbs-ui-text。
+    // 导出确认模态框；静态字段随整份 preview 文案注入 #mbs-ui-text。
     modal: {
       eyebrow: "Markdown Bilingual Sync",
       title: "确认导出译文？",
@@ -424,6 +427,8 @@ export const UI_TEXT = {
     sourceInsertUpdated: "已更新待插入的原文块。",
     sourceInsertRemoved: "已移除待插入的原文块。",
     sourceBlockDeletedConflict: "该块已标记删除，请先撤销删除。",
+    sourceBlockChanged:
+      "编辑期间原文块已变化，请重新编辑。",
     sourceStagedInvalidated:
       "源文件已发生变化，暂存的原文修改已清空，请重新编辑。",
     sourceEditsDiscarded: "已放弃暂存的原文修改。",
@@ -489,18 +494,12 @@ export const UI_TEXT = {
     activeTaskCount: "{count} 个任务",
     activeTaskBadgeTooltip: "活动的翻译任务",
     languageUpdateFailed: "切换语言失败：{message}",
-    openOutput: "打开输出日志",
-    clearFinished: "清除任务历史",
-    cancelAll: "取消全部任务",
-    cancelTask: "取消",
     openSource: "打开源文件",
-    openPreview: "打开双语预览",
     progress: "{completed}/{total} 块",
     noBlocks: "无待翻译块",
     failedSuffix: " · {failed} 块失败",
     elapsed: "耗时 {duration}",
     noActive: "当前没有运行中的任务",
-    moveHint: "如果视图在左侧，可将“翻译任务”拖到右侧辅助侧边栏，之后会保留布局。",
     // 任务阶段文案：TaskMonitor 的初始态、取消态与命令层的终态。
     phases: {
       waiting: "等待开始",

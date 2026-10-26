@@ -1,16 +1,19 @@
 /**
- * 预览 HTML 生成模块：把 `PreviewModel` 渲染成完整的双语文档字符串。
+ * 旧字符串预览渲染器：仅保留给模型/HTML 快照测试与迁移期参考。
+ *
+ * **生产预览已迁移到 `src/preview/appShell.ts` + `src/webview/preview/app.tsx`（Preact）。**
+ * 本文件不进入 VSIX，也不应在宿主渲染路径中新增调用。
  *
  * 职责：
- * - 渲染「交错（columns / stacked）」布局：每个源块与其译文成对出现，带状态徽标与块级操作；
- * - 渲染「分栏（split）」布局：左右两栏按 `data-sync-key` 对齐成单元格，支持单栏只读；
- * - 组装工具栏、统计、警告、脚注、导出/原文确认对话框，以及内联 JSON 数据；
+ * - `buildPreviewRootHtml`：渲染可原地替换的 `.mbs-root`（工具栏、统计、警告、摘要、块列表/分栏）；
+ * - `buildPreviewHtml`：首次加载用的完整文档（根节点 + 样式/脚本/CSP + 弹窗 + 提示条 + 内联数据）；
+ * - 渲染「交错（columns / stacked）」与「分栏（split）」布局，支持单栏只读；
  * - 负责所有动态文本的 HTML 转义与 `<script type="application/json">` 数据的安全编码。
  *
- * 数据流：
+ * 数据流（历史）：
  * PreviewModel（source/cache -> 对齐后的块）--> 本模块拼接 HTML
- * --> `webviewHtml.buildWebviewHtml` 补上资源 URI/CSP/nonce --> Webview
- * --> 用户点击 `data-action` 按钮 --> `postMessage` --> PreviewManager.onMessage。
+ * --> 测试/静态样例直接读取字符串；
+ * 生产预览已改由 Preact 组件从模型渲染，不再调用本模块。
  *
  * 关键不变量：
  * - 除 markdown-it 渲染出的受信 HTML（`sourceHtml` / `targetHtml` / 脚注）外，
@@ -699,7 +702,7 @@ export interface PreviewHtmlInput {
   readonly?: PreviewReadonlyState;
   /** CSP nonce，必须与脚本标签上的 nonce 相同。 */
   nonce: string;
-  /** 由 webviewHtml 生成的完整 CSP 字符串。 */
+  /** 旧完整页面的 CSP 字符串（仅测试）。 */
   csp: string;
   cssHref: string;
   scriptHref: string;
@@ -805,6 +808,94 @@ function renderSummaryPanel(model: PreviewModel): string {
 </details>`;
 }
 
+/**
+ * 生成可独立替换的预览根节点 HTML（稳定壳方案）。
+ *
+ * 旧稳定壳迁移期的根节点生成函数；仅用于历史测试。生产预览由
+ * `src/webview/preview/app.tsx` 从模型直接渲染。
+ */
+export interface PreviewRootHtmlInput {
+  model: PreviewModel;
+  layout: PreviewLayout;
+  readonly: PreviewReadonlyState;
+}
+
+export function buildPreviewRootHtml(input: PreviewRootHtmlInput): string {
+  const { model, layout, readonly } = input;
+  // 交错布局正文：逐块输出成对 section；空文档给占位。
+  const body =
+    model.blocks.length > 0
+      ? model.blocks.map(renderBlock).join("\n")
+      : `<div class="mbs-empty">${escapeHtml(T.placeholders.emptyDocument)}</div>`;
+  // split 走左右双栏；columns / stacked 走「正文 + 脚注区」。
+  const content =
+    layout === "split"
+      ? renderSplitLayout(model, readonly)
+      : `<main class="mbs-blocks">
+    ${body}
+  </main>
+  ${renderFootnotes(model)}`;
+
+  return `<div class="mbs-root" data-mode="bilingual" data-layout="${layout}">
+  <header class="mbs-toolbar">
+    <div class="mbs-title-group">
+      <div class="mbs-mark">${escapeHtml(T.mark)}</div>
+      <div class="mbs-title-text">
+        <h1>${escapeHtml(model.fileLabel)}</h1>
+        <p>${escapeHtml(model.sourceLanguage)} → ${escapeHtml(model.targetLanguage)} · ${escapeHtml(model.providerLabel)}</p>
+      </div>
+    </div>
+    <div class="mbs-mode-switch" role="group" aria-label="${escapeHtml(T.toolbar.previewMode)}">
+      <button type="button" data-mode="bilingual" aria-pressed="true">${escapeHtml(T.toolbar.bilingual)}</button>
+      <button type="button" data-mode="source" aria-pressed="false">${escapeHtml(T.toolbar.sourceOnly)}</button>
+      <button type="button" data-mode="target" aria-pressed="false">${escapeHtml(T.toolbar.targetOnly)}</button>
+    </div>
+    <div class="mbs-toolbar-actions">
+      <button type="button" class="mbs-button mbs-button-primary" data-action="sync">${escapeHtml(T.toolbar.sync)}</button>
+      <button type="button" class="mbs-button" data-action="importTranslation" title="${escapeHtml(T.toolbar.importTranslationTitle)}">${escapeHtml(T.toolbar.importTranslation)}</button>
+      <button type="button" class="mbs-button" data-action="checkConsistency"${model.cacheExists ? ` title="${escapeHtml(T.toolbar.checkConsistencyTitle)}"` : ` disabled title="${escapeHtml(UI_TEXT.consistency.noCache)}"`}>${escapeHtml(T.toolbar.checkConsistency)}</button>
+      <button type="button" class="mbs-button" data-action="refresh">${escapeHtml(T.toolbar.refresh)}</button>
+      <button type="button" class="mbs-button" data-action="editCache">${escapeHtml(T.toolbar.editCache)}</button>
+      <button type="button" class="mbs-button" data-action="export"${model.cacheExists ? "" : ` disabled title="${escapeHtml(T.toolbar.exportDisabledTitle)}"`}>${escapeHtml(T.toolbar.export)}</button>
+      <button type="button" class="mbs-icon-button" data-action="openCacheFolder" title="${escapeHtml(T.toolbar.openCacheFolder)}" aria-label="${escapeHtml(T.toolbar.openCacheFolder)}">⋯</button>
+    </div>
+  </header>
+  <div class="mbs-subbar">
+    ${renderStats(model)}
+    ${
+      model.pendingSourceCount > 0
+        ? `<button type="button" class="mbs-inline-action mbs-inline-action-primary" data-action="applySourceEdits" title="${escapeHtml(T.actions.applySourceTitle)}">${escapeHtml(formatText(T.actions.applySource, { count: model.pendingSourceCount }))}</button>
+    <button type="button" class="mbs-inline-action" data-action="discardSourceEdits" title="${escapeHtml(T.actions.resetSourceTitle)}">${escapeHtml(T.actions.resetSource)}</button>`
+        : ""
+    }
+    <button type="button" class="mbs-inline-action" data-action="insertSourceBlockStart" title="${escapeHtml(T.actions.insertAtStartTitle)}">${escapeHtml(T.actions.insertAtStart)}</button>
+    ${
+      model.cacheExists
+        ? `<button type="button" class="mbs-inline-action" data-action="retranslateAll" title="${escapeHtml(T.subbar.retranslateAllTitle)}">${escapeHtml(T.subbar.retranslateAll)}</button>`
+        : ""
+    }
+    ${
+      model.counts.stale > 0
+        ? `<button type="button" class="mbs-inline-action" data-action="retranslateStale" title="${escapeHtml(T.subbar.retranslateStaleTitle)}">${escapeHtml(formatText(T.subbar.retranslateStale, { count: model.counts.stale }))}</button>`
+        : ""
+    }
+    <div class="mbs-layout-switch" role="group" aria-label="${escapeHtml(T.subbar.layout)}">
+      <button type="button" data-layout="columns" aria-pressed="${layout === "columns"}">${escapeHtml(T.subbar.columns)}</button>
+      <button type="button" data-layout="stacked" aria-pressed="${layout === "stacked"}">${escapeHtml(T.subbar.stacked)}</button>
+      <button type="button" data-layout="split" aria-pressed="${layout === "split"}">${escapeHtml(T.subbar.split)}</button>
+    </div>
+    <span class="mbs-hint">${escapeHtml(T.subbar.hint)}</span>
+  </div>
+  ${renderWarnings(model)}
+  ${renderSummaryPanel(model)}
+  ${content}
+  <footer class="mbs-footer">
+    <span>${escapeHtml(T.footer.phase)}</span>
+    <span>${escapeHtml(T.footer.note)}</span>
+  </footer>
+</div>`;
+}
+
 export function buildPreviewHtml(input: PreviewHtmlInput): string {
   const {
     model,
@@ -866,19 +957,7 @@ export function buildPreviewHtml(input: PreviewHtmlInput): string {
     stageInsert: T.actions.stageInsert,
     addStandaloneTarget: T.actions.addStandaloneTarget,
   }).replaceAll("<", "\\u003c");
-  // 交错布局正文：逐块输出成对 section；空文档给占位。
-  const body =
-    model.blocks.length > 0
-      ? model.blocks.map(renderBlock).join("\n")
-      : `<div class="mbs-empty">${escapeHtml(T.placeholders.emptyDocument)}</div>`;
-  // split 走左右双栏；columns / stacked 走「正文 + 脚注区」。
-  const content =
-    layout === "split"
-      ? renderSplitLayout(model, readonly)
-      : `<main class="mbs-blocks">
-    ${body}
-  </main>
-  ${renderFootnotes(model)}`;
+  const rootHtml = buildPreviewRootHtml({ model, layout, readonly });
 
   // 页面骨架：CSP 通过 meta 注入，样式/脚本均带 nonce 或来自 webview 资源根。
   return `<!DOCTYPE html>
@@ -892,65 +971,8 @@ export function buildPreviewHtml(input: PreviewHtmlInput): string {
 <link rel="stylesheet" href="${cssHref}">
 </head>
 <body>
-<div class="mbs-root" data-mode="bilingual" data-layout="${layout}">
-  <header class="mbs-toolbar">
-    <div class="mbs-title-group">
-      <div class="mbs-mark">${escapeHtml(T.mark)}</div>
-      <div class="mbs-title-text">
-        <h1>${escapeHtml(model.fileLabel)}</h1>
-        <p>${escapeHtml(model.sourceLanguage)} → ${escapeHtml(model.targetLanguage)} · ${escapeHtml(model.providerLabel)}</p>
-      </div>
-    </div>
-    <div class="mbs-mode-switch" role="group" aria-label="${escapeHtml(T.toolbar.previewMode)}">
-      <button type="button" data-mode="bilingual" aria-pressed="true">${escapeHtml(T.toolbar.bilingual)}</button>
-      <button type="button" data-mode="source" aria-pressed="false">${escapeHtml(T.toolbar.sourceOnly)}</button>
-      <button type="button" data-mode="target" aria-pressed="false">${escapeHtml(T.toolbar.targetOnly)}</button>
-    </div>
-    <div class="mbs-toolbar-actions">
-      <button type="button" class="mbs-button mbs-button-primary" data-action="sync">${escapeHtml(T.toolbar.sync)}</button>
-      <button type="button" class="mbs-button" data-action="importTranslation" title="${escapeHtml(T.toolbar.importTranslationTitle)}">${escapeHtml(T.toolbar.importTranslation)}</button>
-      <button type="button" class="mbs-button" data-action="checkConsistency"${model.cacheExists ? ` title="${escapeHtml(T.toolbar.checkConsistencyTitle)}"` : ` disabled title="${escapeHtml(UI_TEXT.consistency.noCache)}"`}>${escapeHtml(T.toolbar.checkConsistency)}</button>
-      <button type="button" class="mbs-button" data-action="refresh">${escapeHtml(T.toolbar.refresh)}</button>
-      <button type="button" class="mbs-button" data-action="editCache">${escapeHtml(T.toolbar.editCache)}</button>
-      <button type="button" class="mbs-button" data-action="export"${model.cacheExists ? "" : ` disabled title="${escapeHtml(T.toolbar.exportDisabledTitle)}"`}>${escapeHtml(T.toolbar.export)}</button>
-      <button type="button" class="mbs-icon-button" data-action="openCacheFolder" title="${escapeHtml(T.toolbar.openCacheFolder)}" aria-label="${escapeHtml(T.toolbar.openCacheFolder)}">⋯</button>
-    </div>
-  </header>
-  <div class="mbs-subbar">
-    ${renderStats(model)}
-    ${
-      model.pendingSourceCount > 0
-        ? `<button type="button" class="mbs-inline-action mbs-inline-action-primary" data-action="applySourceEdits" title="${escapeHtml(T.actions.applySourceTitle)}">${escapeHtml(formatText(T.actions.applySource, { count: model.pendingSourceCount }))}</button>
-    <button type="button" class="mbs-inline-action" data-action="discardSourceEdits" title="${escapeHtml(T.actions.resetSourceTitle)}">${escapeHtml(T.actions.resetSource)}</button>`
-        : ""
-    }
-    <button type="button" class="mbs-inline-action" data-action="insertSourceBlockStart" title="${escapeHtml(T.actions.insertAtStartTitle)}">${escapeHtml(T.actions.insertAtStart)}</button>
-    ${
-      model.cacheExists
-        ? `<button type="button" class="mbs-inline-action" data-action="retranslateAll" title="${escapeHtml(T.subbar.retranslateAllTitle)}">${escapeHtml(T.subbar.retranslateAll)}</button>`
-        : ""
-    }
-    ${
-      model.counts.stale > 0
-        ? `<button type="button" class="mbs-inline-action" data-action="retranslateStale" title="${escapeHtml(T.subbar.retranslateStaleTitle)}">${escapeHtml(formatText(T.subbar.retranslateStale, { count: model.counts.stale }))}</button>`
-        : ""
-    }
-    <div class="mbs-layout-switch" role="group" aria-label="${escapeHtml(T.subbar.layout)}">
-      <button type="button" data-layout="columns" aria-pressed="${layout === "columns"}">${escapeHtml(T.subbar.columns)}</button>
-      <button type="button" data-layout="stacked" aria-pressed="${layout === "stacked"}">${escapeHtml(T.subbar.stacked)}</button>
-      <button type="button" data-layout="split" aria-pressed="${layout === "split"}">${escapeHtml(T.subbar.split)}</button>
-    </div>
-    <span class="mbs-hint">${escapeHtml(T.subbar.hint)}</span>
-  </div>
-  ${renderWarnings(model)}
-  ${renderSummaryPanel(model)}
-  ${content}
-  <footer class="mbs-footer">
-    <span>${escapeHtml(T.footer.phase)}</span>
-    <span>${escapeHtml(T.footer.note)}</span>
-  </footer>
-  <div class="mbs-toast" role="status" aria-live="polite"${noticeAttrs}></div>
-</div>
+${rootHtml}
+<div class="mbs-toast" role="status" aria-live="polite"${noticeAttrs}></div>
 <div class="mbs-modal" data-modal="export" hidden>
   <div class="mbs-modal-backdrop" data-export-dismiss></div>
   <div class="mbs-modal-dialog" role="dialog" aria-modal="true" aria-labelledby="mbs-export-title">

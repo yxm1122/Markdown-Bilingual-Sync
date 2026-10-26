@@ -51,5 +51,12 @@
   "displayName": "Markdown 双语同步",
   "description": "为 VS Code 提供 AI 驱动的 Markdown 双语翻译与预览：块级锚点缓存、译文锁定、分栏视图、术语表与导出。",
   "configuration.title": "Markdown 双语同步",
-  "command.category": "Markdown 双语同步"
+  "command.category": "Markdown 双语同步",
+  "task.cancelAll.title": "取消全部任务",
+  "task.clearFinished.title": "清空任务历史",
+  "task.openOutput.title": "打开任务输出",
+  "task.languages.title": "切换语言",
+  "task.openSource.title": "打开源文件",
+  "task.openPreview.title": "打开双语预览",
+  "task.cancel.title": "取消任务"
 }

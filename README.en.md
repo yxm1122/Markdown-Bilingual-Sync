@@ -19,7 +19,7 @@ Current version **0.12.0**: full localization of the extension (English by defau
 - **Import existing translations.** Imports are validated and aligned against the top-level block structure and marked as locked translations. Start from the preview toolbar or the Command Palette.
 - **Cache maintenance.** Clear the cache for the current file, or remove every translation cache from extension storage in one step.
 - **Batch processing.** Folder translation packs blocks into batches by token budget, with one concurrency limit shared by files and in-file batches. Successful batches survive failures, and existing caches can be exported in bulk.
-- **Translation Tasks panel.** A status bar button toggles a persistent view in the secondary sidebar showing the batch overview, per-file details, recent errors, and runtime status. Source and target languages can be switched from the panel, with a middle button to swap them; the options come from the `supportedLanguages` setting.
+- **Translation Tasks view.** A status bar button toggles a native TreeView showing the batch overview, active tasks, recent completions, and runtime status. Task rows can open the source file, open the preview, or cancel; the view title's **Change Languages** action uses a native QuickPick to switch or swap source/target languages.
 - **Batch translation and incremental sync.** Saving the source only marks translations as stale; translation requests are made only by explicit commands.
 - **Translation lock.** After you edit and save a translation in the cache, that block is protected from automatic retranslation.
 - **In-preview editing.** Click source or translation content to edit the underlying Markdown in place. A saved translation is locked immediately; source edits can be staged, reviewed as a diff, and then written back.
@@ -187,19 +187,18 @@ Block statuses after alignment: `untranslated`, `copy-pending`, `translated`, `s
 
 ### Task Panel
 
-- The **Translation Tasks** button in the status bar shows a running indicator and the active/limit concurrency while tasks are running.
-- Clicking it toggles the **Translation Tasks** view in the right secondary sidebar rather than an editor tab.
-- VS Code does not let extensions place views in the secondary sidebar directly. On first use, drag the **Translation Tasks** icon from the activity bar to the right secondary sidebar; VS Code remembers the layout afterwards, and the status bar button then shows and hides the view directly.
-- The panel contains:
+- The **Translation Tasks** button in the status bar shows a running indicator and the active/limit concurrency while tasks are running; click it to show or hide the task view.
+- The task panel is a native VS Code **TreeView** in the **Translation Tasks** activity-bar container. On first use, drag it to the right secondary sidebar if you prefer; VS Code remembers the location. The status bar button still toggles it directly.
+- **Upgrade note:** the view container ID changed from the old dotted value to `markdownBilingualSyncTasks`. If the view disappears after upgrading, drag it from the activity bar once.
+- The view contains:
   - **Batch overview**: active files, active block progress, failed blocks, concurrency usage, and waiting requests.
-  - **File details**: file, phase, block progress, failure count, elapsed time, and errors.
-  - **History & errors**: recently completed or failed tasks, with an option to clear the history.
+  - **Active tasks**: file, phase, block progress, failure count, elapsed time, and errors; inline actions open the source file, open the preview, or cancel.
+  - **Recently completed**: recently finished tasks with elapsed/failure details, plus a command to clear history.
   - **Runtime status**: translation service, model or template, batch budget, and block limit.
-  - **Languages**: source and target selectors above *Runtime status*. The options come from `markdownBilingualSync.supportedLanguages` in the order given by the setting, and the current `sourceLanguage` and `targetLanguage` are always listed. The middle button swaps the two. Switching writes to workspace settings when they exist and to user settings otherwise, and affects only later translations and exports.
-- The panel header can cancel all tasks, clear history, and open the output log. Each file offers opening the source file or the bilingual preview.
-- Batch translation and command- or preview-triggered full-file syncs no longer show VS Code progress or completion notifications; progress and results go to the panel. Cancel confirmations, import and export confirmations, and API configuration prompts are still shown.
+- The view title provides cancel all, clear history, open output, and **Change Languages**. Language switching uses a native QuickPick for source, target, or swap; options come from `markdownBilingualSync.supportedLanguages` and writes keep the existing setting scope. Changes affect only later translations and exports.
+- Batch translation and command- or preview-triggered full-file syncs no longer show VS Code progress or completion notifications; progress and results go to the view. Cancel confirmations, import/export confirmations, and API prompts are still shown.
 - Task rows aggregate file-level batch and sync operations. Single-block retranslation or back-translation in the preview keeps its brief inline feedback and does not create its own row.
-- The status bar button does not open the panel automatically; it toggles the view based on your clicks.
+- The status bar button does not open the task view automatically; it toggles the view when clicked.
 
 ### Provider Presets
 
@@ -229,7 +228,7 @@ Block statuses after alignment: `untranslated`, `copy-pending`, `translated`, `s
 | Export Translations… | Writes a language-suffixed file after a side-by-side diff confirmation |
 | Edit Translation Cache | Opens the global translation cache for the current file |
 | Refresh Bilingual Preview | Refreshes the preview manually |
-| Open Translation Tasks Panel | Toggles the task view in the right secondary sidebar to check progress or cancel tasks |
+| Open Translation Tasks Panel | Shows or hides the Translation Tasks TreeView to check progress or cancel tasks |
 | Open Translation Cache Folder | Opens the global cache folder |
 | Clear Current Translation Cache | Deletes the cache for the current file (cannot be undone) |
 | Clear All Translation Caches | Recursively deletes every cache in extension storage (cannot be undone) |

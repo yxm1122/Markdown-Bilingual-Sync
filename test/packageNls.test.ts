@@ -73,14 +73,25 @@ describe("package manifest localization", () => {
     expect(manifest.contributes.configuration.title).toBe(
       "%configuration.title%",
     );
-    expect(manifest.contributes.commands).toHaveLength(21);
-    for (const command of manifest.contributes.commands) {
+    const taskCommands = manifest.contributes.commands.filter((command) =>
+      command.command.startsWith("markdownBilingualSync.task."),
+    );
+    const regularCommands = manifest.contributes.commands.filter(
+      (command) => !command.command.startsWith("markdownBilingualSync.task."),
+    );
+    expect(regularCommands).toHaveLength(21);
+    expect(taskCommands).toHaveLength(7);
+    for (const command of regularCommands) {
       expect(command.title).toMatch(/^%command\.[\w]+\.title%$/);
       expect(command.category).toBe("%command.category%");
     }
+    for (const command of taskCommands) {
+      expect(command.title).toMatch(/^%task\.[\w]+\.title%$/);
+      expect(command.category).toBeUndefined();
+    }
     const container = manifest.contributes.viewsContainers.activitybar[0];
     expect(container.title).toBe("%viewContainer.tasks.title%");
-    const view = manifest.contributes.views["markdownBilingualSync.tasks"][0];
+    const view = manifest.contributes.views["markdownBilingualSyncTasks"][0];
     expect(view.name).toBe("%view.tasks.name%");
     const properties = Object.values(manifest.contributes.configuration.properties);
     expect(properties).toHaveLength(20);

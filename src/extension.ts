@@ -12,7 +12,7 @@
  * 命令/视图生命周期：
  * - activate 每次扩展主机启动时调用一次；命令注册与监听都 push 到 context.subscriptions，
  *   由 VS Code 在停用/卸载时统一释放（状态栏在构造时自行登记）；
- * - 任务视图通过 registerWebviewViewProvider 按需解析，provider 自带 dispose；
+ * - 任务视图使用原生 TreeView，provider 自带 dispose；
  * - 单文件同步每次运行创建独立的 AbortController 与任务；
  *   批量翻译为每个文件创建独立 AbortController：取消单个任务只中止该文件，
  *   “取消全部”会逐一中止所有文件（未开始的文件在 worker 领取时跳过）。
@@ -396,7 +396,6 @@ export function activate(context: vscode.ExtensionContext): void {
   context.subscriptions.push(previewManager);
   // 任务视图只依赖快照与命令回调，不直接访问同步服务。
   const taskViewProvider = new TaskViewProvider({
-    extensionUri: context.extensionUri,
     monitor: taskMonitor,
     limiter: translationLimiter,
     output,
@@ -422,18 +421,16 @@ export function activate(context: vscode.ExtensionContext): void {
       };
     },
   });
-  context.subscriptions.push(
-    taskViewProvider,
-    vscode.window.registerWebviewViewProvider(
-      "markdownBilingualSync.tasksView",
-      taskViewProvider,
-      {
-        webviewOptions: {
-          retainContextWhenHidden: true,
-        },
-      },
-    ),
+  const taskTreeView = vscode.window.createTreeView(
+    "markdownBilingualSync.tasksView",
+    {
+      treeDataProvider: taskViewProvider,
+      showCollapseAll: true,
+    },
   );
+  taskViewProvider.setTreeView(taskTreeView);
+  taskViewProvider.registerCommands();
+  context.subscriptions.push(taskViewProvider, taskTreeView);
   // 状态栏在构造时自行注册到 context.subscriptions，无需保存引用。
   new TranslationStatusBar(
     context,

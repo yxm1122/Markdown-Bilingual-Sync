@@ -27,8 +27,8 @@ npm run watch     # 增量构建，适合 F5 调试
 
 1. `scripts/build-l10n.ts` 校验 `src/i18n/en.ts` / `zh.ts` / `errors/*` 并生成 `l10n/bundle.l10n*.json`。
 2. `esbuild.js` 把 `src/extension.ts` 及其依赖打包为 `dist/extension.js`（CJS、Node 20、`vscode` external）。
-3. `scripts/copy-katex.mjs` 把 KaTeX 样式与字体复制到 `media/katex/`。
-4. `media/preview.js`、`media/taskView.js` 是浏览器原生脚本，不经过 esbuild。
+3. 同一脚本把 `src/webview/preview/index.tsx` 打成 `dist/webview/preview.js`（浏览器 IIFE，Preact）。
+4. `scripts/copy-katex.mjs` / `scripts/copy-codicons.mjs` 把 KaTeX、Codicon 样式与字体复制到 `media/`。
 
 `npm run watch` 只会在启动时执行一次 `l10n:build`，不会监听 `src/i18n/en.ts`、`zh.ts` 或 `errors/*` 的变化；修改文案后请手动运行 `npm run l10n:build` 并重新加载扩展宿主。`npm run test:watch` 通过 `pretest:watch` 在启动前生成 bundle。
 

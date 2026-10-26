@@ -4,12 +4,13 @@
 
 实现文件：
 
-- 布局状态：[`src/preview/layout.ts`](../src/preview/layout.ts)
+- 首屏壳与资源 URI/CSP：[`src/preview/appShell.ts`](../src/preview/appShell.ts)
+- 宿主下行消息类型：[`src/preview/protocol.ts`](../src/preview/protocol.ts)
 - 纯视图模型：[`src/preview/previewModel.ts`](../src/preview/previewModel.ts)
-- HTML 生成：[`src/preview/html.ts`](../src/preview/html.ts)
-- CSP/资源外壳：[`src/preview/webviewHtml.ts`](../src/preview/webviewHtml.ts)
 - 面板控制器与消息路由：[`src/preview/previewManager.ts`](../src/preview/previewManager.ts)
-- 浏览器侧脚本与样式：[`media/preview.js`](../media/preview.js)、[`media/preview.css`](../media/preview.css)
+- 原生 UI（Preact）：[`src/webview/preview/app.tsx`](../src/webview/preview/app.tsx)、[`src/webview/preview/index.tsx`](../src/webview/preview/index.tsx)
+- 预览样式：[`media/preview-native.css`](../media/preview-native.css)
+- 旧字符串渲染器（仅测试/历史参考，不进入 VSIX）：[`src/preview/html.ts`](../src/preview/html.ts)
 
 ## 1. 渲染管线
 
@@ -21,14 +22,28 @@ SyncService.loadPreviewState(sourceUri)
        ├─ alignDocument（块状态）
        ├─ 合并原文暂存与 target-only 块
        └─ 统计、警告、脚注 HTML、assist 状态
-  → buildWebviewHtml
+  → buildPreviewAppShell（仅首次加载）
        ├─ 生成 nonce / CSP
-       ├─ asWebviewUri 解析 media 资源
-       └─ buildPreviewHtml（完整 HTML）
+       ├─ asWebviewUri 解析 CSS / codicon / KaTeX / dist/webview/preview.js
+       ├─ 注入本地化预览文案（#mbs-ui-text）
+       └─ 注入初始状态（#mbs-initial-state）
   → panel.webview.html
+  → 脚本挂载完成后发送 ready
+  → 之后每次刷新：postMessage({ type: "state", state })
+  → Preact 按块 key 复用 DOM，局部更新
 ```
 
-`PreviewManager` 每个源文件维护一个 `PreviewPanelSession`。刷新不是直接写 HTML，而是进入 `updateQueue` 串行执行；`updateVersion` 递增，只有最后一次异步更新可以写入页面。
+`PreviewManager` 每个源文件维护一个 `PreviewPanelSession`。刷新进入 `updateQueue` 串行执行；`updateVersion` 递增，只有最后一次异步更新可以落地。
+
+### 原生渲染层
+
+- 首次加载写入完整壳；脚本发送 `ready` 后，宿主只发送 `state`，不会再替换整页 HTML。
+- 模型与面板状态（model/layout/readonly）由宿主下发；预览模式、摘要展开、滚动位置、内联编辑和菜单由 Webview 本地维护。
+- 未变化的块通过 `key` 复用，Preact 只更新变化部分，避免整页重载、白闪和丢失焦点。
+- 摘要/术语表草稿在用户编辑期间不会被新的 state 覆盖；保存后以宿主返回值为准。
+- 首次加载期间的控制消息（busy/toast/确认结果）由宿主排队，`ready` 后补发。
+- 分栏滚动同步、只读栏、内联编辑和弹窗都是组件树的一部分；不依赖宿主生成的按钮 HTML。
+- 错误页不加载预览脚本，宿主会重置 `webviewReady` 并丢弃排队消息。
 
 ## 2. 布局与只读
 
@@ -72,6 +87,11 @@ SyncService.loadPreviewState(sourceUri)
 Webview 只通过 `vscode.postMessage` 与宿主通信。宿主在 `PreviewManager.onMessage` 中按 `type` 白名单路由，并对字段做最小类型/整数校验；未知类型静默忽略。
 
 ### 4.1 Webview → 宿主
+
+| type | 关键字段 | 作用 |
+| --- | --- | --- |
+| `ready` | — | 脚本完成挂载；之后宿主可以发送 `state` |
+
 
 | type | 关键字段 | 作用 |
 | --- | --- | --- |
@@ -123,6 +143,7 @@ Webview 只通过 `vscode.postMessage` 与宿主通信。宿主在 `PreviewManag
 
 | type | 关键字段 | 作用 |
 | --- | --- | --- |
+| `state` | `state.model`, `state.layout`, `state.readonly`, `notice?`, `exportConfirmation?` | 下发完整模型与面板状态；Preact 局部更新 |
 | `busy` | `busy`, `message?` | 显示/解除忙碌态 |
 | `toast` | `text`, `kind` | 面板内提示 |
 | `sourceConfirm` | `data.destination`, `count`, `diff` | 打开原文写回确认框 |
@@ -131,7 +152,15 @@ Webview 只通过 `vscode.postMessage` 与宿主通信。宿主在 `PreviewManag
 | `exportSettled` | `action: write\|cancel` | 导出写入/取消完成 |
 | `exportError` | `message` | 导出写入失败 |
 
-初始的导出/原文确认数据也会被序列化进页面（`application/json` 脚本标签），页面加载后自动打开对应 modal，保证刷新后仍能看到待确认状态。
+首次加载的初始化数据和本地化文案序列化进 `application/json` 脚本标签；导出确认随初始状态或 `state` 消息下发，原文确认继续使用独立的 `sourceConfirm` 消息。任何普通刷新都会关闭已展示的导出确认，避免提交过期 diff。
+
+### 4.3 状态归属
+
+| 状态 | 归属 | 持久化 |
+| --- | --- | --- |
+| 块、缓存、计数、摘要正文、确认数据、布局、只读、忙碌态 | 宿主 | 缓存/globalStorage/session |
+| 预览模式 | Webview | `vscode.setState` |
+| 摘要展开、摘要/术语表草稿、内联编辑、菜单、滚动位置 | Webview | 内存 + `vscode.setState`（草稿用 sessionStorage） |
 
 ## 5. 原文暂存与写回
 
@@ -184,16 +213,16 @@ Webview 只通过 `vscode.postMessage` 与宿主通信。宿主在 `PreviewManag
 
 ## 8. 导出与原文确认 modal
 
-- 导出：宿主 `prepare` 生成内容与 diff，内联数据或 `sourceConfirm`/导出数据传给 Webview；modal 内分栏展示差异。确认发 `exportWrite`，取消发 `exportCancel`。
+- 导出：宿主 `prepare` 生成内容与 diff，通过初始状态或 `state.exportConfirmation` 传给 Webview；modal 内分栏展示差异。确认发 `exportWrite`，取消发 `exportCancel`。
 - 原文写回：`applySourceEdits` 后宿主发送 `sourceConfirm`；确认发 `writeSourceEdits`，取消只关闭 modal。
 - 导出确认与刷新有竞态保护：`exportConfirmPending` 阻止队列中的刷新覆盖待确认状态；导出提交期间 `exportCommitting` 阻止重复提交。
 - 确认框关闭/写入完成后必须清理待确认数据。
 
 ## 9. 安全与 CSP
 
-`buildWebviewHtml`：
+`buildPreviewAppShell`：
 
-- 每次渲染生成新的 18 字节随机 nonce。
+- 首次加载生成新的 18 字节随机 nonce；之后的 state 消息不重写 nonce。
 - `default-src 'none'`；脚本只允许 `nonce-...`。
 - `connect-src 'none'`：Webview 不能自行发网络请求。
 - `object-src 'none'`、`base-uri 'none'`。
@@ -210,13 +239,12 @@ Webview 只通过 `vscode.postMessage` 与宿主通信。宿主在 `PreviewManag
 
 ## 10. 新增一个 UI 动作的清单
 
-1. 同时修改 `src/i18n/en.ts` 与 `src/i18n/zh.ts` 增加文案（按钮、title、toast），保持 key 与占位符一致，然后运行 `npm run l10n:build`。
-2. 在 `src/preview/html.ts` 渲染按钮，设置唯一的 `data-action` 和必要的数据属性。
-3. 如果动作需要先就地编辑/特殊交互，在 `media/preview.js` 处理；否则点击事件会按 `data-action` 自动构造 `{ type }` 消息。
-4. 在 `src/preview/previewManager.ts` 的 `onMessage` 增加 `case`，校验字段，调用对应服务。
-5. 在 `SyncService` / `ExportService` 实现业务逻辑；写盘前遵守锁、并发校验和缓存写入规则。
-6. 更新 `test/previewModel.test.ts`，断言 HTML 中包含按钮/文案/转义；必要时增加服务层测试。
-7. 手动在隔离 profile 中验证布局、只读、滚动、刷新和取消路径。
+1. 在 `src/i18n/en.ts` 与 `src/i18n/zh.ts` 增加文案，保持 key/占位符一致，运行 `npm run l10n:build`。
+2. 在 `src/preview/protocol.ts` 增加下行消息（如需要），在 `src/preview/previewManager.ts` 的 `onMessage` 增加校验与 `case`。
+3. 在 `src/webview/preview/app.tsx` 的对应组件增加按钮/菜单项，调用 `sendMessage`；状态变化由宿主 `state` 消息回来。
+4. 在 `SyncService` / `ExportService` 实现业务逻辑；写盘前遵守锁、并发校验和缓存规则。
+5. 更新 `test/appShell.test.ts` / `test/taskViewProvider.test.ts` / 模型测试；交互路径用隔离 profile 验证。
+6. 若动作影响块状态，补充 `previewModel.test.ts`；若涉及消息/确认，补协议或服务层测试。
 
 ## 11. 静态预览
 
@@ -228,4 +256,4 @@ Webview 只通过 `vscode.postMessage` 与宿主通信。宿主在 `PreviewManag
 - `tmp/preview-states.html`：原文变更 + 译文锁定
 - `tmp/demo.zh.md` 等缓存文件
 
-生成的 HTML 直接引用 `media/` 资源，可在浏览器中打开；`media/preview.js` 检测不到 `acquireVsCodeApi` 时会用 localStorage 和 `window.__mbsMessages` 模拟宿主。它只用于本地检查布局/HTML，不替代真实 Webview 测试。
+生成的页面使用原生 Preact 预览壳；`preview.js` 检测不到 `acquireVsCodeApi` 时会用 localStorage 和 `window.__mbsMessages` 模拟宿主，并附带只用于静态预览的深色主题变量。它只用于本地检查布局/HTML，不替代真实 Webview 测试。

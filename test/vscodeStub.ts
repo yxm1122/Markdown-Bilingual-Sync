@@ -86,6 +86,25 @@ export const vscodeStub = {
   ThemeColor: class {
     constructor(readonly id: string) {}
   },
+  ThemeIcon: class {
+    constructor(
+      readonly id: string,
+      readonly color?: unknown,
+    ) {}
+  },
+  TreeItemCollapsibleState: { None: 0, Collapsed: 1, Expanded: 2 },
+  TreeItem: class {
+    id?: string;
+    description?: string;
+    tooltip?: unknown;
+    iconPath?: unknown;
+    contextValue?: string;
+    command?: unknown;
+    constructor(
+      readonly label: string,
+      readonly collapsibleState = 0,
+    ) {}
+  },
   MarkdownString: class {
     private value = "";
     appendMarkdown(text: string) {

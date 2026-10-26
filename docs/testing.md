@@ -61,7 +61,8 @@ CI 会依次执行 `npm ci`、`typecheck`、`test`、`package`。本地提交前
 | `i18nUnused.test.ts` | UI_TEXT 与错误目录的未引用 key 检查 |
 | `htmlEscaping.test.ts` | 本地化文案含引号/尖括号时的 HTML 转义 |
 | `packageNls.test.ts` | `%key%` 引用完整性、品牌字段/命令/设置与双语言 key 集合 |
-| `taskViewHtml.test.ts` | 任务面板静态骨架、语言选择器、`<html lang>` 与注入文案 |
+| `taskViewProvider.test.ts` | 任务 TreeView 节点、状态图标/详情、语言切换作用域与交换回滚 |
+| `appShell.test.ts` | 原生预览首屏 CSP、资源 URI、初始状态 JSON、文案注入与转义 |
 
 `align.ts` 没有独立测试文件，对齐逻辑通过 `sync`、`previewModel`、`export` 和 `syncEditing` 测试间接覆盖。修改对齐算法时应主动补充直接用例。
 
@@ -116,16 +117,14 @@ const anchor = serializeAnchor({
 - 用 Mock Provider 测试同步/预览，不要依赖网络。
 - 新增 Provider 时至少覆盖：成功、缺块/重复/空结果、HTTP 错误、取消、密钥不出现在错误文本。
 
-### 4.5 预览 HTML
+### 4.5 预览壳与原生 UI
 
-`buildPreviewHtml` / `buildPreviewModel` 是纯函数，可以断言：
+生产预览由 `buildPreviewAppShell` + `src/webview/preview/app.tsx` 渲染：
 
-- 动态文本被转义；
-- 按钮带正确的 `data-action` / `data-*`；
-- 只读/占位/摘要面板状态；
-- 两个 assist 开关的 `title` 提示存在。
-
-这类测试不能替代真实浏览器渲染；CSS 布局、滚动同步、拖拽、焦点陷阱仍需手动 E2E。
+- `appShell.test.ts` 断言 CSP、资源 URI、初始状态 JSON、文案注入和 `</script>` 转义；
+- `previewModel.test.ts` 仍用旧的字符串渲染器（`src/preview/html.ts`，仅测试/历史参考）断言模型字段、统计和 HTML 转义；
+- 新 UI 的按钮、菜单和编辑态在 `app.tsx`；改动交互时用隔离 profile 跑真实 E2E（同步、分栏、只读、编辑、导出/原文 diff、滚动同步），并检查 `window.__stableTestMarker` 不丢失；
+- `npm run preview:sample` 生成原生静态页面，可用于视觉检查，不替代真实 Webview。
 
 ### 4.6 本地化
 

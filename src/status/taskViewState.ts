@@ -1,16 +1,16 @@
 /**
  * 任务视图语言状态（纯逻辑）。
  *
- * 职责：把设置中的语言值转换为任务视图 state 的字段，并校验 webview 发来的原文/译文
+ * 职责：把设置中的语言值转换为任务视图的展示字段，并校验任务视图/命令发来的原文/译文
  * 语言切换请求。TaskViewProvider 只负责读取配置、展示错误与写回设置，判定规则集中
  * 在这里，便于在 Node/Vitest 中覆盖非法值与大小写边界。
  *
  * 关键不变量：
  * - supportedLanguages 先经 normalizeSupportedLanguages 规范化；当前 sourceLanguage 与
- *   targetLanguage 合法且不在列表中（大小写不敏感）时追加到末尾，保证两个下拉框始终
+ *   targetLanguage 合法且不在列表中（大小写不敏感）时追加到末尾，保证两个语言选项始终
  *   能显示当前值；
  * - 切换值必须位于 supportedLanguages，且不能与另一侧语言相同；
- * - 成功返回的 language 采用选项中的原始拼写，保证能与 <option> 精确匹配；
+ * - 成功返回的 language 采用选项中的原始拼写，保证能与 QuickPick 选项精确匹配；
  * - 交换只在两侧都有效、都受支持且互不相同时成功。
  *
  * 与其他模块的关系：本模块不导入 vscode/DOM；language.ts 提供共享的 BCP-47 校验与
@@ -20,11 +20,11 @@ import { LANGUAGE_TAG, normalizeSupportedLanguages } from "../util/language";
 
 /** 任务视图语言区展示与切换所需的字段。 */
 export interface TaskViewLanguages {
-  /** 当前原文语言；作为左侧下拉框选中值。 */
+  /** 当前原文语言；作为源语言选项的选中值。 */
   sourceLanguage: string;
-  /** 当前译文语言；作为右侧下拉框选中值。 */
+  /** 当前译文语言；作为目标语言选项的选中值。 */
   targetLanguage: string;
-  /** 两个下拉框共用的选项，已完成规范化并包含当前原文/译文语言。 */
+  /** 源/目标语言 QuickPick 共用的选项，已完成规范化并包含当前原文/译文语言。 */
   supportedLanguages: string[];
 }
 
@@ -49,7 +49,7 @@ function toText(value: unknown): string {
  *
  * sourceLanguage/targetLanguage 只做 trim，不在展示层修正用户配置；真正的合法性由
  * SyncService 在翻译前校验并给出既有错误文案。supportedLanguages 会兜底加入当前
- * sourceLanguage 与 targetLanguage，避免设置列表遗漏当前值时下拉框显示空白。
+ * sourceLanguage 与 targetLanguage，避免设置列表遗漏当前值时选项缺失。
  *
  * @param sourceLanguage 设置中的原文语言原始值。
  * @param targetLanguage 设置中的译文语言原始值。
@@ -89,7 +89,7 @@ export function buildTaskViewLanguages(
  * 相同（大小写不敏感）时拒绝，与 SyncService.getSettings 的约束保持一致。
  *
  * @param requested webview 消息中的 language 值（不可信）。
- * @param supportedLanguages 当前下拉框选项。
+ * @param supportedLanguages 当前语言选项。
  * @param otherLanguage 另一侧的语言（切换原文时传译文，反之亦然）。
  * @returns 校验结果；invalid/sameAsOther 时 language 为便于提示的展示值。
  */

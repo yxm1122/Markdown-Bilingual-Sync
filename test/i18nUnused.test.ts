@@ -17,7 +17,11 @@ function collectCorpus(): string {
         // i18n 目录是文案定义本身，不参与“是否被引用”的扫描。
         if (full.includes(path.join("src", "i18n"))) continue;
         walk(full);
-      } else if (full.endsWith(".ts") || full.endsWith(".js")) {
+      } else if (
+        full.endsWith(".ts") ||
+        full.endsWith(".tsx") ||
+        full.endsWith(".js")
+      ) {
         files.push(full);
       }
     }
@@ -48,10 +52,6 @@ describe("localization key usage", () => {
     path.join(root, "src/export/exportService.ts"),
     "utf8",
   );
-  const taskViewJs = readFileSync(
-    path.join(root, "media/taskView.js"),
-    "utf8",
-  );
   const previewManager = readFileSync(
     path.join(root, "src/preview/previewManager.ts"),
     "utf8",
@@ -72,10 +72,7 @@ describe("localization key usage", () => {
       return exportService.includes("UI_TEXT.preview.exportStats");
     }
     if (leaf.startsWith("taskPanel.statusLabels.")) {
-      return (
-        corpus.includes("UI_TEXT.taskPanel.statusLabels") ||
-        taskViewJs.includes("TEXT.statusLabels")
-      );
+      return corpus.includes("UI_TEXT.taskPanel.statusLabels");
     }
     if (leaf.startsWith("preview.errorPage.")) {
       return previewManager.includes("UI_TEXT.preview.errorPage");
@@ -102,6 +99,9 @@ describe("localization key usage", () => {
           : "",
         leaf.startsWith("preview.exportStats.")
           ? `text.${leaf.slice("preview.exportStats.".length)}`
+          : "",
+        leaf.startsWith("preview.")
+          ? `text.preview.${leaf.slice("preview.".length)}`
           : "",
       ].filter(Boolean);
       return !candidates.some((candidate) => corpus.includes(candidate));
