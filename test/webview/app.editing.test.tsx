@@ -396,6 +396,25 @@ describe("preview editing", () => {
     });
   });
 
+  it("does not enter editing after selecting text", () => {
+    const { container } = render(
+      <harness.App boot={makeBoot(makeModel())} text={harness.text} />,
+    );
+    const block = firstBlock(container);
+    const content = block.querySelector(".pv-pane-target .pv-md") as HTMLElement;
+    const paragraph = content.querySelector("p")?.firstChild;
+    const range = document.createRange();
+    range.selectNodeContents(paragraph ?? content);
+    const selection = window.getSelection()!;
+    selection.removeAllRanges();
+    selection.addRange(range);
+
+    fireEvent.click(content);
+
+    expect(within(block).queryByRole("textbox")).toBeNull();
+    selection.removeAllRanges();
+  });
+
   it("opens Markdown links through the host", () => {
     const model = makeModel({
       blocks: [
@@ -435,6 +454,21 @@ describe("preview editing", () => {
     expect(document.activeElement).toBe(items[items.length - 1]);
 
     fireEvent.keyDown(document, { key: "Escape" });
+    expect(screen.queryByRole("menu")).toBeNull();
+  });
+
+  it("closes the block menu when the page scrolls", () => {
+    const { container } = render(
+      <harness.App boot={makeBoot(makeModel())} text={harness.text} />,
+    );
+    openBlockMenu(firstBlock(container));
+    const menu = screen.getByRole("menu");
+
+    // 菜单自身滚动不关闭。
+    fireEvent.scroll(menu);
+    expect(screen.queryByRole("menu")).toBeTruthy();
+
+    fireEvent.scroll(container.querySelector(".pv-body") as HTMLElement);
     expect(screen.queryByRole("menu")).toBeNull();
   });
 });

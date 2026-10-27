@@ -74,6 +74,7 @@ export type OutboundMessage =
   | { type: "exportWrite" }
   | { type: "exportCancel" }
   | { type: "writeSourceEdits" }
+  | { type: "cancelSourceWrite" }
   | { type: "openLink"; href: string };
 
 export interface MenuAction {

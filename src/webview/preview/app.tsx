@@ -261,6 +261,13 @@ function Menu(props: {
         props.onClose();
       }
     };
+    const onScroll = (event: Event) => {
+      // 菜单自身内容滚动时保持打开；页面或分栏滚动时立即关闭，避免菜单悬空。
+      if (event.target instanceof Node && ref.current?.contains(event.target)) {
+        return;
+      }
+      props.onClose();
+    };
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
         event.preventDefault();
@@ -297,9 +304,11 @@ function Menu(props: {
     };
     document.addEventListener("mousedown", onPointerDown);
     document.addEventListener("keydown", onKeyDown);
+    window.addEventListener("scroll", onScroll, true);
     return () => {
       document.removeEventListener("mousedown", onPointerDown);
       document.removeEventListener("keydown", onKeyDown);
+      window.removeEventListener("scroll", onScroll, true);
     };
   }, [props.onClose]);
 
@@ -970,6 +979,19 @@ function handleContentClick(
   const target = event.target;
   if (!(target instanceof Element)) {
     return;
+  }
+  // 拖选/双击选词后浏览器仍会派发 click；此时不应进入编辑或打开链接。
+  const selection = window.getSelection();
+  if (selection && !selection.isCollapsed && selection.toString().trim()) {
+    const content = target.closest(".pv-md");
+    const inContent = (node: Node | null) =>
+      Boolean(content && node && content.contains(node));
+    if (
+      content &&
+      (inContent(selection.anchorNode) || inContent(selection.focusNode))
+    ) {
+      return;
+    }
   }
   const link = target.closest("a");
   if (link) {
@@ -2545,7 +2567,10 @@ export function App(props: { boot: BootData; text: UiCatalog }) {
           data={sourceDialog.data}
           writing={sourceDialog.writing}
           error={sourceDialog.error}
-          onCancel={() => setSourceDialog(null)}
+          onCancel={() => {
+            setSourceDialog(null);
+            sendMessage({ type: "cancelSourceWrite" });
+          }}
           onConfirm={() => {
             setSourceDialog((current) => (current ? { ...current, writing: true, error: undefined } : current));
             sendMessage({ type: "writeSourceEdits" });

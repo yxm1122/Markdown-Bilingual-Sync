@@ -7,7 +7,7 @@
 
 Translate Markdown inside VS Code and read it as a bilingual preview. The source text stays the single source of truth, and translations you edit by hand are locked so they are never silently overwritten.
 
-Current version **0.13.1**: the native preview and task panel rebuild is complete (stable Webview shell + Preact, native TreeView), with jsdom component tests, a three-theme screenshot matrix, and a 320-block performance baseline. This patch keeps the scroll position when switching between source-only and target-only in split view. The 0.12.0 localization work (English by default, zh-cn built in) is included.
+Current version **0.13.2**: the native preview and task panel rebuild is complete (stable Webview shell + Preact, native TreeView), with jsdom component tests, a three-theme screenshot matrix, and a 320-block performance baseline. This patch keeps the split scroll position across single-pane modes, avoids entering edit mode after selecting text, closes block menus on scroll, and applies staged source changes before retranslation. The 0.12.0 localization work (English by default, zh-cn built in) is included.
 
 ## Features
 

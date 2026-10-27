@@ -335,6 +335,27 @@ export class PreviewManager implements vscode.Disposable {
 
 // ---- PreviewPanelSession：单个面板的渲染与编辑状态机 ----
 
+/** 单块重译的可选并发校验/限制。 */
+interface RetranslateExpectation {
+  sourceHash?: string;
+  cacheId?: string;
+  requireMachine?: boolean;
+}
+
+/** 等待原文写回确认后再执行的重译动作。 */
+type PendingRetranslateAction =
+  | {
+      kind: "block";
+      blockIndex: number;
+      expected?: RetranslateExpectation;
+      /** 写回前块的源文哈希；写回可能移动块索引，用于重新定位。 */
+      sourceHash?: string;
+      /** 该块暂存后的原文；写回后按内容匹配新索引。 */
+      stagedText?: string;
+    }
+  | { kind: "stale" }
+  | { kind: "all" };
+
 /**
  * 一个预览面板的全部运行时状态。
  *
@@ -382,6 +403,8 @@ class PreviewPanelSession implements vscode.Disposable {
   private pendingPairedLocks = new Map<number, PendingPairedLock>();
   /** 暂存所基于的源文件全文；源文件变化时暂存失效。 */
   private pendingSourceBase?: string;
+  /** 原文写回确认后再执行的重译动作；取消写回或暂存失效时清除。 */
+  private pendingRetranslate: PendingRetranslateAction | null = null;
   /** 原文写回进行中；期间跳过所有刷新，防止读到中间态。 */
   private sourceWriteInFlight = false;
   /** 左栏只读（面板级、内存态，不持久化）。 */
@@ -596,6 +619,7 @@ class PreviewPanelSession implements vscode.Disposable {
     this.pendingTargetPromotions.clear();
     this.pendingPairedLocks.clear();
     this.pendingSourceBase = undefined;
+    this.pendingRetranslate = null;
   }
 
   /**
@@ -1047,6 +1071,9 @@ class PreviewPanelSession implements vscode.Disposable {
         case "writeSourceEdits":
           await this.writeSourceEdits();
           break;
+        case "cancelSourceWrite":
+          this.pendingRetranslate = null;
+          break;
         case "backTranslate":
           if (blockIndex !== undefined) {
             await this.backTranslateBlock(blockIndex);
@@ -1145,6 +1172,12 @@ class PreviewPanelSession implements vscode.Disposable {
    * @returns 确认并同步完成；无过期块或用户取消时只提示。
    */
   private async retranslateStale(): Promise<void> {
+    if (this.hasPendingSource()) {
+      this.pendingRetranslate = { kind: "stale" };
+      this.showToast(UI_TEXT.notifications.pendingSourceBeforeRetranslate, "info");
+      await this.applySourceEdits();
+      return;
+    }
     // 使用最近一次模型里的计数，避免为一次确认再读盘。
     const stale = this.lastModel?.counts.stale ?? 0;
     if (stale === 0) {
@@ -1167,6 +1200,12 @@ class PreviewPanelSession implements vscode.Disposable {
    * @returns 确认并同步完成；用户取消时返回。
    */
   private async retranslateAll(): Promise<void> {
+    if (this.hasPendingSource()) {
+      this.pendingRetranslate = { kind: "all" };
+      this.showToast(UI_TEXT.notifications.pendingSourceBeforeRetranslate, "info");
+      await this.applySourceEdits();
+      return;
+    }
     const choice = await vscode.window.showWarningMessage(
       UI_TEXT.extension.confirmRetranslateAll,
       { modal: true },
@@ -1685,6 +1724,7 @@ class PreviewPanelSession implements vscode.Disposable {
     // 从这一刻到 finally 之间，源文件/缓存都处于中间态，禁止刷新。
     this.sourceWriteInFlight = true;
     this.setBusy(true, UI_TEXT.notifications.sourceWriting);
+    let pendingAction: PendingRetranslateAction | null = null;
     try {
       const state = await this.syncService.loadPreviewState(this.sourceUri);
       // 确认框打开后源文件可能被外部修改：基准不一致就放弃写回。
@@ -1713,6 +1753,7 @@ class PreviewPanelSession implements vscode.Disposable {
       const nextText = proposed.text.split("\n").join(eol);
       // 暂存应用后与原文完全一致：无实际变化，清空暂存即可。
       if (nextText === document.getText()) {
+        pendingAction = this.pendingRetranslate;
         this.clearStagedSource();
         this.postToWebview({ type: "sourceSettled" });
         this.sourceWriteInFlight = false;
@@ -1809,6 +1850,7 @@ class PreviewPanelSession implements vscode.Disposable {
         }
       });
       // 写回成功后清空暂存，并通知 Webview 关闭原文确认框。
+      pendingAction = this.pendingRetranslate;
       this.clearStagedSource();
       this.postToWebview({ type: "sourceSettled" });
       this.showToast(UI_TEXT.notifications.sourceApplied, "success");
@@ -1839,7 +1881,73 @@ class PreviewPanelSession implements vscode.Disposable {
     } finally {
       this.sourceWriteInFlight = false;
       this.setBusy(false);
+      if (pendingAction && !this.disposed) {
+        void this.runPendingRetranslate(pendingAction);
+      }
     }
+  }
+
+  /** 原文写回成功后继续用户先前请求的重译。 */
+  private async runPendingRetranslate(
+    action: PendingRetranslateAction,
+  ): Promise<void> {
+    if (this.disposed) {
+      return;
+    }
+    try {
+      switch (action.kind) {
+        case "block": {
+          const blockIndex = await this.resolveBlockIndexAfterWrite(action);
+          // 用户已经在写回前确认过重译意图，不再弹第二次覆盖确认。
+          await this.retranslateBlock(blockIndex, false, action.expected);
+          break;
+        }
+        case "stale":
+          await this.runSync("stale");
+          break;
+        case "all":
+          await this.runSync("all");
+          break;
+        default:
+          break;
+      }
+    } catch (error) {
+      if (this.disposed) {
+        return;
+      }
+      this.manager.logError(
+        `continue retranslate after source write ${this.sourceUri.fsPath}`,
+        error,
+      );
+      this.showToast(formatError(error), "error");
+    }
+  }
+
+  /** 写回可能插入/删除块导致索引移动；按暂存文本或源哈希重新定位。 */
+  private async resolveBlockIndexAfterWrite(
+    action: Extract<PendingRetranslateAction, { kind: "block" }>,
+  ): Promise<number> {
+    if (action.stagedText === undefined && !action.sourceHash) {
+      return action.blockIndex;
+    }
+    const state = await this.syncService.loadPreviewState(this.sourceUri);
+    const parsed = parseMarkdownDocument(state.sourceText, this.md);
+    const matches = parsed.blocks.filter(
+      (block) =>
+        block.translatable &&
+        (action.stagedText !== undefined
+          ? block.raw === action.stagedText
+          : block.hash === action.sourceHash),
+    );
+    if (!matches.length) {
+      throw new Error(tError("sync.sourceUpdatedRefresh"));
+    }
+    matches.sort(
+      (left, right) =>
+        Math.abs(left.index - action.blockIndex) -
+        Math.abs(right.index - action.blockIndex),
+    );
+    return matches[0].index;
   }
 
   /**
@@ -2458,15 +2566,23 @@ class PreviewPanelSession implements vscode.Disposable {
   private async retranslateBlock(
     blockIndex: number,
     confirm = true,
-    expected?: {
-      sourceHash?: string;
-      cacheId?: string;
-      requireMachine?: boolean;
-    },
+    expected?: RetranslateExpectation,
   ): Promise<void> {
     const view = this.lastModel?.blocks.find(
       (block) => block.blockIndex === blockIndex,
     );
+    if (this.hasPendingSource()) {
+      this.pendingRetranslate = {
+        kind: "block",
+        blockIndex,
+        expected,
+        sourceHash: view?.sourceHash,
+        stagedText: this.pendingSourceEdits.get(blockIndex)?.text,
+      };
+      this.showToast(UI_TEXT.notifications.pendingSourceBeforeRetranslate, "info");
+      await this.applySourceEdits();
+      return;
+    }
     if (confirm && view?.hasCache) {
       const deleted = view.status === "deleted";
       const message = deleted

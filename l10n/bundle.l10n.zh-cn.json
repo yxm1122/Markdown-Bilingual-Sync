@@ -499,6 +499,7 @@
   "The written translation block could not be parsed again.": "写入后的译文块无法重新解析。",
   "There are no stale machine translations.": "没有过期的机器译文。",
   "There are no translation caches to clear in extension storage.": "扩展存储中没有可清除的译文缓存。",
+  "There are staged source changes. Confirm the source write-back first; retranslation continues automatically after it is applied.": "有未应用的原文修改。请先确认写回原文；写回后会自动继续重译。",
   "There are {count} locked translation blocks without matching sources (anchors: {ids}). To avoid losing locked translations, sync was stopped.": "有 {count} 个译文锁定块找不到对应原文（锚点：{ids}）。为避免丢失锁定译文内容，已停止同步。",
   "There are {count} notices; see the Markdown Bilingual Sync log in the “Output” panel.": "有 {count} 条提示，详见“输出”面板中的 Markdown Bilingual Sync 日志。",
   "There is no export awaiting confirmation.": "没有待确认的导出。",

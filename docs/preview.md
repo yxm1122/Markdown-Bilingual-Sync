@@ -191,6 +191,7 @@ Webview 只通过 `vscode.postMessage` 与宿主通信。宿主在 `PreviewManag
 - 写回期间 `sourceWriteInFlight = true`，跳过刷新，避免读到中间态。
 - 写回整体在 `SyncService.runWithSourceLock` 内，和同步互斥。
 - 原文暂存会立即反映在预览中，但只有确认写回才改变源文件。
+- 暂存期间触发单块/过期/全量重译时，先打开原文写回确认；写回成功后自动继续重译，取消写回则取消排队动作。写回可能移动块索引，单块重译会按暂存文本或源哈希重新定位。
 
 ## 6. 译文编辑、插入、删除
 

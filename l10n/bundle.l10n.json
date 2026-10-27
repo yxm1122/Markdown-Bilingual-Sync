@@ -499,6 +499,7 @@
   "The written translation block could not be parsed again.": "The written translation block could not be parsed again.",
   "There are no stale machine translations.": "There are no stale machine translations.",
   "There are no translation caches to clear in extension storage.": "There are no translation caches to clear in extension storage.",
+  "There are staged source changes. Confirm the source write-back first; retranslation continues automatically after it is applied.": "There are staged source changes. Confirm the source write-back first; retranslation continues automatically after it is applied.",
   "There are {count} locked translation blocks without matching sources (anchors: {ids}). To avoid losing locked translations, sync was stopped.": "There are {count} locked translation blocks without matching sources (anchors: {ids}). To avoid losing locked translations, sync was stopped.",
   "There are {count} notices; see the Markdown Bilingual Sync log in the “Output” panel.": "There are {count} notices; see the Markdown Bilingual Sync log in the “Output” panel.",
   "There is no export awaiting confirmation.": "There is no export awaiting confirmation.",

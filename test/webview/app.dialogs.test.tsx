@@ -245,6 +245,6 @@ describe("source confirmation dialog", () => {
     );
 
     expect(screen.queryByRole("dialog")).toBeNull();
-    expect(actions(harness)).toEqual([]);
+    expect(actions(harness)).toContainEqual({ type: "cancelSourceWrite" });
   });
 });

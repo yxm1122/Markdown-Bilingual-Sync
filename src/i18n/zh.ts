@@ -431,6 +431,8 @@ export const UI_TEXT = {
       "编辑期间原文块已变化，请重新编辑。",
     sourceStagedInvalidated:
       "源文件已发生变化，暂存的原文修改已清空，请重新编辑。",
+    pendingSourceBeforeRetranslate:
+      "有未应用的原文修改。请先确认写回原文；写回后会自动继续重译。",
     sourceEditsDiscarded: "已放弃暂存的原文修改。",
     sourceWriting: "正在写回原文…",
     sourceApplied: "原文修改已写入并保存。",

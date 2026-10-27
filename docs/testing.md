@@ -68,7 +68,7 @@ CI 会依次执行 `npm ci`、`typecheck`、`test`、`package`。本地提交前
 | `appShell.test.ts` | 原生预览首屏 CSP、资源 URI、初始状态 JSON、文案注入与转义 |
 | `webview/app.render.test.tsx` | 首屏、统计、模式/布局切换、分栏只读、空状态、控件无障碍名称 |
 | `webview/app.scroll.test.tsx` | 虚拟块几何下的分栏双向同步、仅原文/仅译文切换位置还原、顶部/底部对齐 |
-| `webview/app.editing.test.tsx` | 译文/原文编辑、待插入/独立译文、插入、删除/撤销、链接、菜单键盘导航 |
+| `webview/app.editing.test.tsx` | 译文/原文编辑、待插入/独立译文、插入、删除/撤销、链接、菜单键盘导航、滚动关闭菜单、选择文本不误触编辑 |
 | `webview/app.summary.test.tsx` | 摘要/术语表草稿、assist 开关、提示条/toast、宿主刷新时焦点与草稿保持、忙碌、脚注 |
 | `webview/app.dialogs.test.tsx` | 导出/原文 diff、写入态竞态、错误恢复、关闭与焦点 |
 | `webview/bridge.test.ts` | 首屏 JSON、格式化、VS Code API 与静态预览 localStorage 回退 |

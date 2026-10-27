@@ -454,6 +454,8 @@ export const UI_TEXT = {
       "The source block changed while you were editing. Please edit it again.",
     sourceStagedInvalidated:
       "The source file changed, so staged source edits were cleared. Please edit again.",
+    pendingSourceBeforeRetranslate:
+      "There are staged source changes. Confirm the source write-back first; retranslation continues automatically after it is applied.",
     sourceEditsDiscarded: "Staged source edits discarded.",
     sourceWriting: "Writing source…",
     sourceApplied: "Source changes written and saved.",
