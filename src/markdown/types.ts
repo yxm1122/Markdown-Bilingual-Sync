@@ -1,4 +1,7 @@
-import type { GlossaryEntry } from "../translation/types";
+import type {
+  GlossaryEntry,
+  TranslationBrief,
+} from "../translation/types";
 
 /**
  * Markdown 双语数据模型。
@@ -139,6 +142,8 @@ export interface CacheSummary {
   model?: string;
   /** 随摘要生成的文档术语表；可在预览中检查/修改，为本文档翻译提供术语约束。 */
   glossary?: GlossaryEntry[];
+  /** 文档简报的翻译要求（受众、语气、歧义决策、禁译项）。 */
+  brief?: TranslationBrief;
 }
 
 /**

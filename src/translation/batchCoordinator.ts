@@ -20,6 +20,8 @@
 import { shortHash } from "../util/hash";
 import type {
   GlossaryEntry,
+  ReviewAnnotationDraft,
+  ReviewRequest,
   TranslationChunkHandler,
   SummaryRequest,
   SummaryResult,
@@ -121,6 +123,27 @@ export class BatchTranslationCoordinator implements TranslationProvider {
     return this.delegate.supportsSummary === true;
   }
 
+  /** 审校能力透传。 */
+  get supportsReview(): boolean {
+    return this.delegate.supportsReview === true;
+  }
+
+  /** 审校请求不参与跨文件合并，直接转发给被包装 Provider。 */
+  review(
+    request: ReviewRequest,
+    signal?: AbortSignal,
+  ): Promise<ReviewAnnotationDraft[]> {
+    if (signal?.aborted) {
+      return Promise.reject(new Error(tError("common.translationCancelled")));
+    }
+    if (!this.delegate.review || this.delegate.supportsReview !== true) {
+      return Promise.reject(
+        new Error(tError("translation.routerReviewUnsupported")),
+      );
+    }
+    return this.delegate.review(request, signal);
+  }
+
   /** 摘要请求不参与跨文件合并，直接转发给被包装 Provider。 */
   summarize(
     request: SummaryRequest,
@@ -217,13 +240,22 @@ export class BatchTranslationCoordinator implements TranslationProvider {
       if (calls.length === 0) {
         return;
       }
-      // 以“源语言\0目标语言\0摘要哈希\0术语表哈希”为键分组：语言对、全文摘要或
-      // 合并术语表不同都不能合并，否则固定上下文/文档术语会串台。
+      // 以“源语言\0目标语言\0摘要哈希\0brief 哈希\0context 哈希\0术语表哈希”为键分组：
+      // 固定上下文、翻译要求、邻块上下文或合并术语表不同都不能合并，否则会串台。
       const groups = new Map<string, PendingCall[]>();
       for (const call of calls) {
         const summaryKey = shortHash(call.request.summary?.trim() ?? "");
+        const briefKey = shortHash(
+          JSON.stringify(call.request.brief ?? {}),
+        );
+        const contextKey = shortHash(
+          JSON.stringify(call.request.context ?? null),
+        );
+        const annotationKey = shortHash(
+          JSON.stringify(call.request.annotations ?? []),
+        );
         const glossaryKey = glossaryGroupKey(call.request.glossary);
-        const key = `${call.request.sourceLanguage}\u0000${call.request.targetLanguage}\u0000${summaryKey}\u0000${glossaryKey}`;
+        const key = `${call.request.sourceLanguage}\u0000${call.request.targetLanguage}\u0000${summaryKey}\u0000${briefKey}\u0000${contextKey}\u0000${annotationKey}\u0000${glossaryKey}`;
         const group = groups.get(key) ?? [];
         group.push(call);
         groups.set(key, group);
@@ -401,6 +433,15 @@ export class BatchTranslationCoordinator implements TranslationProvider {
           glossary,
           ...(calls[0].request.summary?.trim()
             ? { summary: calls[0].request.summary }
+            : {}),
+          ...(calls[0].request.brief
+            ? { brief: calls[0].request.brief }
+            : {}),
+          ...(calls[0].request.context
+            ? { context: calls[0].request.context }
+            : {}),
+          ...(calls[0].request.annotations
+            ? { annotations: calls[0].request.annotations }
             : {}),
         },
         controller.signal,

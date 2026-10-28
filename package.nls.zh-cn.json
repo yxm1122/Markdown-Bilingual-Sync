@@ -44,7 +44,7 @@
   "configuration.targetLanguage.description": "译文语言（BCP-47，如 zh-CN、ja-JP）。缓存与导出后缀取主语言标签。",
   "configuration.supportedLanguages.description": "任务面板原文/译文语言快捷切换的候选列表（BCP-47，如 en、zh-CN、ja-JP）。两个下拉框按数组顺序显示；空白、非法和大小写重复项会被忽略，当前 sourceLanguage 与 targetLanguage 始终包含在选项中。注意：缓存与导出后缀只取主语言标签，zh-CN 与 zh-TW 会共用 zh 后缀，请避免同时添加。",
   "configuration.stableTranslation.description": "稳定翻译：重新翻译时把旧译文作为参考，回译时把当前原文作为参考，减少细微修改造成的措辞波动。也可在双语预览中临时切换。",
-  "configuration.summaryContext.description": "默认把手动生成的全文摘要作为同步、重新翻译和回译的上下文。也可在双语预览中临时切换。",
+  "configuration.summaryContext.description": "默认把手动生成的文档简报（摘要与翻译要求）作为同步、重新翻译和回译的上下文。也可在双语预览中临时切换。",
   "configuration.provider.enumDescription.mock": "本地演示翻译，不发起网络请求。",
   "configuration.provider.enumDescription.openai": "调用 OpenAI 兼容的 Chat Completions 接口。API Key 通过命令保存到 VS Code SecretStorage。",
   "configuration.provider.enumDescription.http": "调用任意 JSON/文本 HTTP 接口，通过模板配置请求头、请求体和响应字段。API Key 通过命令保存到 VS Code SecretStorage。",

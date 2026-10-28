@@ -60,6 +60,15 @@ const mocks = vi.hoisted(() => {
       async openTextDocument() {
         return document;
       },
+      fs: {
+        async readFile() {
+          throw { code: "FileNotFound" };
+        },
+        async writeFile() {},
+        async createDirectory() {},
+        async rename() {},
+        async delete() {},
+      },
     },
     window: {
       async showWarningMessage() {
@@ -121,13 +130,20 @@ describe("SyncService block editing and back-translation", () => {
         requests.push(request);
         return request.items.map((item) => ({
           id: item.id,
-          text: `回译：${item.id}`,
+          text:
+            item.kind === "heading"
+              ? `# 回译：${item.id}`
+              : `回译：${item.id}`,
         }));
       },
       async summarize(summaryRequest) {
         return {
           summary: `摘要：${summaryRequest.text.split("\n")[0]}`,
           glossary: [{ source: "summary", target: "摘要" }],
+          brief: {
+            audience: "Developers",
+            toneAndStyle: "Concise technical prose",
+          },
         };
       },
     };
@@ -683,6 +699,27 @@ describe("SyncService block editing and back-translation", () => {
     ).rejects.toThrow(/还没有译文/);
   });
 
+  it("sends read-only neighbor context for single-block requests", async () => {
+    const uri = mocks.FakeUri.file("/project/demo.md") as unknown as Uri;
+    const heading = inspect(SOURCE, cacheStore.text!).alignment.blocks.find(
+      (block) => block.source.kind === "heading",
+    )!;
+
+    requests = [];
+    await service.retranslateBlock(uri, heading.source.index);
+    expect(requests[0].items).toHaveLength(1);
+    expect(requests[0].context?.after?.[0]).toEqual({
+      kind: "paragraph",
+      text: "First paragraph.",
+    });
+
+    requests = [];
+    await service.backTranslateBlock(uri, heading.source.index);
+    expect(requests[0].items).toHaveLength(1);
+    expect(requests[0].context?.after?.[0]?.kind).toBe("paragraph");
+    expect(requests[0].context?.after?.[0]?.text.length).toBeGreaterThan(0);
+  });
+
   it("stores summaries in cache and sends them with stable translation references", async () => {
     const uri = mocks.FakeUri.file("/project/demo.md") as unknown as Uri;
     const paragraph = inspect(SOURCE, cacheStore.text!).alignment.blocks.find(
@@ -724,13 +761,72 @@ describe("SyncService block editing and back-translation", () => {
     expect(generated?.glossary).toEqual([
       { source: "summary", target: "摘要" },
     ]);
+    expect(generated?.brief).toEqual({
+      audience: "Developers",
+      toneAndStyle: "Concise technical prose",
+    });
     // 缓存持久化稳定 provider id，而不是随界面语言变化的显示名。
     expect(generated?.model).toBe("test");
 
     requests = [];
     await service.retranslateAll(uri);
     expect(requests[0].summary).toContain("摘要：");
+    expect(requests[0].brief).toEqual(generated?.brief);
     expect(cacheStore.text).toContain("mbs-summary:");
+  });
+
+  it("saves a document brief and sends it with later requests", async () => {
+    const uri = mocks.FakeUri.file("/project/demo.md") as unknown as Uri;
+    const cacheText = await service.saveBrief(uri, {
+      text: "本文介绍翻译流程。",
+      brief: {
+        audience: "Operators",
+        toneAndStyle: "Formal",
+        doNotTranslate: "Payments API",
+      },
+      glossary: [{ source: "table", target: "表格" }],
+    });
+    const summary = parseCacheDocument(cacheText, makeMd()).summary;
+    expect(summary?.text).toBe("本文介绍翻译流程。");
+    expect(summary?.brief).toEqual({
+      audience: "Operators",
+      toneAndStyle: "Formal",
+      doNotTranslate: "Payments API",
+    });
+    expect(summary?.glossary).toEqual([
+      { source: "table", target: "表格" },
+    ]);
+
+    const paragraph = inspect(SOURCE, cacheStore.text!).alignment.blocks.find(
+      (block) => block.source.kind === "paragraph" && block.cache,
+    )!;
+    requests = [];
+    await service.retranslateBlock(uri, paragraph.source.index);
+    expect(requests[0].summary).toBe("本文介绍翻译流程。");
+    expect(requests[0].brief).toEqual(summary?.brief);
+
+    // 只改术语表时保留 brief 与摘要。
+    const updatedText = await service.saveDocumentGlossary(uri, [
+      { source: "custom", target: "自定义" },
+    ]);
+    const updated = parseCacheDocument(updatedText, makeMd()).summary;
+    expect(updated?.brief).toEqual(summary?.brief);
+    expect(updated?.text).toBe(summary?.text);
+  });
+
+  it("drops invalid brief fields and preserves existing brief when saving a summary", async () => {
+    const uri = mocks.FakeUri.file("/project/demo.md") as unknown as Uri;
+    await service.saveBrief(uri, {
+      text: "简报",
+      brief: { audience: "  Operators  ", toneAndStyle: "x".repeat(500) },
+    });
+    const generated = parseCacheDocument(cacheStore.text!, makeMd()).summary;
+    expect(generated?.brief?.audience).toBe("Operators");
+    expect(generated?.brief?.toneAndStyle).toHaveLength(400);
+
+    const text = await service.saveSummary(uri, "手动摘要");
+    const updated = parseCacheDocument(text, makeMd()).summary;
+    expect(updated?.brief).toEqual(generated?.brief);
   });
 
   it("edits the document glossary without changing the summary", async () => {

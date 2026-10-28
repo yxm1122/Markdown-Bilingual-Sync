@@ -252,7 +252,9 @@ async function main(): Promise<void> {
   // 截图矩阵使用同一份“真实同步 + 过期 + 锁定”的模型，并附带摘要/术语表，
   // 这样三种主题下的布局、状态色、摘要面板和 diff 弹窗都能用同一页驱动。
   const matrixModel = buildPreviewModel({
+    // 下方插入示例批注，供 UI 矩阵展示块级标记与批注 popover。
     sourceText: editedSource,
+    reviewSupported: true,
     cacheText: humanCache.text,
     ...settings,
     providerLabel,
@@ -268,12 +270,60 @@ async function main(): Promise<void> {
         updatedAt: "2026-10-26T08:00:00.000Z",
         model: "mock",
         tokens: 312,
+        brief: {
+          audience: "开发者和技术写作者",
+          toneAndStyle: "简洁的技术说明，术语保持一致",
+          ambiguities: "Anchor 在本项目中指缓存锚点，不是网页锚点。",
+          doNotTranslate: "命令、代码、URL 和文件路径保持原样。",
+        },
+        briefTokens: 96,
+        briefFilledCount: 4,
         canGenerate: true,
-        glossaryText: "Markdown => Markdown\nAnchor => 锚点\nGlossary => 术语表",
-        glossaryCount: 3,
+        glossaryText:
+          "Markdown => Markdown\nAnchor => 锚点\nGlossary => 术语表\nA very long source term that exceeds the card width => 一个非常长的目标术语用于验证省略显示",
+        glossaryCount: 4,
       },
     },
   });
+  const annotatedBlock =
+    matrixModel.blocks.find(
+      (block) => block.hasCache && block.kind === "paragraph",
+    ) ?? matrixModel.blocks.find((block) => block.hasCache);
+  if (annotatedBlock) {
+    const blockId =
+      annotatedBlock.cacheId ?? `src-${annotatedBlock.sourceHash}`;
+    annotatedBlock.annotations = [
+      {
+        id: "sample-ai",
+        blockId,
+        side: "target",
+        author: "ai",
+        kind: "translation-uncertain",
+        severity: "check",
+        message: "这句里的 “bite” 可能指业务影响，请确认。",
+        question: "这里是指字面“咬”，还是指标对业务的实际影响？",
+        status: "open",
+        sourceHash: annotatedBlock.sourceHash,
+        createdAt: "2026-10-28T08:00:00.000Z",
+        updatedAt: "2026-10-28T08:00:00.000Z",
+        stale: false,
+      },
+      {
+        id: "sample-user",
+        blockId,
+        side: "target",
+        author: "user",
+        kind: "request-change",
+        severity: "info",
+        message: "按“业务影响”理解，并保持这里的术语一致。",
+        status: "open",
+        sourceHash: annotatedBlock.sourceHash,
+        createdAt: "2026-10-28T08:02:00.000Z",
+        updatedAt: "2026-10-28T08:02:00.000Z",
+        stale: false,
+      },
+    ];
+  }
   const emptyModel = buildPreviewModel({
     sourceText: "",
     ...settings,

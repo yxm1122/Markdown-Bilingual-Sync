@@ -7,6 +7,10 @@
  */
 import { normalizeGlossaryEntries } from "../glossary/glossary";
 import type { CacheSummary } from "../markdown/types";
+import {
+  hasTranslationBrief,
+  normalizeTranslationBrief,
+} from "../translation/types";
 import { normalizeNewlines, sha256 } from "../util/hash";
 
 const PREFIX = "<!-- mbs-summary:";
@@ -28,12 +32,14 @@ export function looksLikeSummaryMarker(line: string): boolean {
  * `-->` 或 Markdown 结构破坏缓存文件。
  */
 export function createSummaryMarker(summary: CacheSummary): string {
+  const brief = normalizeTranslationBrief(summary.brief);
   const payload = JSON.stringify({
     text: summary.text,
     sourceHash: summary.sourceHash,
     updatedAt: summary.updatedAt,
     ...(summary.model ? { model: summary.model } : {}),
     ...(summary.glossary?.length ? { glossary: summary.glossary } : {}),
+    ...(hasTranslationBrief(brief) ? { brief } : {}),
   });
   return `${PREFIX}${Buffer.from(payload, "utf8").toString("base64url")}${SUFFIX}`;
 }
@@ -73,6 +79,7 @@ export function parseSummaryMarker(line: string): CacheSummary | undefined {
       return undefined;
     }
     const glossary = normalizeGlossaryEntries(record.glossary);
+    const brief = normalizeTranslationBrief(record.brief);
     return {
       text,
       sourceHash,
@@ -81,6 +88,7 @@ export function parseSummaryMarker(line: string): CacheSummary | undefined {
         ? { model: record.model }
         : {}),
       ...(glossary.length > 0 ? { glossary } : {}),
+      ...(hasTranslationBrief(brief) ? { brief } : {}),
     };
   } catch {
     return undefined;

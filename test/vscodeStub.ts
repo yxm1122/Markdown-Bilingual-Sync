@@ -64,11 +64,23 @@ function disposable(): { dispose: () => void } {
   return { dispose() {} };
 }
 
+/** 最小 FileSystemError 替身；AnnotationStore 用 code 判断文件不存在。 */
+export class FileSystemError extends Error {
+  constructor(
+    readonly code: string,
+    message = code,
+  ) {
+    super(message);
+    this.name = "FileSystemError";
+  }
+}
+
 /** 最小 VS Code API 集合；测试可以展开后覆盖具体成员。 */
 export const vscodeStub = {
   l10n,
   env,
   Uri,
+  FileSystemError,
   ConfigurationTarget: { Global: 1, Workspace: 2 },
   StatusBarAlignment: { Left: 1, Right: 2 },
   FileType: { File: 1, Directory: 2 },
@@ -167,6 +179,7 @@ export const vscodeStub = {
       readFile: async () => new Uint8Array(),
       writeFile: async () => undefined,
       createDirectory: async () => undefined,
+      rename: async () => undefined,
       stat: async () => ({}),
       readDirectory: async () => [],
       delete: async () => undefined,

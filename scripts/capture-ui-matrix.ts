@@ -741,8 +741,31 @@ async function main(): Promise<void> {
       await page.waitFor("document.querySelector('.pv-summary.is-open')");
       records.push(await page.shot(theme, "summary"));
       console.log("  ✓ summary");
+      await page.click(".pv-brief-toggle");
+      await page.waitFor("document.querySelector('.pv-brief.is-open')");
+      records.push(await page.shot(theme, "brief"));
+      console.log("  ✓ brief");
+      await page.click(".pv-brief-toggle");
+      await page.waitFor("!document.querySelector('.pv-brief.is-open')");
+      await page.click(".pv-glossary-section .pv-brief-toggle");
+      await page.waitFor("document.querySelector('.pv-glossary-section.is-open')");
+      records.push(await page.shot(theme, "glossary"));
+      console.log("  ✓ glossary");
+      await page.click(".pv-term-card .pv-term-side.pv-term-source");
+      await page.waitFor("document.querySelector('.pv-term-card.is-editing')");
+      records.push(await page.shot(theme, "glossary-edit"));
+      console.log("  ✓ glossary-edit");
+      await page.click(".pv-glossary-section .pv-brief-toggle");
+      await page.waitFor("!document.querySelector('.pv-glossary-section.is-open')");
       await page.click(".pv-summary-toggle");
       await page.waitFor("!document.querySelector('.pv-summary.is-open')");
+
+      await page.click(".pv-annotation-badge");
+      await page.waitFor("document.querySelector('.pv-annotations')");
+      records.push(await page.shot(theme, "annotations"));
+      console.log("  ✓ annotations");
+      await page.click(".pv-annotations-head .pv-action");
+      await page.waitFor("!document.querySelector('.pv-annotations')");
 
       await page.openExportDialog();
       records.push(await page.shot(theme, "export-dialog"));

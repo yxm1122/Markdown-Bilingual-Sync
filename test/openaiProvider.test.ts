@@ -2,6 +2,8 @@
 import { describe, expect, it } from "vitest";
 import {
   OpenAITranslationProvider,
+  buildSummarySystemPrompt,
+  buildTranslationSystemPrompt,
   resolveChatCompletionsUrl,
   sanitizeRemoteMessage,
   selectGlossary,
@@ -161,6 +163,16 @@ describe("OpenAITranslationProvider", () => {
       text: "Hello world.",
       headingPath: ["Intro"],
     });
+    const system = (JSON.parse(String(calls[0].init.body)) as {
+      messages: Array<{ role: string; content: string }>;
+    }).messages[0].content;
+    expect(system).toContain(
+      "Source language: en. Target language: zh-CN.",
+    );
+    expect(system).toContain("The kind field is the block type");
+    expect(system.trim().endsWith("Do not wrap it in Markdown fences.")).toBe(
+      true,
+    );
   });
 
   it("allows neighbor context but requires independent item output", async () => {
@@ -207,6 +219,56 @@ describe("OpenAITranslationProvider", () => {
     });
   });
 
+  it("sends the document brief with translation requests", async () => {
+    const { provider, calls } = configuredProvider(async () =>
+      completion('{"items":[{"id":"b1","text":"你好，世界。"}]}'),
+    );
+
+    await provider.translate({
+      ...request([item("b1", "Hello world.")]),
+      brief: {
+        audience: "Developers",
+        toneAndStyle: "Concise",
+        doNotTranslate: "Payments API",
+      },
+    });
+
+    const payload = JSON.parse(
+      (JSON.parse(String(calls[0].init.body)) as {
+        messages: Array<{ role: string; content: string }>;
+      }).messages[1].content,
+    ) as { brief?: unknown };
+    expect(payload.brief).toEqual({
+      audience: "Developers",
+      toneAndStyle: "Concise",
+      doNotTranslate: "Payments API",
+    });
+  });
+
+  it("sends read-only neighbor context with single-block requests", async () => {
+    const { provider, calls } = configuredProvider(async () =>
+      completion('{"items":[{"id":"b1","text":"# 真正有影响力的指标"}]}'),
+    );
+
+    await provider.translate({
+      ...request([item("b1", "# Text metrics that bite")]),
+      context: {
+        before: [{ kind: "heading", text: "# Metrics" }],
+        after: [{ kind: "paragraph", text: "The numbers that matter." }],
+      },
+    });
+
+    const payload = JSON.parse(
+      (JSON.parse(String(calls[0].init.body)) as {
+        messages: Array<{ role: string; content: string }>;
+      }).messages[1].content,
+    ) as { context?: unknown };
+    expect(payload.context).toEqual({
+      before: [{ kind: "heading", text: "# Metrics" }],
+      after: [{ kind: "paragraph", text: "The numbers that matter." }],
+    });
+  });
+
   it("generates a plain-text source-language summary without translation JSON", async () => {
     const { provider, calls } = configuredProvider(async () =>
       completion("This document explains the translation workflow."),
@@ -228,6 +290,9 @@ describe("OpenAITranslationProvider", () => {
       messages: Array<{ role: string; content: string }>;
     };
     expect(body.messages[0].content).toContain("reference summary");
+    expect(body.messages[0].content).toContain(
+      "Source language: en. Target language: zh-CN.",
+    );
     expect(JSON.parse(body.messages[1].content).text).toBe(
       "# Workflow\n\nSteps.",
     );
@@ -243,6 +308,12 @@ describe("OpenAITranslationProvider", () => {
             { source: "table", target: "数据表" },
             { source: "", target: "无效" },
           ],
+          brief: {
+            audience: " Developers ",
+            toneAndStyle: "   ",
+            ambiguities: "Use the business sense.",
+            doNotTranslate: "Payments API",
+          },
         }),
       ),
     );
@@ -257,6 +328,11 @@ describe("OpenAITranslationProvider", () => {
     expect(summary).toEqual({
       summary: "本文介绍翻译流程。",
       glossary: [{ source: "table", target: "数据表" }],
+      brief: {
+        audience: "Developers",
+        ambiguities: "Use the business sense.",
+        doNotTranslate: "Payments API",
+      },
     });
     const body = JSON.parse(String(calls[0].init.body)) as {
       messages: Array<{ role: string; content: string }>;
@@ -264,6 +340,105 @@ describe("OpenAITranslationProvider", () => {
     expect(JSON.parse(body.messages[1].content).glossary).toEqual([
       { source: "cache", target: "缓存" },
     ]);
+  });
+
+  it("returns validated review annotations without rewriting text", async () => {
+    const { provider, calls } = configuredProvider(async () =>
+      completion(
+        JSON.stringify({
+          annotations: [
+            {
+              id: "b1",
+              side: "target",
+              type: "translation-uncertain",
+              severity: "check",
+              message: "  Verify whether “bite” means business impact.  ",
+              question: "Is this the intended sense?",
+              suggestion: "Use the business sense.",
+            },
+            {
+              id: "unknown",
+              side: "target",
+              type: "term",
+              severity: "info",
+              message: "Ignored.",
+            },
+          ],
+        }),
+      ),
+    );
+
+    const annotations = await provider.review({
+      sourceLanguage: "en",
+      targetLanguage: "zh-CN",
+      glossary: [],
+      items: [
+        {
+          id: "b1",
+          kind: "heading",
+          headingPath: [],
+          sourceText: "# Text metrics that bite",
+          targetText: "# 文本指标",
+        },
+      ],
+    });
+
+    expect(annotations).toEqual([
+      {
+        id: "b1",
+        side: "target",
+        type: "translation-uncertain",
+        severity: "check",
+        message: "Verify whether “bite” means business impact.",
+        question: "Is this the intended sense?",
+        suggestion: "Use the business sense.",
+      },
+    ]);
+    const body = JSON.parse(String(calls[0].init.body)) as {
+      messages: Array<{ role: string; content: string }>;
+    };
+    expect(body.messages[0].content).toContain(
+      "You are a bilingual reviewer",
+    );
+    expect(body.messages[0].content).toContain(
+      "Do not rewrite, translate, or output replacement text",
+    );
+  });
+
+  it("retries a malformed review response once", async () => {
+    let attempt = 0;
+    const { provider, calls } = configuredProvider(async () => {
+      attempt += 1;
+      return completion(
+        attempt === 1
+          ? "This is not JSON."
+          : '{"annotations":[]}',
+      );
+    });
+
+    const annotations = await provider.review({
+      sourceLanguage: "en",
+      targetLanguage: "zh-CN",
+      glossary: [],
+      items: [
+        {
+          id: "b1",
+          kind: "paragraph",
+          headingPath: [],
+          sourceText: "Hello.",
+          targetText: "你好。",
+        },
+      ],
+    });
+
+    expect(annotations).toEqual([]);
+    expect(calls).toHaveLength(2);
+    const body = JSON.parse(String(calls[1].init.body)) as {
+      messages: Array<{ role: string; content: string }>;
+    };
+    expect(body.messages[0].content).toContain(
+      "not a valid annotation list",
+    );
   });
 
   it("sends explicit enable_thinking for enabled and disabled modes", async () => {
@@ -514,7 +689,7 @@ describe("OpenAITranslationProvider", () => {
       messages: Array<{ role: string; content: string }>;
     };
     expect(body.messages[0].content).toContain(
-      'required glossary targets: "table" -> "表格"',
+      'required glossary targets: [{"source":"table","target":"表格"}]',
     );
   });
 
@@ -636,7 +811,9 @@ describe("OpenAITranslationProvider", () => {
     expect(body.messages[0].content).toContain(
       "Required glossary for this batch",
     );
-    expect(body.messages[0].content).toContain('"table" -> "表格"');
+    expect(body.messages[0].content).toContain(
+      '{"source":"table","target":"表格"}',
+    );
   });
 
   it("does not match a glossary term inside a longer word", async () => {
@@ -701,6 +878,32 @@ describe("OpenAITranslationProvider", () => {
     expect(body.messages[0].content).toContain(
       "previous response was rejected",
     );
+  });
+
+  it("adds specific id hints and keeps the output contract last", async () => {
+    let attempt = 0;
+    const { provider, calls } = configuredProvider(async () => {
+      attempt += 1;
+      return completion(
+        attempt === 1
+          ? '{"items":[]}'
+          : '{"items":[{"id":"b1","text":"你好。"}]}',
+      );
+    });
+
+    await provider.translate(request([item("b1", "Hello.")]));
+
+    expect(calls).toHaveLength(2);
+    const body = JSON.parse(String(calls[1].init.body)) as {
+      messages: Array<{ role: string; content: string }>;
+    };
+    expect(body.messages[0].content).toContain("missing ids");
+    expect(body.messages[0].content).toContain("b1");
+    expect(
+      body.messages[0].content.trim().endsWith(
+        "Do not wrap it in Markdown fences.",
+      ),
+    ).toBe(true);
   });
 
   it("recovers when the corrected retry returns valid translations", async () => {
@@ -774,6 +977,21 @@ describe("OpenAITranslationProvider", () => {
 
     await expect(
       provider.translate(request([item("b1", source)])),
+    ).rejects.toThrow(/原文/);
+  });
+
+  it("rejects unchanged CJK source text when the target is not CJK", async () => {
+    const source = "这是一段足够长的中文句子，应该被翻译成英文而不是原样返回。";
+    const { provider } = configuredProvider(async () =>
+      completion(JSON.stringify({ items: [{ id: "b1", text: source }] })),
+    );
+
+    await expect(
+      provider.translate({
+        ...request([item("b1", source)]),
+        sourceLanguage: "zh-CN",
+        targetLanguage: "en",
+      }),
     ).rejects.toThrow(/原文/);
   });
 
@@ -931,6 +1149,29 @@ describe("testConnection", () => {
       /API Key/,
     );
     expect(calls).toHaveLength(0);
+  });
+});
+
+describe("prompt structure", () => {
+  it("keeps the echo markers in the current translation prompt", () => {
+    const prompt = buildTranslationSystemPrompt("en", "zh-CN");
+    for (const marker of [
+      "You are a professional Markdown translator.",
+      "The input may mix source and target language within one item",
+      "Treat headingPath as context only",
+      "The kind field is the block type",
+    ]) {
+      expect(prompt).toContain(marker);
+    }
+    expect(prompt).toContain("Source language: en. Target language: zh-CN.");
+  });
+
+  it("keeps the summary prompt language-aware", () => {
+    const prompt = buildSummarySystemPrompt("en", "zh-CN");
+    expect(prompt).toContain(
+      "Source language: en. Target language: zh-CN.",
+    );
+    expect(prompt).toContain("Only include terms that actually appear");
   });
 });
 

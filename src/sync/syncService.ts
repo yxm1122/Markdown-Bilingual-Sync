@@ -35,6 +35,17 @@ import {
 import { alignDocument } from "../markdown/align";
 import { parseCacheDocument } from "../markdown/anchors";
 import { buildHeadingPaths } from "../markdown/headings";
+import { buildBlockContext } from "./blockContext";
+import { AnnotationStore } from "../annotations/annotationStore";
+import {
+  MAX_ANNOTATION_EXCERPT,
+  MAX_ANNOTATION_MESSAGE,
+  MAX_ANNOTATION_SUGGESTION,
+  MAX_ANNOTATIONS_PER_BLOCK,
+  normalizeAnnotationText,
+  type AnnotationRecord,
+  type AnnotationView,
+} from "../annotations/types";
 import { createMarkdownRuntime } from "../markdown/markdown";
 import { parseMarkdownDocument } from "../markdown/segmenter";
 import type { BlockKind, CacheSummary } from "../markdown/types";
@@ -55,12 +66,14 @@ import {
   type TranslationAssistOptions,
 } from "./sync";
 import type { CacheDocument } from "../markdown/types";
-import type {
-  GlossaryEntry,
-  TranslationProvider,
-} from "../translation/types";
 import {
+  hasTranslationBrief,
+  normalizeTranslationBrief,
   validateTranslationResult,
+  type GlossaryEntry,
+  type ReviewAnnotationDraft,
+  type TranslationBrief,
+  type TranslationProvider,
 } from "../translation/types";
 import { estimateTokenCount } from "../translation/batching";
 import {
@@ -74,6 +87,7 @@ import { tError } from "../i18n/errors";
 
 /** 摘要是一个手动触发的单次请求；超过该输入规模时提示手动填写，避免超出模型上下文。 */
 const SUMMARY_MAX_INPUT_TOKENS = 12_000;
+const REVIEW_BATCH_SIZE = 6;
 
 // ---- 公共类型 ----
 
@@ -107,6 +121,8 @@ export interface PreviewState extends LanguageSettings {
   cacheUri: vscode.Uri;
   /** 缓存中的全文摘要（若存在）；由 parseCacheDocument 剥离读取。 */
   summary?: CacheSummary;
+  /** 本机批注（含 AI 审校与用户批注）。 */
+  annotations?: AnnotationRecord[];
 }
 
 /** 设置页提供的稳定翻译/摘要上下文默认值。 */
@@ -145,6 +161,8 @@ export class SyncService {
   private readonly inFlight = new Set<string>();
   /** 清空全部缓存期间为 true，阻止新的带锁操作与并发清空。 */
   private clearingAllCaches = false;
+  /** 本机批注 sidecar 读写。 */
+  private readonly annotationStore: AnnotationStore;
 
   /**
    * @param cacheStore 缓存读写与路径解析
@@ -157,7 +175,9 @@ export class SyncService {
     private readonly glossaryStore: GlossaryStore,
     private readonly provider: TranslationProvider,
     private readonly output: vscode.OutputChannel,
-  ) {}
+  ) {
+    this.annotationStore = new AnnotationStore(cacheStore);
+  }
 
   /** 当前 Provider 的展示名，用于状态栏与提示文案。 */
   get providerLabel(): string {
@@ -233,6 +253,18 @@ export class SyncService {
     return cache?.summary?.text.trim() || undefined;
   }
 
+  /** 从缓存文档中取文档简报要求；摘要上下文关闭或没有有效字段时返回 undefined。 */
+  private briefForCache(
+    cache: CacheDocument | undefined,
+    assist: TranslationAssistSettings,
+  ): TranslationBrief | undefined {
+    if (!assist.summaryContext) {
+      return undefined;
+    }
+    const brief = cache?.summary?.brief;
+    return brief && hasTranslationBrief(brief) ? brief : undefined;
+  }
+
   /**
    * 加载某个原文的操作状态。
    *
@@ -292,6 +324,13 @@ export class SyncService {
     const summary = state.cacheText?.trim()
       ? parseCacheDocument(state.cacheText, this.md).summary
       : undefined;
+    const annotations = await this.annotationStore.read(
+      sourceUri,
+      state.targetLanguage,
+    );
+    if (annotations.warning) {
+      this.log(annotations.warning);
+    }
     return {
       sourceText: state.sourceText,
       cacheText: state.cacheText,
@@ -299,7 +338,426 @@ export class SyncService {
       sourceLanguage: state.sourceLanguage,
       targetLanguage: state.targetLanguage,
       summary,
+      annotations: annotations.annotations,
     };
+  }
+
+  /** 当前 Provider 是否支持语义审校。 */
+  get reviewSupported(): boolean {
+    return (
+      this.provider.supportsReview === true &&
+      typeof this.provider.review === "function"
+    );
+  }
+
+  /** 读取某个块的批注；sidecar 损坏时只记录不阻断。 */
+  private async readAnnotationsForBlock(
+    sourceUri: vscode.Uri,
+    targetLanguage: string,
+    blockId: string,
+  ): Promise<AnnotationRecord[]> {
+    const result = await this.annotationStore.read(sourceUri, targetLanguage);
+    if (result.warning) {
+      this.log(result.warning);
+    }
+    return result.annotations.filter((entry) => entry.blockId === blockId);
+  }
+
+  /** 把模型返回的批注草稿转成可落库记录；未知块 id 直接丢弃。 */
+  private annotationRecordsFromDrafts(
+    drafts: readonly ReviewAnnotationDraft[],
+    sourceHashById: ReadonlyMap<string, string>,
+    now: string,
+  ): AnnotationRecord[] {
+    const records: AnnotationRecord[] = [];
+    const counts = new Map<string, number>();
+    for (const draft of drafts) {
+      const sourceHash = sourceHashById.get(draft.id);
+      if (!sourceHash) {
+        continue;
+      }
+      const count = counts.get(draft.id) ?? 0;
+      if (count >= MAX_ANNOTATIONS_PER_BLOCK) {
+        continue;
+      }
+      counts.set(draft.id, count + 1);
+      const message = normalizeAnnotationText(
+        draft.message,
+        MAX_ANNOTATION_MESSAGE,
+      );
+      if (!message) {
+        continue;
+      }
+      const question = normalizeAnnotationText(
+        draft.question,
+        MAX_ANNOTATION_MESSAGE,
+      );
+      const sourceExcerpt = normalizeAnnotationText(
+        draft.sourceExcerpt,
+        MAX_ANNOTATION_EXCERPT,
+      );
+      const targetExcerpt = normalizeAnnotationText(
+        draft.targetExcerpt,
+        MAX_ANNOTATION_EXCERPT,
+      );
+      const suggestion = normalizeAnnotationText(
+        draft.suggestion,
+        MAX_ANNOTATION_SUGGESTION,
+      );
+      records.push({
+        id: `ai-${newBlockId()}`,
+        blockId: draft.id,
+        side: draft.side,
+        author: "ai",
+        kind: draft.type,
+        severity: draft.severity,
+        message,
+        ...(question ? { question } : {}),
+        ...(sourceExcerpt ? { sourceExcerpt } : {}),
+        ...(targetExcerpt ? { targetExcerpt } : {}),
+        ...(suggestion ? { suggestion } : {}),
+        status: "open",
+        sourceHash,
+        createdAt: now,
+        updatedAt: now,
+      });
+    }
+    return records;
+  }
+
+  /**
+   * 审校单个块：模型只返回批注，不返回译文。新的 AI 批注替换该块旧的 AI 批注，
+   * 用户批注保留；结果写入本机 sidecar。
+   */
+  async reviewBlock(
+    sourceUri: vscode.Uri,
+    blockIndex: number,
+    signal?: AbortSignal,
+  ): Promise<{ annotations: AnnotationRecord[]; added: number }> {
+    if (signal?.aborted) {
+      throw new CancelledError();
+    }
+    if (!this.reviewSupported) {
+      throw new Error(tError("translation.routerReviewUnsupported"));
+    }
+    const state = await this.loadState(
+      sourceUri,
+      true,
+      tError("sync.purposeReview"),
+    );
+    const source = parseMarkdownDocument(state.sourceText, this.md);
+    const cache = parseCacheDocument(state.cacheText ?? "", this.md);
+    const alignment = alignDocument(source.blocks, cache);
+    const aligned = alignment.blocks.find(
+      (item) => item.source.index === blockIndex,
+    );
+    if (!aligned) {
+      throw new Error(tError("common.missingSourceBlock", { index: blockIndex + 1 }));
+    }
+    if (!aligned.source.translatable) {
+      throw new Error(tError("sync.blockNotTranslatable"));
+    }
+    if (!aligned.cache) {
+      throw new Error(tError("sync.noTranslationReview"));
+    }
+    const headingPaths = buildHeadingPaths(source.blocks);
+    const assistSettings = this.resolveAssist();
+    const summary = this.summaryForCache(cache, assistSettings);
+    const brief = this.briefForCache(cache, assistSettings);
+    const context = buildBlockContext({
+      blocks: source.blocks,
+      index: aligned.source.index,
+      itemText: aligned.source.raw,
+      textOf: (block) => block.raw,
+    });
+    const glossary = await this.loadGlossary(sourceUri);
+    const blockId = aligned.cache.anchor.id;
+    const drafts = await this.provider.review!(
+      {
+        sourceLanguage: state.sourceLanguage,
+        targetLanguage: state.targetLanguage,
+        ...(summary ? { summary } : {}),
+        ...(brief ? { brief } : {}),
+        glossary: this.requestGlossary(glossary.entries, cache),
+        items: [
+          {
+            id: blockId,
+            kind: aligned.source.kind,
+            headingPath: headingPaths.get(aligned.source.index) ?? [],
+            sourceText: aligned.source.raw,
+            targetText: aligned.cache.block.raw,
+            ...(context ? { context } : {}),
+          },
+        ],
+      },
+      signal,
+    );
+    if (signal?.aborted) {
+      throw new CancelledError();
+    }
+    const now = new Date().toISOString();
+    const records = this.annotationRecordsFromDrafts(
+      drafts,
+      new Map([[blockId, aligned.source.hash]]),
+      now,
+    );
+    const existing = await this.annotationStore.read(
+      sourceUri,
+      state.targetLanguage,
+    );
+    const next = [
+      ...existing.annotations.filter(
+        (entry) => !(entry.author === "ai" && entry.blockId === blockId),
+      ),
+      ...records,
+    ];
+    await this.annotationStore.write(
+      sourceUri,
+      state.targetLanguage,
+      next,
+    );
+    this.log(
+      `review block ${blockIndex} of ${path.basename(sourceUri.fsPath)}: ${records.length} annotation(s)`,
+    );
+    return { annotations: next, added: records.length };
+  }
+
+  /**
+   * 审校全部机器译文：跳过 human/deleted/未翻译块，按 6 块一批请求模型。
+   * 只替换这些块的 AI 批注，用户批注保留；任一批失败则不写入新结果。
+   */
+  async reviewBlocks(
+    sourceUri: vscode.Uri,
+    signal?: AbortSignal,
+  ): Promise<{
+    annotations: AnnotationRecord[];
+    added: number;
+    reviewed: number;
+  }> {
+    if (signal?.aborted) {
+      throw new CancelledError();
+    }
+    if (!this.reviewSupported) {
+      throw new Error(tError("translation.routerReviewUnsupported"));
+    }
+    const state = await this.loadState(
+      sourceUri,
+      true,
+      tError("sync.purposeReview"),
+    );
+    const source = parseMarkdownDocument(state.sourceText, this.md);
+    const cache = parseCacheDocument(state.cacheText ?? "", this.md);
+    const alignment = alignDocument(source.blocks, cache);
+    const candidates = alignment.blocks.filter(
+      (aligned) =>
+        Boolean(aligned.cache) &&
+        aligned.source.translatable &&
+        !aligned.human &&
+        aligned.status !== "deleted" &&
+        aligned.status !== "untranslated" &&
+        Boolean(aligned.cache?.block.raw.trim()),
+    );
+    const existing = await this.annotationStore.read(
+      sourceUri,
+      state.targetLanguage,
+    );
+    if (candidates.length === 0) {
+      return {
+        annotations: existing.annotations,
+        added: 0,
+        reviewed: 0,
+      };
+    }
+    const headingPaths = buildHeadingPaths(source.blocks);
+    const assistSettings = this.resolveAssist();
+    const summary = this.summaryForCache(cache, assistSettings);
+    const brief = this.briefForCache(cache, assistSettings);
+    const glossary = await this.loadGlossary(sourceUri);
+    const sourceHashById = new Map(
+      candidates.map((aligned) => [
+        aligned.cache!.anchor.id,
+        aligned.source.hash,
+      ]),
+    );
+    const items = candidates.map((aligned) => {
+      const context = buildBlockContext({
+        blocks: source.blocks,
+        index: aligned.source.index,
+        itemText: aligned.source.raw,
+        textOf: (block) => block.raw,
+      });
+      return {
+        id: aligned.cache!.anchor.id,
+        kind: aligned.source.kind,
+        headingPath: headingPaths.get(aligned.source.index) ?? [],
+        sourceText: aligned.source.raw,
+        targetText: aligned.cache!.block.raw,
+        ...(context ? { context } : {}),
+      };
+    });
+    const now = new Date().toISOString();
+    const records: AnnotationRecord[] = [];
+    for (let index = 0; index < items.length; index += REVIEW_BATCH_SIZE) {
+      if (signal?.aborted) {
+        throw new CancelledError();
+      }
+      const chunk = items.slice(index, index + REVIEW_BATCH_SIZE);
+      const drafts = await this.provider.review!(
+        {
+          sourceLanguage: state.sourceLanguage,
+          targetLanguage: state.targetLanguage,
+          ...(summary ? { summary } : {}),
+          ...(brief ? { brief } : {}),
+          glossary: this.requestGlossary(glossary.entries, cache),
+          items: chunk,
+        },
+        signal,
+      );
+      const chunkHashes = new Map(
+        chunk.map((item) => [item.id, sourceHashById.get(item.id) ?? ""]),
+      );
+      records.push(
+        ...this.annotationRecordsFromDrafts(drafts, chunkHashes, now),
+      );
+    }
+    const reviewedIds = new Set(sourceHashById.keys());
+    const next = [
+      ...existing.annotations.filter(
+        (entry) =>
+          !(entry.author === "ai" && reviewedIds.has(entry.blockId)),
+      ),
+      ...records,
+    ];
+    await this.annotationStore.write(
+      sourceUri,
+      state.targetLanguage,
+      next,
+    );
+    this.log(
+      `review ${candidates.length} block(s) of ${path.basename(sourceUri.fsPath)}: ${records.length} annotation(s)`,
+    );
+    return {
+      annotations: next,
+      added: records.length,
+      reviewed: candidates.length,
+    };
+  }
+
+  /** 添加用户批注（note 或 request-change）。 */
+  async saveUserAnnotation(
+    sourceUri: vscode.Uri,
+    blockIndex: number,
+    input: {
+      side: "source" | "target";
+      kind: "note" | "request-change";
+      message: string;
+    },
+  ): Promise<AnnotationRecord[]> {
+    const state = await this.loadState(sourceUri, false);
+    const source = parseMarkdownDocument(state.sourceText, this.md);
+    const cache = parseCacheDocument(state.cacheText ?? "", this.md);
+    const alignment = alignDocument(source.blocks, cache);
+    const aligned = alignment.blocks.find(
+      (item) => item.source.index === blockIndex,
+    );
+    if (!aligned) {
+      throw new Error(tError("common.missingSourceBlock", { index: blockIndex + 1 }));
+    }
+    const message = normalizeAnnotationText(
+      input.message,
+      MAX_ANNOTATION_MESSAGE,
+    );
+    if (!message) {
+      throw new Error(tError("sync.annotationEmpty"));
+    }
+    const blockId =
+      aligned.cache?.anchor.id ?? `src-${aligned.source.hash}`;
+    const now = new Date().toISOString();
+    const record: AnnotationRecord = {
+      id: `user-${newBlockId()}`,
+      blockId,
+      side: input.side,
+      author: "user",
+      kind: input.kind,
+      severity: "info",
+      message,
+      status: "open",
+      sourceHash: aligned.source.hash,
+      createdAt: now,
+      updatedAt: now,
+    };
+    const existing = await this.annotationStore.read(
+      sourceUri,
+      state.targetLanguage,
+    );
+    const next = [...existing.annotations, record];
+    await this.annotationStore.write(
+      sourceUri,
+      state.targetLanguage,
+      next,
+    );
+    this.log(
+      `save annotation on block ${blockIndex} of ${path.basename(sourceUri.fsPath)}`,
+    );
+    return next;
+  }
+
+  /** 更新批注状态（已核对/忽略/重新打开）。 */
+  async setAnnotationStatus(
+    sourceUri: vscode.Uri,
+    annotationId: string,
+    status: AnnotationRecord["status"],
+  ): Promise<AnnotationRecord[]> {
+    const state = await this.loadState(sourceUri, false);
+    const existing = await this.annotationStore.read(
+      sourceUri,
+      state.targetLanguage,
+    );
+    let found = false;
+    const next = existing.annotations.map((entry) => {
+      if (entry.id !== annotationId) {
+        return entry;
+      }
+      found = true;
+      return {
+        ...entry,
+        status,
+        updatedAt: new Date().toISOString(),
+      };
+    });
+    if (!found) {
+      throw new Error(tError("sync.annotationNotFound"));
+    }
+    await this.annotationStore.write(
+      sourceUri,
+      state.targetLanguage,
+      next,
+    );
+    return next;
+  }
+
+  /** 删除批注。 */
+  async deleteAnnotation(
+    sourceUri: vscode.Uri,
+    annotationId: string,
+  ): Promise<AnnotationRecord[]> {
+    const state = await this.loadState(sourceUri, false);
+    const existing = await this.annotationStore.read(
+      sourceUri,
+      state.targetLanguage,
+    );
+    const next = existing.annotations.filter(
+      (entry) => entry.id !== annotationId,
+    );
+    if (next.length === existing.annotations.length) {
+      throw new Error(tError("sync.annotationNotFound"));
+    }
+    await this.annotationStore.write(
+      sourceUri,
+      state.targetLanguage,
+      next,
+    );
+    return next;
   }
 
   /**
@@ -487,6 +945,7 @@ export class SyncService {
       const headingPaths = buildHeadingPaths(source.blocks);
       const assistSettings = this.resolveAssist(assist);
       const summary = this.summaryForCache(cache, assistSettings);
+      const brief = this.briefForCache(cache, assistSettings);
       const reference =
         assistSettings.stableTranslation &&
         aligned.cache.anchor.mode !== "deleted" &&
@@ -504,10 +963,34 @@ export class SyncService {
         headingPath: headingPaths.get(aligned.source.index) ?? [],
         ...(reference ? { reference } : {}),
       };
+      const context = buildBlockContext({
+        blocks: source.blocks,
+        index: aligned.source.index,
+        itemText: aligned.source.raw,
+        textOf: (block) => block.raw,
+      });
       this.log(
         `retranslate block ${blockIndex} of ${path.basename(sourceUri.fsPath)} (${aligned.source.kind})`,
       );
       const glossary = await this.loadGlossary(sourceUri);
+      const annotations = (
+        await this.readAnnotationsForBlock(
+          sourceUri,
+          state.targetLanguage,
+          item.id,
+        )
+      )
+        .filter(
+          (entry) =>
+            entry.author === "user" &&
+            entry.status === "open" &&
+            (entry.kind === "note" || entry.kind === "request-change"),
+        )
+        .map((entry) => ({
+          author: "user" as const,
+          kind: entry.kind as "note" | "request-change",
+          text: entry.message,
+        }));
       const rawResult = await this.provider.translate(
         {
           sourceLanguage: state.sourceLanguage,
@@ -515,6 +998,9 @@ export class SyncService {
           items: [item],
           glossary: this.requestGlossary(glossary.entries, cache),
           ...(summary ? { summary } : {}),
+          ...(brief ? { brief } : {}),
+          ...(context ? { context } : {}),
+          ...(annotations.length ? { annotations } : {}),
         },
         signal,
       );
@@ -832,6 +1318,7 @@ export class SyncService {
     const headingPaths = buildHeadingPaths(source.blocks);
     const assistSettings = this.resolveAssist(assist);
     const summary = this.summaryForCache(cache, assistSettings);
+    const brief = this.briefForCache(cache, assistSettings);
     const item = {
       id: `back-${aligned.cache.anchor.id}`,
       text: aligned.cache.block.raw,
@@ -846,6 +1333,19 @@ export class SyncService {
           }
         : {}),
     };
+    // 回译的邻块上下文来自目标语言缓存；缺少译文的块跳过。
+    const targetByIndex = new Map<number, string>();
+    for (const row of alignment.blocks) {
+      if (row.cache?.block.raw.trim()) {
+        targetByIndex.set(row.source.index, row.cache.block.raw);
+      }
+    }
+    const context = buildBlockContext({
+      blocks: source.blocks,
+      index: aligned.source.index,
+      itemText: aligned.cache.block.raw,
+      textOf: (block) => targetByIndex.get(block.index),
+    });
     const rawResult = await this.provider.translate(
       {
         sourceLanguage: state.targetLanguage,
@@ -853,6 +1353,8 @@ export class SyncService {
         items: [item],
         glossary: [],
         ...(summary ? { summary } : {}),
+        ...(brief ? { brief } : {}),
+        ...(context ? { context } : {}),
       },
       signal,
     );
@@ -1010,12 +1512,12 @@ export class SyncService {
     // 持久化稳定 provider id（mock/openai/http），显示名在渲染时按当前 locale 映射，
     // 避免缓存内容随界面语言变化。BatchTranslationCoordinator 的 id 带 batch: 前缀，
     // 只用于运行时路由，不写入缓存。
-    return this.writeSummary(
-      state,
+    return this.writeSummary(state, {
       text,
-      this.provider.id.replace(/^batch:/, ""),
-      mergeGlossaryEntries([result.glossary, existingGlossary]),
-    );
+      model: this.provider.id.replace(/^batch:/, ""),
+      glossary: mergeGlossaryEntries([result.glossary, existingGlossary]),
+      brief: normalizeTranslationBrief(result.brief),
+    });
   }
 
   /** 保存用户在预览中编辑的摘要；保留随摘要生成的文档术语表。 */
@@ -1038,12 +1540,65 @@ export class SyncService {
       tError("sync.purposeSaveSummary"),
     );
     const cache = parseCacheDocument(state.cacheText ?? "", this.md);
-    return this.writeSummary(
-      state,
+    return this.writeSummary(state, {
       text,
-      "manual",
-      cache.summary?.glossary ?? [],
+      model: "manual",
+      glossary: cache.summary?.glossary ?? [],
+      brief: cache.summary?.brief,
+    });
+  }
+
+  /**
+   * 保存整份文档简报：摘要正文 + brief + 术语表一次写入。
+   * 只改摘要/ brief 时刷新 updatedAt/sourceHash；只改术语表时保留原有时间与哈希。
+   */
+  async saveBrief(
+    sourceUri: vscode.Uri,
+    input: {
+      text: string;
+      brief?: TranslationBrief;
+      glossary?: readonly GlossaryEntry[];
+    },
+  ): Promise<string> {
+    return this.withLock(sourceUri, () =>
+      this.saveBriefUnlocked(sourceUri, input),
     );
+  }
+
+  private async saveBriefUnlocked(
+    sourceUri: vscode.Uri,
+    input: {
+      text: string;
+      brief?: TranslationBrief;
+      glossary?: readonly GlossaryEntry[];
+    },
+  ): Promise<string> {
+    const text = input.text.trim();
+    if (!text) {
+      throw new Error(tError("sync.summaryEmpty"));
+    }
+    const state = await this.loadState(
+      sourceUri,
+      true,
+      tError("sync.purposeSaveSummary"),
+    );
+    const cache = parseCacheDocument(state.cacheText ?? "", this.md);
+    const previous = cache.summary;
+    const brief = normalizeTranslationBrief(input.brief);
+    const briefChanged =
+      JSON.stringify(previous?.brief ?? {}) !== JSON.stringify(brief);
+    const textChanged = !previous || previous.text.trim() !== text;
+    const changed = textChanged || briefChanged;
+    return this.writeSummary(state, {
+      text,
+      model: changed ? "manual" : previous?.model,
+      glossary: input.glossary ?? previous?.glossary ?? [],
+      updatedAt: changed ? new Date().toISOString() : previous?.updatedAt,
+      sourceHash: changed
+        ? summarySourceHash(state.sourceText)
+        : previous?.sourceHash,
+      brief,
+    });
   }
 
   /**
@@ -1072,14 +1627,14 @@ export class SyncService {
     if (!cache.summary?.text.trim()) {
       throw new Error(tError("sync.glossaryNoSummary"));
     }
-    return this.writeSummary(
-      state,
-      cache.summary.text,
-      cache.summary.model,
-      entries,
-      cache.summary.updatedAt,
-      cache.summary.sourceHash,
-    );
+    return this.writeSummary(state, {
+      text: cache.summary.text,
+      model: cache.summary.model,
+      glossary: entries,
+      updatedAt: cache.summary.updatedAt,
+      sourceHash: cache.summary.sourceHash,
+      brief: cache.summary.brief,
+    });
   }
 
   /**
@@ -1131,25 +1686,29 @@ export class SyncService {
     }
   }
 
-  /** 把摘要与文档术语表写入缓存；没有缓存文件时创建只含元数据的缓存。 */
+  /** 把摘要、brief 与文档术语表写入缓存；没有缓存文件时创建只含元数据的缓存。 */
   private async writeSummary(
     state: LoadedState,
-    text: string,
-    model?: string,
-    glossary: readonly GlossaryEntry[] = [],
-    updatedAt = new Date().toISOString(),
-    sourceHash = summarySourceHash(state.sourceText),
+    input: {
+      text: string;
+      model?: string;
+      glossary?: readonly GlossaryEntry[];
+      updatedAt?: string;
+      sourceHash?: string;
+      brief?: TranslationBrief;
+    },
   ): Promise<string> {
-    const summaryText = text.trim();
+    const summaryText = input.text.trim();
     if (summaryText.length > MAX_SUMMARY_CHARS) {
       throw new Error(
         tError("sync.summaryTooLong", { chars: MAX_SUMMARY_CHARS }),
       );
     }
     const normalizedGlossary = normalizeGlossaryEntries(
-      glossary,
+      input.glossary ?? [],
       MAX_DOCUMENT_GLOSSARY_ENTRIES,
     );
+    const normalizedBrief = normalizeTranslationBrief(input.brief);
     const cache = parseCacheDocument(state.cacheText ?? "", this.md);
     this.assertCacheSummaryWritable(cache);
     const entries = this.orderedCacheEntries(cache);
@@ -1158,11 +1717,14 @@ export class SyncService {
       entries,
       {
         text: summaryText,
-        sourceHash,
-        updatedAt,
-        ...(model ? { model } : {}),
+        sourceHash: input.sourceHash ?? summarySourceHash(state.sourceText),
+        updatedAt: input.updatedAt ?? new Date().toISOString(),
+        ...(input.model ? { model: input.model } : {}),
         ...(normalizedGlossary.length > 0
           ? { glossary: normalizedGlossary }
+          : {}),
+        ...(hasTranslationBrief(normalizedBrief)
+          ? { brief: normalizedBrief }
           : {}),
       },
     );
@@ -1878,6 +2440,10 @@ export class SyncService {
       );
       const removed = await this.cacheStore.delete(cacheUri);
       if (removed) {
+        await this.annotationStore.delete(
+          sourceUri,
+          settings.targetLanguage,
+        );
         this.log(`clear cache of ${path.basename(sourceUri.fsPath)}`);
       }
       return removed;
@@ -2027,6 +2593,7 @@ export class SyncService {
       ? parseCacheDocument(state.cacheText, this.md)
       : undefined;
     const summary = this.summaryForCache(cache, assistSettings);
+    const brief = this.briefForCache(cache, assistSettings);
     const result = await syncDocument({
       md: this.md,
       sourceText: state.sourceText,
@@ -2040,6 +2607,7 @@ export class SyncService {
       assist: {
         stableTranslation: assistSettings.stableTranslation,
         ...(summary ? { summary } : {}),
+        ...(brief ? { brief } : {}),
       },
       signal,
       onProgress,

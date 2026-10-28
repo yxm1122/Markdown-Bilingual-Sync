@@ -17,6 +17,8 @@ import type { MockTranslationProvider } from "./mockProvider";
 import type { OpenAITranslationProvider } from "./openaiProvider";
 import type {
   ConnectionTestResult,
+  ReviewAnnotationDraft,
+  ReviewRequest,
   SummaryRequest,
   SummaryResult,
   TranslationChunkHandler,
@@ -65,6 +67,11 @@ export class TranslationProviderRouter implements TranslationProvider {
     return this.current().supportsSummary === true;
   }
 
+  /** 当前 Provider 是否支持语义审校（HTTP 模板通常不支持）。 */
+  get supportsReview(): boolean {
+    return this.current().supportsReview === true;
+  }
+
   /** 转发整篇摘要请求；目标 Provider 未实现时给出可操作的本地化提示。 */
   async summarize(
     request: SummaryRequest,
@@ -77,6 +84,20 @@ export class TranslationProviderRouter implements TranslationProvider {
       );
     }
     return provider.summarize(request, signal);
+  }
+
+  /** 转发语义审校请求；目标 Provider 未实现时给出本地化提示。 */
+  async review(
+    request: ReviewRequest,
+    signal?: AbortSignal,
+  ): Promise<ReviewAnnotationDraft[]> {
+    const provider = this.current();
+    if (!provider.review || provider.supportsReview !== true) {
+      throw new Error(
+        tError("translation.routerReviewUnsupported"),
+      );
+    }
+    return provider.review(request, signal);
   }
 
   /** 转发翻译请求；进度、增量与取消语义完全由目标 Provider 决定。 */

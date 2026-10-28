@@ -64,6 +64,9 @@ export function makeSummary(
     text: "",
     stale: false,
     tokens: 0,
+    brief: {},
+    briefTokens: 0,
+    briefFilledCount: 0,
     canGenerate: true,
     glossaryText: "",
     glossaryCount: 0,
@@ -147,6 +150,7 @@ export function makeModel(overrides: ModelOverrides = {}): PreviewModel {
     counts,
     warnings: [],
     pendingSourceCount: 0,
+    reviewSupported: true,
     ...rest,
     assist,
   };

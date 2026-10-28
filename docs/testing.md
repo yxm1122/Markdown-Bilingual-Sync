@@ -44,10 +44,11 @@ CI 会依次执行 `npm ci`、`typecheck`、`test`、`package`。本地提交前
 | `diffPreview.test.ts` | 行级 diff、截断、新建文件 |
 | `importTranslation.test.ts` | 导入结构校验、human 锁定、锚点拒绝 |
 | `batching.test.ts` | token 估算、块数/预算、并发均衡、摘要上下文、文档/小节边界 |
-| `batchCoordinator.test.ts` | 跨文件合并、复合 id 路由、摘要隔离、文档标识分配、单调用取消 |
+| `batchCoordinator.test.ts` | 跨文件合并、复合 id 路由、摘要/brief/context/annotations 隔离、文档标识分配、单调用取消 |
 | `concurrency.test.ts` | 全局限制器 FIFO/取消/计数、文件 worker |
 | `batchFiles.test.ts` | 目录扫描、导出文件过滤、路径边界 |
-| `openaiProvider.test.ts` | 请求体、JSON 校验、重试、提示词/回声拒绝、脱敏、摘要、连接测试 |
+| `openaiProvider.test.ts` | 请求体、JSON 校验、重试、提示词/回声拒绝、脱敏、摘要/brief、context、annotations、审校、连接测试 |
+| `blockContext.test.ts` | 单块标题/段落/回译邻块上下文、section 边界、大块与 token 上限 |
 | `genericHttpProvider.test.ts` | 模板变量、响应路径/纯文本、脱敏、错误处理 |
 | `mockProvider.test.ts` | 演示 Provider 输出契约 |
 | `presets.test.ts` | Provider 预设唯一性与合法值 |
@@ -55,7 +56,7 @@ CI 会依次执行 `npm ci`、`typecheck`、`test`、`package`。本地提交前
 | `taskMonitor.test.ts` | 任务状态机、取消、历史快照 |
 | `language.test.ts` | markdown/skill 支持、manifest 激活与菜单条件 |
 | `evaluationMetrics.test.ts` | 遗漏/回显、受保护片段、术语、结构、frontmatter、参考相似度等评估指标 |
-| `evaluationDataset.test.ts` | 16 个评估用例的结构/术语/参考译文自洽性 |
+| `evaluationDataset.test.ts` | 17 个评估用例的结构/术语/参考译文自洽性 |
 | `consistency.test.ts` | 译后术语/受保护 Markdown 检查、人工锁定块跳过、无缓存处理 |
 | `documentGlossary.test.ts` | 文档术语表文本格式解析、去重、行号错误与条数上限 |
 | `i18nCatalog.test.ts` | en/zh key 与占位符一致性、bundle 新鲜度、中/英文 locale 行为 |
@@ -69,7 +70,11 @@ CI 会依次执行 `npm ci`、`typecheck`、`test`、`package`。本地提交前
 | `webview/app.render.test.tsx` | 首屏、统计、模式/布局切换、分栏只读、空状态、控件无障碍名称 |
 | `webview/app.scroll.test.tsx` | 虚拟块几何下的分栏双向同步、仅原文/仅译文切换位置还原、顶部/底部对齐 |
 | `webview/app.editing.test.tsx` | 译文/原文编辑、待插入/独立译文、插入、删除/撤销、链接、菜单键盘导航、滚动关闭菜单、选择文本不误触编辑 |
-| `webview/app.summary.test.tsx` | 摘要/术语表草稿、assist 开关、提示条/toast、宿主刷新时焦点与草稿保持、忙碌、脚注 |
+| `webview/app.summary.test.tsx` | 文档简报/brief/术语表表格、assist 开关、提示条/toast、宿主刷新时焦点与草稿保持、忙碌、脚注 |
+| `webview/app.annotations.test.tsx` | 批注标记、popover、保存/核对/删除/按批注重译 |
+| `webview/glossaryModel.test.ts` | 术语表文本解析/序列化/校验/规范化 |
+| `annotationStore.test.ts` | 本机批注 sidecar 往返、损坏回退、字段裁剪、删除 |
+| `syncAnnotations.test.ts` | 审校批注替换、用户批注保留、按批注重译、状态/删除 |
 | `webview/app.dialogs.test.tsx` | 导出/原文 diff、写入态竞态、错误恢复、关闭与焦点 |
 | `webview/bridge.test.ts` | 首屏 JSON、格式化、VS Code API 与静态预览 localStorage 回退 |
 
@@ -169,7 +174,7 @@ npm run ui:matrix
 脚本先由 `render-sample` 生成 `tmp/preview-matrix-{dark,light,hc}.html` 与 `preview-empty-*.html`，再用 headless Edge 驱动生产 Webview 脚本，输出到 `artifacts/ui-matrix/`：
 
 - 三主题 × 三布局（columns/stacked/split）× 三模式（bilingual/source/target）= 27 张；
-- 每主题另拍 summary、export-dialog、source-dialog、editing、block-menu、split-readonly、busy、narrow(900×900)、empty，共 54 张；
+- 每主题另拍 summary、brief、glossary、glossary-edit、annotations、export-dialog、source-dialog、editing、block-menu、split-readonly、busy、narrow(900×900)、empty，共 66 张；
 - `manifest.json` 记录视口、实际 PNG 尺寸、布局/模式/只读状态、横向溢出与控制台错误；
 - 每个主题还会验证分栏“仅原文 → 仅译文 → 仅原文 → 双语”的滚动落点，要求另一侧回到同一块；
 - `index.html` 是联系表，`report.md` 是汇总；
@@ -276,4 +281,4 @@ code --user-data-dir "<repo>/tmp/dev-user" \
 
 ## 8. 翻译质量评估
 
-`npm run eval:translation` 会读取 `eval/` 的 16 个用例，生成候选译文、自动指标与人工评分表。`--provider mock` 只用于验证管线；真实质量评估需要手动配置 Provider Key 并运行，详见 [翻译质量评估](evaluation.md)。评估数据集本身由 `evaluationDataset.test.ts` 在 `npm test` 中校验。
+`npm run eval:translation` 会读取 `eval/` 的 17 个用例，生成候选译文、自动指标与人工评分表。`--provider mock` 只用于验证管线；真实质量评估需要手动配置 Provider Key 并运行，详见 [翻译质量评估](evaluation.md)。评估数据集本身由 `evaluationDataset.test.ts` 在 `npm test` 中校验。

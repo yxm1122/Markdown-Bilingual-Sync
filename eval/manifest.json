@@ -119,6 +119,13 @@
       "notes": "Negation, quantities, and a time condition; automatic structure checks cannot judge these, so human review is required."
     },
     {
+      "id": "heading-idiom",
+      "source": "cases/heading-idiom/source.md",
+      "reference": "cases/heading-idiom/reference.zh.md",
+      "tags": ["headings", "idiom", "tone", "single-block-context"],
+      "notes": "A title whose idiom is clarified by the following paragraph; batch translation sees the body, while single-block retranslation needs neighbor context. Regression for tmp/issues(local).md point 2."
+    },
+    {
       "id": "real-project-readme",
       "source": "cases/real-project-readme/source.md",
       "reference": "cases/real-project-readme/reference.zh.md",

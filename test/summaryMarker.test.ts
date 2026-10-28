@@ -87,6 +87,25 @@ describe("cache summary marker", () => {
     ]);
   });
 
+  it("round-trips a document brief and drops empty fields", () => {
+    const marker = createSummaryMarker({
+      text: "summary",
+      sourceHash: "hash",
+      updatedAt: "now",
+      brief: {
+        audience: " Developers ",
+        toneAndStyle: "   ",
+        ambiguities: "Use the business sense.",
+        doNotTranslate: "Payments API",
+      },
+    });
+    expect(parseSummaryMarker(marker)?.brief).toEqual({
+      audience: "Developers",
+      ambiguities: "Use the business sense.",
+      doNotTranslate: "Payments API",
+    });
+  });
+
   it("hashes normalized source text stably", () => {
     expect(summarySourceHash("a\r\nb")).toBe(summarySourceHash("a\nb"));
     expect(summarySourceHash("a")).not.toBe(summarySourceHash("b"));

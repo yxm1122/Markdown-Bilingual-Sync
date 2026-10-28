@@ -4,6 +4,8 @@ import {
   estimateItemTokens,
   estimateSummaryContextTokens,
   estimateTokenCount,
+  estimateTranslationBriefTokens,
+  estimateTranslationContextTokens,
   planTranslationBatches,
 } from "../src/translation/batching";
 import type { TranslationItem } from "../src/translation/types";
@@ -243,6 +245,20 @@ describe("dynamic translation batching", () => {
     );
     expect(estimateSummaryContextTokens(undefined)).toBe(0);
     expect(estimateSummaryContextTokens("摘要".repeat(500))).toBeGreaterThan(0);
+    expect(estimateTranslationBriefTokens(undefined)).toBe(0);
+    expect(estimateTranslationBriefTokens({})).toBe(0);
+    expect(
+      estimateTranslationBriefTokens({
+        audience: "Developers",
+        toneAndStyle: "Concise technical prose",
+      }),
+    ).toBeGreaterThan(0);
+    expect(estimateTranslationContextTokens(undefined)).toBe(0);
+    expect(
+      estimateTranslationContextTokens({
+        after: [{ kind: "paragraph", text: "The numbers that matter." }],
+      }),
+    ).toBeGreaterThan(0);
 
     const items = Array.from({ length: 4 }, (_, index) =>
       item(String(index), "x".repeat(1000)),

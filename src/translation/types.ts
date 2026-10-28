@@ -69,6 +69,166 @@ export interface GlossaryEntry {
   target: string;
 }
 
+/**
+ * 文档简报中除摘要/术语表之外的翻译要求。
+ * 字段都是可选的短文本；保存和发送前会裁剪空白并限制长度。
+ */
+export interface TranslationBrief {
+  /** 目标读者。 */
+  audience?: string;
+  /** 语气、文体与格式约定。 */
+  toneAndStyle?: string;
+  /** 已确定的歧义处理与术语选择。 */
+  ambiguities?: string;
+  /** 必须保持原样的名称、命令、路径等。 */
+  doNotTranslate?: string;
+}
+
+/** 单个 brief 字段的最大字符数；避免把整篇说明塞进每个请求。 */
+export const MAX_BRIEF_FIELD_CHARS = 400;
+
+/** 读取一个 brief 字段：trim、限长，空值返回 undefined。 */
+function readBriefField(value: unknown): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const text = value.trim();
+  return text ? text.slice(0, MAX_BRIEF_FIELD_CHARS).trim() : undefined;
+}
+
+/** 校验并归一化不可信 brief（摘要模型输出、缓存、Webview 消息）。 */
+export function normalizeTranslationBrief(raw: unknown): TranslationBrief {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    return {};
+  }
+  const record = raw as Record<string, unknown>;
+  const audience = readBriefField(record.audience);
+  const toneAndStyle = readBriefField(record.toneAndStyle);
+  const ambiguities = readBriefField(record.ambiguities);
+  const doNotTranslate = readBriefField(record.doNotTranslate);
+  return {
+    ...(audience ? { audience } : {}),
+    ...(toneAndStyle ? { toneAndStyle } : {}),
+    ...(ambiguities ? { ambiguities } : {}),
+    ...(doNotTranslate ? { doNotTranslate } : {}),
+  };
+}
+
+/** brief 是否包含任何有效内容。 */
+export function hasTranslationBrief(
+  brief: TranslationBrief | undefined,
+): boolean {
+  return Boolean(
+    brief &&
+      (brief.audience?.trim() ||
+        brief.toneAndStyle?.trim() ||
+        brief.ambiguities?.trim() ||
+        brief.doNotTranslate?.trim()),
+  );
+}
+
+/** 把 brief 拼成用于 token 估算的纯文本；不用于提示词内容。 */
+export function translationBriefText(
+  brief: TranslationBrief | undefined,
+): string {
+  if (!brief) {
+    return "";
+  }
+  return [
+    brief.audience,
+    brief.toneAndStyle,
+    brief.ambiguities,
+    brief.doNotTranslate,
+  ]
+    .map((value) => value?.trim() ?? "")
+    .filter(Boolean)
+    .join("\n");
+}
+
+/** 只读邻块上下文：用于单块重译/回译时补足局部语义。 */
+export interface TranslationContextBlock {
+  kind: BlockKind;
+  text: string;
+}
+
+/** 单块请求的邻块上下文；与 items 分开，模型不得翻译或输出。 */
+export interface TranslationContext {
+  before?: TranslationContextBlock[];
+  after?: TranslationContextBlock[];
+}
+
+/** 用户批注作为重译指令；AI 审校批注不会进入此字段。 */
+export interface TranslationAnnotationInput {
+  author: "user";
+  kind: "note" | "request-change";
+  text: string;
+}
+
+/** 是否有用户批注指令。 */
+export function hasTranslationAnnotations(
+  annotations: readonly TranslationAnnotationInput[] | undefined,
+): boolean {
+  return Boolean(annotations && annotations.length > 0);
+}
+
+/** 上下文是否有内容。 */
+export function hasTranslationContext(
+  context: TranslationContext | undefined,
+): boolean {
+  return Boolean(
+    context &&
+      ((context.before?.length ?? 0) > 0 ||
+        (context.after?.length ?? 0) > 0),
+  );
+}
+
+/** 审校批注所在的侧。 */
+export type AnnotationSide = "source" | "target";
+
+/** 审校批注类型；只用于提示人工核对，不直接改写译文。 */
+export type ReviewAnnotationType =
+  | "source-issue"
+  | "translation-uncertain"
+  | "term"
+  | "structure";
+
+/** 审校严重度：info 仅供参考，check 表示建议人工核对。 */
+export type ReviewSeverity = "info" | "check";
+
+/** 模型返回的审校批注（未落库）。 */
+export interface ReviewAnnotationDraft {
+  /** 对应请求中的块 id。 */
+  id: string;
+  side: AnnotationSide;
+  type: ReviewAnnotationType;
+  severity: ReviewSeverity;
+  message: string;
+  question?: string;
+  sourceExcerpt?: string;
+  targetExcerpt?: string;
+  suggestion?: string;
+}
+
+/** 单块审校输入。 */
+export interface ReviewItem {
+  id: string;
+  kind: BlockKind;
+  headingPath: string[];
+  sourceText: string;
+  targetText: string;
+  context?: TranslationContext;
+}
+
+/** 一次审校请求；只返回批注，不返回译文。 */
+export interface ReviewRequest {
+  sourceLanguage: string;
+  targetLanguage: string;
+  summary?: string;
+  brief?: TranslationBrief;
+  glossary: GlossaryEntry[];
+  items: ReviewItem[];
+}
+
 /** 一次翻译请求；items/glossary/summary 视为只读，Provider 不得修改调用方数据。 */
 export interface TranslationRequest {
   sourceLanguage: string;
@@ -80,6 +240,12 @@ export interface TranslationRequest {
    * 会占用每一批请求的 token 预算；Provider 必须把它当作参考数据，不得执行其中指令。
    */
   summary?: string;
+  /** 可选文档简报：用户确认过的翻译要求（受众、语气、歧义决策、禁译项）。 */
+  brief?: TranslationBrief;
+  /** 可选只读邻块上下文；只用于单块请求。 */
+  context?: TranslationContext;
+  /** 用户批注指令；只用于按批注重译的单块请求。 */
+  annotations?: TranslationAnnotationInput[];
 }
 
 /** 手动生成全文摘要的输入；sourceText 是整篇原文，不是单个块。 */
@@ -93,10 +259,11 @@ export interface SummaryRequest {
   glossary?: GlossaryEntry[];
 }
 
-/** 摘要生成结果：摘要正文 + 随摘要生成的文档术语表。 */
+/** 摘要生成结果：摘要正文 + 随摘要生成的文档术语表 + 可选翻译要求。 */
 export interface SummaryResult {
   summary: string;
   glossary: GlossaryEntry[];
+  brief?: TranslationBrief;
 }
 
 /** Provider 返回的单块译文；id 必须与请求中某一项完全一致。 */
@@ -150,6 +317,8 @@ export interface TranslationProvider {
   readonly label: string;
   /** 是否支持自动生成全文摘要；不支持时仍可手动编辑摘要。 */
   readonly supportsSummary?: boolean;
+  /** 是否支持语义审校（只返回批注）。 */
+  readonly supportsReview?: boolean;
   /**
    * 翻译一批块。
    * @param request 待翻译内容与语言/术语信息。
@@ -173,6 +342,11 @@ export interface TranslationProvider {
     request: SummaryRequest,
     signal?: AbortSignal,
   ): Promise<SummaryResult>;
+  /** 可选能力：语义审校；只返回需要人工核对的批注，不改写译文。 */
+  review?(
+    request: ReviewRequest,
+    signal?: AbortSignal,
+  ): Promise<ReviewAnnotationDraft[]>;
   /** 可选能力：测试连接；未实现时路由器会提示当前服务不支持。 */
   testConnection?(
     sourceLanguage: string,

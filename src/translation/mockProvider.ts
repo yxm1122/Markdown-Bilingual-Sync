@@ -17,6 +17,8 @@ import type { BlockKind } from "../markdown/types";
 import {
   applyGlossary,
   validateTranslationResult,
+  type ReviewAnnotationDraft,
+  type ReviewRequest,
   type SummaryRequest,
   type SummaryResult,
   type TranslationChunkHandler,
@@ -276,6 +278,7 @@ export class MockTranslationProvider implements TranslationProvider {
     return UI_TEXT.providers.mockTranslation;
   }
   readonly supportsSummary = true;
+  readonly supportsReview = true;
 
   /**
    * 生成固定的演示摘要：取前几个非空段落/标题，便于离线验证摘要 UI 与上下文链路。
@@ -315,7 +318,41 @@ export class MockTranslationProvider implements TranslationProvider {
       seen.add(key);
       glossary.push({ source, target });
     }
-    return { summary, glossary };
+    return {
+      summary,
+      glossary,
+      brief: {
+        audience: "Developers and technical writers",
+        toneAndStyle: "Concise technical prose with consistent terminology",
+        ambiguities: "",
+        doNotTranslate: "Keep commands, code, URLs, and file paths unchanged.",
+      },
+    };
+  }
+
+  /** 演示审校：对第一个块返回一条“请人工核对”的批注，不联网。 */
+  async review(
+    request: ReviewRequest,
+    signal?: AbortSignal,
+  ): Promise<ReviewAnnotationDraft[]> {
+    if (signal?.aborted) {
+      throw new Error(tError("common.translationCancelled"));
+    }
+    const first = request.items[0];
+    if (!first) {
+      return [];
+    }
+    return [
+      {
+        id: first.id,
+        side: "target",
+        type: "translation-uncertain",
+        severity: "check",
+        message:
+          "Mock review: verify that this wording matches the document brief.",
+        question: "Is the register appropriate for the intended audience?",
+      },
+    ];
   }
 
   /**

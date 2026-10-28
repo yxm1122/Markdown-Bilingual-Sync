@@ -15,6 +15,7 @@ import type {
   PreviewNotice,
 } from "../../preview/protocol";
 import type { PreviewLayout } from "../../preview/layout";
+import type { TranslationBrief } from "../../translation/types";
 
 export type PreviewText = (typeof UI_TEXT)["preview"];
 export type ProviderText = (typeof UI_TEXT)["providers"];
@@ -68,8 +69,24 @@ export type OutboundMessage =
   | { type: "revealSource"; blockIndex: number }
   | { type: "generateSummary" }
   | { type: "saveSummary"; summaryText: string }
+  | { type: "saveBrief"; summaryText: string; brief: TranslationBrief; glossaryText: string }
   | { type: "clearSummary" }
   | { type: "saveGlossary"; glossaryText: string }
+  | { type: "reviewBlock"; blockIndex: number }
+  | { type: "reviewMachineBlocks" }
+  | {
+      type: "saveAnnotation";
+      blockIndex: number;
+      side: "source" | "target";
+      kind: "note" | "request-change";
+      message: string;
+    }
+  | {
+      type: "setAnnotationStatus";
+      annotationId: string;
+      status: "open" | "resolved" | "dismissed";
+    }
+  | { type: "deleteAnnotation"; annotationId: string }
   | { type: "setAssistToggle"; key: "stableTranslation" | "summaryContext"; value: boolean }
   | { type: "exportWrite" }
   | { type: "exportCancel" }

@@ -95,6 +95,11 @@ export const SYNC_ERRORS = [
     zh: "保存文档术语表",
   },
   {
+    key: "sync.purposeReview",
+    en: "reviewing this block",
+    zh: "审校该块",
+  },
+  {
     key: "sync.purposeImport",
     en: "importing the translation",
     zh: "导入译文",
@@ -113,6 +118,21 @@ export const SYNC_ERRORS = [
     key: "sync.noTranslationSyncFirst",
     en: "This block has no translation yet. Sync the translation first.",
     zh: "这个块还没有译文，请先同步译文。",
+  },
+  {
+    key: "sync.noTranslationReview",
+    en: "Sync this block before reviewing it.",
+    zh: "请先生成该块的译文，再审校。",
+  },
+  {
+    key: "sync.annotationNotFound",
+    en: "The annotation no longer exists. Refresh the preview.",
+    zh: "批注已不存在，请刷新预览。",
+  },
+  {
+    key: "sync.annotationEmpty",
+    en: "The annotation cannot be empty.",
+    zh: "批注不能为空。",
   },
   {
     key: "sync.sourceUpdatedRefresh",

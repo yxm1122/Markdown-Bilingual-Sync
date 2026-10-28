@@ -25,7 +25,8 @@
 - 预览内编辑：点击原文或译文内容即可就地编辑原始 Markdown；译文保存后立即锁定，原文修改暂存后可先查看差异再写回源文件。
 - 回译改写原文：对已有译文的块执行反向翻译，结果直接进入原文暂存；写回后该块译文锁定到新的原文，不会被同步覆盖。
 - 稳定翻译：重新翻译参考旧译文，回译参考当前原文，减少细微修改造成的措辞波动；设置与预览开关均可控制。
-- 全文摘要与文档术语表：手动生成原文语言摘要，同时让 AI 产出本文档术语表；两者随译文缓存保存，可在预览中查看、编辑、清除。
+- 文档简报与术语表：手动生成原文语言摘要、翻译要求（受众/语气/歧义决策/禁译项）和本文档术语表；随译文缓存保存，可在预览中编辑、清除。
+- 块级批注与审校：AI 审校只返回可能需要人工核对的批注，不直接改写译文；用户可以补充信息、勾选“要求修改”，再按批注重译。批注保存在本机 sidecar，不进入缓存 Markdown 或导出。
 - 单块重译、过期块重译、全部机器译文重译。
 - 两层用户术语表（全局/工作区）+ 随摘要生成的文档术语表；预览内可检查机器译文的术语与受保护 Markdown，并逐块一键重译。
 - 导出到同目录语言后缀文件，写入前显示分栏差异确认。
@@ -96,8 +97,8 @@ npm run package
 - 需要重译单个块时，使用该块上的 **重新翻译**。
 - 每个已有译文的可翻译块都有 **回译** 按钮：把译文翻回原文语言，结果直接进入原文暂存，不弹出额外窗口；点击 **应用原文修改** 后写回源文件，并把这一个译文块锁定到新的原文。回译结果与当前原文一致时不会产生暂存修改。
 - **稳定翻译** 默认开启：重新翻译（单块/过期/全部）会把旧译文作为参考，回译会把当前原文作为参考；显式重译 human 块时也会参考旧译文。预览中的“参考上一版译文”开关只影响当前会话，设置页 `stableTranslation` 控制默认值。
-- **全文摘要** 只能手动生成（OpenAI 兼容/Mock），HTTP Provider 可手动填写。生成摘要时会同时生成文档术语表；摘要面板显示状态、token 估算、过期提示和术语表编辑框，“AI 生成/保存摘要/保存术语表/清除”会写回缓存。预览中的“使用全文摘要上下文”开关只影响当前会话，设置页 `summaryContext` 控制默认值。
-- 摘要写入缓存内的专用标记，不参与块对齐和导出；源文变化后显示“可能过期”但仍会作为上下文使用；清除缓存时摘要一起删除。摘要生成输入上限约 12k tokens，超出时请手动填写。
+- **文档简报** 只能手动生成（OpenAI 兼容/Mock），HTTP Provider 可手动填写。生成时会同时生成摘要、翻译要求（brief）和文档术语表；“文档简报”面板显示状态、总 token 估算、过期提示；摘要常驻，翻译要求与术语表是互斥折叠区（初始都收起），术语表用单行流式卡片（`原文 | 译文`，短卡贴合内容；超长省略、悬停哪侧就滚动哪侧）；点击原文或译文分别进入该侧的内联编辑。默认一个“保存简报”动作一次写回摘要、brief 和术语表。预览中的“使用文档简报上下文”开关只影响当前会话，设置页 `summaryContext` 控制默认值。
+- 简报写入缓存内的专用标记，不参与块对齐和导出；源文变化后显示“可能过期”但仍会作为上下文使用；清除缓存时简报一起删除。简报生成输入上限约 12k tokens，超出时请手动填写。单块重译/回译会额外携带同 section 的只读邻块上下文，帮助短标题和短段落保持语义。
 
 ### 块状态与缓存标记
 
@@ -155,7 +156,7 @@ npm run package
 - 请求方法支持 `POST`、`PUT`、`PATCH`；`httpHeaders` 与 `httpBody` 都是 JSON 模板。
 - 模板变量：`{{text}}`、`{{id}}`、`{{kind}}`、`{{headingPath}}`、`{{sourceLanguage}}`、`{{targetLanguage}}`、`{{apiKey}}`、`{{referenceText}}`、`{{referenceRole}}`、`{{summary}}`。
 - 通用 Provider 每个翻译块发送一次请求；`httpResponseType` 为 `json` 时按 `httpResponsePath` 提取文本，为 `text` 时直接把响应体作为译文。
-- 稳定翻译参考和全文摘要只有模板显式引用 `{{referenceText}}`/`{{summary}}` 时才会发送；`{{referenceRole}}` 为 `previous-target` 或 `previous-source`。
+- 稳定翻译参考和文档简报中的摘要只有模板显式引用 `{{referenceText}}`/`{{summary}}` 时才会发送；`{{referenceRole}}` 为 `previous-target` 或 `previous-source`。自定义 HTTP 模板不包含 brief、邻块 context 或批注字段。
 - 示例 `httpBody`：
   ```json
   {"text":"{{text}}","source_language":"{{sourceLanguage}}","target_language":"{{targetLanguage}}"}
@@ -246,7 +247,7 @@ npm run package
 
 - **全局术语表**：`globalStorage/glossary.json`，所有工作区共用。
 - **工作区术语表**：工作区根目录的 `.mbs-glossary.json`，可随仓库共享。“工作区”指 VS Code 当前打开的文件夹/工作区；多根工作区使用源文件所在的那个根目录。没有打开工作区时只加载全局术语表。
-- **文档术语表**：生成全文摘要时由 AI 同时产出，和摘要一起保存在译文缓存的 `mbs-summary` 元数据中；预览的摘要面板会显示术语表和文本框，可直接检查、修改、保存。HTTP Provider 不能自动生成，但手动填写摘要后仍可在预览中编辑术语表。清空摘要会同时清空文档术语表。
+- **文档术语表**：生成文档简报时由 AI 同时产出，和摘要/brief 一起保存在译文缓存的 `mbs-summary` 元数据中；预览的“文档简报”面板用流式卡片显示，点击卡片即可修改，支持添加/删除，或切到批量编辑粘贴 `source => target`。HTTP Provider 不能自动生成，但手动填写摘要后仍可在预览中编辑术语表。清空简报会同时清空文档术语表。
 - 合并顺序为 **全局 → 工作区 → 文档**；同名 `source` 以文档术语表为准。生成文档术语表时会把全局/工作区术语作为约束发给 AI，尽量减少冲突。重新生成摘要会保留已有文档术语条目；要彻底重建，先清除摘要再生成。
 - 预览工具栏的 **检查** 会在机器译文中查找未遵循的术语目标词和缺失的受保护 Markdown；结果按块汇总，选中一项会重译该块。译文锁定块不参与检查，避免覆盖手工成果。
 
@@ -260,10 +261,10 @@ npm run package
 | `markdownBilingualSync.apiThinkingMode` | `default` | `default` 不发送 `enable_thinking`，由服务端决定；`enabled` 发送 true；`disabled` 发送 false。仅部分服务支持显式模式 |
 | `markdownBilingualSync.apiDisableThinking` | `false` | 旧版开关，仅在 `apiThinkingMode` 为 `default` 时生效；建议改用 `apiThinkingMode` |
 | `markdownBilingualSync.apiBatchSize` | `50` | 单批块数硬上限；实际批次由 token 预算动态决定 |
-| `markdownBilingualSync.apiBatchTokenBudget` | `2000` | 每批输入内容的估算 token 预算；会避免过小批次，全文摘要、参考译文与术语表计入，输出另计 |
+| `markdownBilingualSync.apiBatchTokenBudget` | `2000` | 每批输入内容的估算 token 预算；会避免过小批次，摘要/brief、邻块 context、用户批注、参考译文与术语表计入，输出另计 |
 | `markdownBilingualSync.translationConcurrency` | `8` | 文件级、文件内批次和手动请求共享的并发上限（1–100） |
 | `markdownBilingualSync.stableTranslation` | `true` | 重新翻译参考旧译文、回译参考当前原文，减少措辞波动；预览内可临时切换 |
-| `markdownBilingualSync.summaryContext` | `true` | 默认把手动生成的全文摘要作为同步/重译/回译上下文；预览内可临时切换 |
+| `markdownBilingualSync.summaryContext` | `true` | 默认把手动生成的文档简报（摘要 + brief）作为同步/重译/回译上下文；预览内可临时切换 |
 | `markdownBilingualSync.apiTimeoutMs` | `120000` | 单次请求超时（毫秒），OpenAI 兼容与通用 HTTP 共用 |
 | `markdownBilingualSync.httpEndpoint` | 空 | 通用 HTTP 接口完整 URL，可含模板变量 |
 | `markdownBilingualSync.httpMethod` | `POST` | 通用 HTTP 请求方法：`POST`、`PUT`、`PATCH` |
@@ -314,10 +315,11 @@ npm run package
 - 删除原文块并写回后，对应译文会自动降级为独立译文块（target 锚点），不会产生孤立锚点或阻止后续同步。
 - 清理当前缓存或清除所有缓存后无法在扩展内恢复；需要长期保留的译文请先导出。
 - 回译按块执行，不会自动批量回译整个文档。
-- 全文摘要与文档术语表只能手动触发生成；HTTP Provider 不支持自动生成摘要，只能手动填写摘要与术语表；超大文档（超过约 12k tokens）目前不自动分段摘要。
-- 摘要和稳定参考会增加每次翻译的输入 token；摘要上下文按每批固定开销计入预算。
+- 文档简报与文档术语表只能手动触发生成；HTTP Provider 不支持自动生成，只能手动填写；超大文档（超过约 12k tokens）目前不自动分段生成。
+- 摘要、brief、只读邻块上下文、用户批注和稳定参考会增加每次翻译的输入 token；这些固定上下文都计入每批预算。
 - 不支持 Mermaid、原始 HTML、自定义提示词和流式输出。
-- 术语表按全局 → 工作区 → 文档合并；文档术语表由 AI 随摘要生成，需要人工检查后再依赖；清除摘要会一起清除文档术语表。
+- 术语表按全局 → 工作区 → 文档合并；文档术语表由 AI 随简报生成，需要人工检查后再依赖；清除简报会一起清除文档术语表。
+- AI 审校目前手动触发（块级“审校此块”或工具栏“审校全部机器译文”），只返回批注，不自动改写译文；批注保存在本机 sidecar，不随工作区共享。
 - UI 提供英文（默认 source）与 zh-cn 两种语言；其他 VS Code 语言回退英文。界面、预览与通知文案来自 `src/i18n/en.ts` / `src/i18n/zh.ts`，错误与警告来自 `src/i18n/errors/*`，清单文案来自 `package.nls*.json`。
 - GitHub 默认 README 为中文，`README.en.md` 作为 Marketplace 英文 README 由打包脚本使用；两者同步维护。
 - 非实时同步：保存只标记状态，翻译由手动命令触发。

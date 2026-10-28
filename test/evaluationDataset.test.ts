@@ -30,7 +30,7 @@ const manifest = JSON.parse(
 
 describe("translation evaluation dataset", () => {
   it("contains unique cases and readable source/reference files", () => {
-    expect(manifest.cases).toHaveLength(16);
+    expect(manifest.cases).toHaveLength(17);
     const ids = new Set<string>();
     for (const item of manifest.cases) {
       expect(item.id, "case id must be unique").not.toBe("");
@@ -87,8 +87,8 @@ describe("translation evaluation dataset", () => {
     ).toBe(true);
 
     const aggregate = aggregateEvaluations(evaluations);
-    expect(aggregate.caseCount).toBe(16);
-    expect(aggregate.passedCases).toBe(16);
+    expect(aggregate.caseCount).toBe(17);
+    expect(aggregate.passedCases).toBe(17);
     expect(aggregate.failedCases).toBe(0);
     expect(aggregate.missingBlocks).toBe(0);
     expect(aggregate.untranslatedBlocks).toBe(0);

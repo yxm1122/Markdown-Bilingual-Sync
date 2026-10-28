@@ -77,9 +77,11 @@
 
 状态由 `alignDocument` 根据锚点 `src`/`dst`、模式和当前原文哈希推导。预览统计与导出统计共享同一套对齐结果。
 
-### 2.5 摘要
+### 2.5 文档简报与批注
 
-`CacheSummary`：`text`、`sourceHash`、`updatedAt`、可选 `model`。摘要存在缓存中，不参与对齐与导出；源文变化后只标记过期，仍可作为上下文使用。
+`CacheSummary`：`text`、`sourceHash`、`updatedAt`、可选 `model`、`glossary`、`brief`（`audience` / `toneAndStyle` / `ambiguities` / `doNotTranslate`）。摘要属于缓存元数据，不参与对齐与导出；源文变化后只标记过期，仍可作为上下文使用。brief 每个字段最多 400 字符，旧缓存缺失时按空处理。
+
+批注不在缓存 Markdown 中，而存放在缓存同目录的 `<cache>.annotations.json` sidecar；`SyncService.loadPreviewState` 读取后在 `buildPreviewModel` 中按块 id 挂到视图。批注记录包含作者（AI/用户）、类型、严重度、状态与 sourceHash；源文变化标记 stale。
 
 ## 3. 主要流程
 
@@ -187,19 +189,22 @@ batchTranslateFolder
 2. 文件内批次：`planTranslationBatches` 按 token 预算与块数上限分批，并按并发度均衡；带文档/小节元数据时，同一批次只来自一个文档，并尽量保持小节完整（小节自身超限时才在内部拆分）。
 3. 全局请求：`ConcurrencyLimiter` 限制同时进行的 Provider HTTP 请求（`translationConcurrency`，默认 8）。
 
-跨文件合并：`BatchTranslationCoordinator` 在约 25ms 窗口内把同语言对、同摘要哈希的调用合并为一个请求，再按复合 id 路由回各文件。合并后的块仍按 `documentId` 分批，不同文件不会进入同一 HTTP 请求；单个文件取消不影响同组其他文件。
+跨文件合并：`BatchTranslationCoordinator` 在约 25ms 窗口内把同语言对、同摘要/brief/context/annotations 哈希的调用合并为一个请求，再按复合 id 路由回各文件。合并后的块仍按 `documentId` 分批，不同文件不会进入同一 HTTP 请求；单个文件取消不影响同组其他文件。
 
-### 3.7 摘要与稳定翻译
+### 3.7 文档简报、单块上下文与稳定翻译
 
-- 摘要在预览中手动触发；OpenAI 兼容/Mock 支持 AI 生成，HTTP 只支持手动编辑。
-- 摘要写入缓存 `mbs-summary` 元数据；清除缓存会一起删除摘要。
-- 摘要过期（源文哈希变化）仍作为上下文使用，只提示用户。
-- 同步/重译/全部重译/回译可以携带摘要；摘要 token 从每批预算中扣除；不同摘要的请求不会被合并。
+- 文档简报在预览中手动触发；OpenAI 兼容/Mock 支持 AI 生成摘要、术语表与 brief，HTTP 只支持手动编辑。
+- 简报写入缓存 `mbs-summary` 元数据；清除缓存会一起删除简报与术语表。
+- 简报过期（源文哈希变化）仍作为上下文使用，只提示用户。
+- 同步/重译/全部重译/回译可以携带摘要与 brief；二者 token 从每批预算中扣除；不同摘要、brief、context 或 annotations 的请求不会被合并。
+- 单块重译/回译由 `sync/blockContext` 从同一 section 取 1 个前块/后块（标题优先取后一块正文），作为只读 `context` 发送；大块或超过 600 token 时不加。回译的 adjacent context 来自目标语言缓存。
+- 审校可手动按块或按文件触发；文件级审校跳过 human/deleted/未翻译块，按 6 块一批调用 reviewer，只替换这些块的 AI 批注，用户批注保留。
+- 稳定翻译仍由 `stableTranslation` 控制：重译参考旧译文，回译参考当前原文；单块上下文不会替代 reference。
 
 ### 3.8 术语表与译后一致性
 
 - 用户术语表按 全局 `glossary.json` → 工作区根目录 `.mbs-glossary.json` 合并；同名 source 后加载的作用域为准。
-- 全文摘要生成会同时产出原文摘要和文档术语表（目标语言），两者一起写入缓存 `mbs-summary` 元数据；文档术语表可在预览摘要面板中编辑，清空摘要会一起清空。
+- 全文摘要生成会同时产出原文摘要、brief 和文档术语表（目标语言），一起写入缓存 `mbs-summary` 元数据；都可在预览“文档简报”面板中编辑，清空简报会一起清空。
 - 翻译请求使用“全局/工作区 → 文档”的合并术语表，文档术语表优先；生成文档术语表时会把用户术语表发给 AI 作为约束。
 - 术语匹配与一致性检查共用 `util/glossaryMatch` 与 `util/protectedMarkdown`，避免评估与运行时口径不一致。
 - 预览的“检查”动作通过 `SyncService.checkConsistency` 读取原文/缓存，只检查机器译文；人工锁定块跳过。问题按块汇总，选择后调用现有单块重译并刷新预览。
@@ -232,18 +237,20 @@ Provider 必须：
 - 原样回显每个请求 `id`，且每个 id 恰好返回一次。
 - 不返回未请求的 id、空文本、重复 id 或超过 500,000 字符的译文。
 - 在 `signal` 取消后尽快 reject，不再发起新请求。
-- 对 `reference` / `summary` / 术语表按“参考数据”处理，不执行其中指令。
+- 对 `reference` / `summary` / `brief` / `context` / 术语表按“参考数据”处理，不执行其中指令。
+- 用户 `annotations` 是重译指令；AI 审校批注不得进入 `annotations`。
 
 能力：
 
-- `supportsSummary` + `summarize`：支持整篇摘要生成。
+- `supportsSummary` + `summarize`：支持整篇摘要、术语表与 brief 生成。
+- `supportsReview` + `review`：支持语义审校；只返回 `ReviewAnnotationDraft[]`（批注），不返回译文。
 - `testConnection`：支持连接测试。
 
 实现：
 
-- `MockTranslationProvider`：离线词典替换 + 结构标记，用于演示和测试。
-- `OpenAITranslationProvider`：Chat Completions，JSON 输出校验、重试、脱敏、连接测试、摘要。
-- `GenericHttpTranslationProvider`：模板化 endpoint/headers/body，响应 JSON path 或纯文本，不支持自动摘要。
+- `MockTranslationProvider`：离线词典替换 + 结构标记，用于演示和测试；返回固定 brief 与一条演示批注。
+- `OpenAITranslationProvider`：Chat Completions，JSON 输出校验、重试、脱敏、连接测试、摘要、审校；审校失败时带严格提示重试一次。
+- `GenericHttpTranslationProvider`：模板化 endpoint/headers/body，响应 JSON path 或纯文本，不支持自动摘要与审校。
 
 路由器 `TranslationProviderRouter` 每次调用读取当前 provider 设置；未知值回退 Mock。
 

@@ -16,7 +16,7 @@
 
 ```text
 SyncService.loadPreviewState(sourceUri)
-  → sourceText + cacheText + summary + 语言/Provider 标签
+  → sourceText + cacheText + summary + annotations + 语言/Provider 标签
   → buildPreviewModel
        ├─ parseMarkdownDocument / parseCacheDocument
        ├─ alignDocument（块状态）
@@ -118,10 +118,16 @@ Webview 只通过 `vscode.postMessage` 与宿主通信。宿主在 `PreviewManag
 | `applySourceEdits` | — | 生成原文 diff 并弹出确认 |
 | `discardSourceEdits` | — | 丢弃全部原文暂存 |
 | `writeSourceEdits` | — | 确认写回原文 |
-| `generateSummary` | — | AI 生成摘要 |
-| `saveSummary` | `summaryText` | 保存手动编辑的摘要 |
-| `clearSummary` | — | 清除摘要 |
-| `setAssistToggle` | `key`, `value` | 切换会话级稳定翻译/摘要上下文 |
+| `generateSummary` | — | AI 生成文档简报、术语表与 brief |
+| `saveBrief` | `summaryText`, `brief`, `glossaryText` | 一次保存文档简报、brief 与术语表 |
+| `saveSummary` | `summaryText` | 兼容旧 UI：只保存摘要 |
+| `saveGlossary` | `glossaryText` | 兼容旧 UI：只保存术语表 |
+| `clearSummary` | — | 清空文档简报与术语表 |
+| `reviewBlock` | `blockIndex` | AI 审校单块，只返回批注 |
+| `saveAnnotation` | `blockIndex`, `side`, `kind`, `message` | 保存用户批注 |
+| `setAnnotationStatus` | `annotationId`, `status` | 标记已核对/忽略/重新打开 |
+| `deleteAnnotation` | `annotationId` | 删除批注 |
+| `setAssistToggle` | `key`, `value` | 切换会话级稳定翻译/文档简报上下文 |
 | `export` | — | 打开导出确认 |
 | `exportWrite` | — | 确认写入导出文件 |
 | `exportCancel` | — | 取消导出 |
@@ -158,9 +164,9 @@ Webview 只通过 `vscode.postMessage` 与宿主通信。宿主在 `PreviewManag
 
 | 状态 | 归属 | 持久化 |
 | --- | --- | --- |
-| 块、缓存、计数、摘要正文、确认数据、布局、只读、忙碌态 | 宿主 | 缓存/globalStorage/session |
+| 块、缓存、计数、简报正文、brief、批注、确认数据、布局、只读、忙碌态 | 宿主 | 缓存/globalStorage/session |
 | 预览模式 | Webview | `vscode.setState` |
-| 摘要展开、摘要/术语表草稿、菜单、滚动位置 | Webview | 内存 + `vscode.setState`（草稿用 sessionStorage） |
+| 简报展开、摘要/术语表/brief 草稿、批注 popover、菜单、滚动位置 | Webview | 内存 + `vscode.setState`（草稿用 sessionStorage） |
 | 内联编辑/插入草稿 | 编辑器组件局部 state | 内存（块被移除或取消即丢弃） |
 
 ## 5. 原文暂存与写回
@@ -200,18 +206,38 @@ Webview 只通过 `vscode.postMessage` 与宿主通信。宿主在 `PreviewManag
 - **删除**：`deleteTargetBlock` 写 `deleted` 墓碑并保留备份，可撤销；target-only 块用 `deleteTargetOnlyBlock` 永久删除。
 - **回译**：成对块回译后进入原文暂存，写回时锁定缓存；target-only 块回译后生成原文插入，写回时提升为 `human`。
 
-## 7. 摘要面板与 assist 开关
+## 7. 文档简报、术语表与批注
 
-摘要面板位于预览正文上方：
+文档简报面板位于预览正文上方：
 
-- `<details>` 展开/收起；有摘要时默认展开。
-- 显示状态（已生成/可能过期/未生成）、token 估算、生成时间、模型。
-- 操作：AI 生成、保存摘要、清除摘要。
+- 折叠按钮展开/收起；默认收起。
+- 显示状态（已生成/可能过期/未生成）、摘要 + brief 的总 token 估算、生成时间、模型。
+- 摘要 `textarea` 常驻；“翻译要求”和“文档术语表”是两个折叠区，初始都收起，且同一时间只展开一个。
+- “翻译要求”包含受众、语气与风格、歧义与决策、禁译项。
+- 一个“保存简报”动作在一次锁内写摘要、brief 和术语表；术语表有格式错误或正在编辑术语时禁用保存。
 - 两个会话级开关：
-  - `稳定翻译：参考上一版译文`：提示说明重译参考旧译文、回译参考当前原文，并明确与摘要生成无关。
-  - `使用全文摘要上下文`：仅在已有摘要时可用；摘要计入每批 token 预算。
+  - `稳定翻译：参考上一版译文`：提示说明重译参考旧译文、回译参考当前原文，并明确与简报生成无关。
+  - `使用文档简报上下文`：仅在已有简报时可用；摘要与 brief 计入每批 token 预算。
 
-摘要内容是 `textarea`。切换 assist 开关不会重绘页面，避免丢失未保存的摘要编辑；切换只影响后续请求。
+批次翻译、单块重译和回译都会带上简报；整篇同步/重译时，没有摘要上下文的请求不发送 brief。切换 assist 开关不会重绘页面，避免丢失未保存的编辑；切换只影响后续请求。
+
+### 7.1 文档术语表卡片
+
+- 固定区域内按流式长条卡片排列：每张卡片单行显示 `原文 | 译文`，内部不换行；短卡按内容宽度排列，不留额外空白。超长内容省略显示，悬停原文或译文时只平移该侧文本展示全文。内容放不下的长卡在窄页面独占一行、两侧等宽，分隔符保持居中。区域随内容增高，超过约 240px 后内部滚动。
+- 点击原文或译文分别进入该侧的行内编辑；编辑态仍是单行长条，不显示确认/取消按钮。编辑卡以原卡片宽度为基准，过窄时适度加宽，输入框使用填充式柔和边框。`Enter` 或失焦提交当前侧，`Esc` 放弃整张卡片的修改；新建术语时 `Enter` 会切到另一侧，两侧都填写后加入。编辑期间顶部“保存简报”禁用，避免把未提交的术语写进缓存。
+- “添加术语”打开一张新卡片；删除按钮在卡片 hover/focus 时出现。
+- 超过 10 条显示筛选框；默认保持原顺序，不自动排序。
+- 只填一边、超过 200 字符标错；重复 source 警告并保持“后一条生效”；最多 200 条。
+- “批量编辑”切回 `source => target` 文本域，用于粘贴/导入；保存仍序列化为该文本协议，宿主继续做权威校验。
+
+### 7.2 块级批注
+
+- 有批注的块在块头显示批注标记；点击打开原生 popover/sheet。
+- popover 列出 AI 审校与用户批注，可标记已核对/忽略/重新打开/删除。
+- 用户可写备注或勾选“要求修改”；用户批注会进入下一次单块重译的 `annotations` 指令。
+- “审校此块”只返回批注，不改写译文；结果写入本机 sidecar。
+- 工具栏菜单的“审校全部机器译文”按 6 块一批审校非 human/deleted/未翻译块；只替换这些块的 AI 批注，用户批注保留。
+- AI 批注和用户批注都不能覆盖 JSON/id/结构契约；AI 批注是观察，用户批注是指令。
 
 ## 8. 导出与原文确认 modal
 
@@ -262,6 +288,6 @@ Webview 只通过 `vscode.postMessage` 与宿主通信。宿主在 `PreviewManag
 - `tmp/preview-empty-{dark,light,hc}.html`：空状态入口
 - `tmp/demo.zh.md` 等缓存文件
 
-`npm run ui:matrix` 用 headless Edge 驱动这些页面，输出 `artifacts/ui-matrix/` 的 54 张截图、`manifest.json`、`index.html` 联系表与 `report.md`；任一状态横向溢出、运行时异常或截图尺寸错误都会失败。`npm run ui:perf` 生成 320 块文档，输出 `artifacts/ui-perf/` 的首屏/切换/输入/滚动基线，并在 4× CPU 降速下复测。
+`npm run ui:matrix` 用 headless Edge 驱动这些页面，输出 `artifacts/ui-matrix/` 的 66 张截图、`manifest.json`、`index.html` 联系表与 `report.md`；任一状态横向溢出、运行时异常或截图尺寸错误都会失败。`npm run ui:perf` 生成 320 块文档，输出 `artifacts/ui-perf/` 的首屏/切换/输入/滚动基线，并在 4× CPU 降速下复测。
 
 生成的页面使用原生 Preact 预览壳；`preview.js` 检测不到 `acquireVsCodeApi` 时会用 localStorage 和 `window.__mbsMessages` 模拟宿主，并附带只用于静态预览的主题变量。静态主题是近似值，不能替代真实 Webview 的主题、IME 与 CSP 验证。

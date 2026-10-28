@@ -58,6 +58,10 @@ import { CancelledError, SyncService } from "../sync/syncService";
 import { SyncBlockedError } from "../sync/sync";
 import type { ConsistencyIssue } from "../quality/consistency";
 import { estimateTokenCount } from "../translation/batching";
+import {
+  normalizeTranslationBrief,
+  translationBriefText,
+} from "../translation/types";
 import { languageSuffix } from "../util/language";
 import { buildPreviewModel, type PreviewModel } from "./previewModel";
 import {
@@ -776,6 +780,8 @@ class PreviewPanelSession implements vscode.Disposable {
         fileLabel: path.basename(this.sourceUri.fsPath),
         resolveImage: (src) => this.resolveImage(src, sourceDirectory),
         pendingSource: this.pendingSourceStage(),
+        annotations: state.annotations,
+        reviewSupported: this.syncService.reviewSupported,
         assist: {
           stableTranslation: this.stableTranslation,
           summaryContext: this.summaryContext,
@@ -785,6 +791,13 @@ class PreviewPanelSession implements vscode.Disposable {
             ...(summary?.updatedAt ? { updatedAt: summary.updatedAt } : {}),
             ...(summary?.model ? { model: summary.model } : {}),
             tokens: estimateTokenCount(summaryText),
+            brief: summary?.brief ?? {},
+            briefTokens: estimateTokenCount(
+              translationBriefText(summary?.brief),
+            ),
+            briefFilledCount: Object.values(summary?.brief ?? {}).filter(
+              (value) => typeof value === "string" && value.trim(),
+            ).length,
             canGenerate: this.syncService.summarySupported,
             glossaryText: formatDocumentGlossary(summary?.glossary ?? []),
             glossaryCount: summary?.glossary?.length ?? 0,
@@ -923,6 +936,32 @@ class PreviewPanelSession implements vscode.Disposable {
     const glossaryText =
       typeof message.glossaryText === "string"
         ? message.glossaryText
+        : undefined;
+    const brief =
+      message.brief &&
+      typeof message.brief === "object" &&
+      !Array.isArray(message.brief)
+        ? normalizeTranslationBrief(message.brief)
+        : undefined;
+    const annotationId =
+      typeof message.annotationId === "string"
+        ? message.annotationId
+        : undefined;
+    const annotationMessage =
+      typeof message.message === "string" ? message.message : undefined;
+    const annotationSide =
+      message.side === "source" || message.side === "target"
+        ? message.side
+        : undefined;
+    const annotationKind =
+      message.kind === "note" || message.kind === "request-change"
+        ? message.kind
+        : undefined;
+    const annotationStatus =
+      message.status === "open" ||
+      message.status === "resolved" ||
+      message.status === "dismissed"
+        ? message.status
         : undefined;
     const assistKey =
       message.key === "stableTranslation" ||
@@ -1088,9 +1127,46 @@ class PreviewPanelSession implements vscode.Disposable {
             await this.saveSummary(summaryText);
           }
           break;
+        case "saveBrief":
+          if (summaryText !== undefined) {
+            await this.saveBrief(summaryText, brief, glossaryText);
+          }
+          break;
         case "saveGlossary":
           if (glossaryText !== undefined) {
             await this.saveGlossary(glossaryText);
+          }
+          break;
+        case "reviewBlock":
+          if (blockIndex !== undefined) {
+            await this.reviewBlock(blockIndex);
+          }
+          break;
+        case "reviewMachineBlocks":
+          await this.reviewMachineBlocks();
+          break;
+        case "saveAnnotation":
+          if (
+            blockIndex !== undefined &&
+            annotationSide &&
+            annotationKind &&
+            annotationMessage !== undefined
+          ) {
+            await this.saveAnnotation(blockIndex, {
+              side: annotationSide,
+              kind: annotationKind,
+              message: annotationMessage,
+            });
+          }
+          break;
+        case "setAnnotationStatus":
+          if (annotationId && annotationStatus) {
+            await this.setAnnotationStatus(annotationId, annotationStatus);
+          }
+          break;
+        case "deleteAnnotation":
+          if (annotationId) {
+            await this.deleteAnnotation(annotationId);
           }
           break;
         case "clearSummary":
@@ -2064,6 +2140,164 @@ class PreviewPanelSession implements vscode.Disposable {
    * - 回译文本与当前原文一致时视为无变化，不产生暂存；
    * - 暂存该块会取消它已有的「删除」标记，避免同一块既删又改。
    */
+  // ---- 审校批注 ----
+
+  /** 审校单个块；只写本机 sidecar，不改缓存 Markdown。 */
+  private async reviewBlock(blockIndex: number): Promise<void> {
+    this.setBusy(true, UI_TEXT.notifications.reviewingBlock);
+    const controller = new AbortController();
+    let cancelled = false;
+    try {
+      const result = await vscode.window.withProgress(
+        {
+          location: vscode.ProgressLocation.Notification,
+          title: "Markdown Bilingual Sync",
+          cancellable: true,
+        },
+        async (progress, token) => {
+          token.onCancellationRequested(() => {
+            cancelled = true;
+            controller.abort();
+          });
+          progress.report({
+            message: UI_TEXT.notifications.reviewingBlock,
+          });
+          return this.syncService.reviewBlock(
+            this.sourceUri,
+            blockIndex,
+            controller.signal,
+          );
+        },
+      );
+      await this.update({
+        text:
+          result.added > 0
+            ? formatText(UI_TEXT.notifications.reviewDone, {
+                count: result.added,
+              })
+            : UI_TEXT.notifications.reviewNoIssues,
+        kind: result.added > 0 ? "info" : "success",
+      });
+    } catch (error) {
+      if (cancelled || error instanceof CancelledError) {
+        this.showToast(UI_TEXT.notifications.reviewCancelled, "info");
+        return;
+      }
+      throw error;
+    } finally {
+      this.setBusy(false);
+    }
+  }
+
+  /** 审校全部机器译文；只写本机 sidecar。 */
+  private async reviewMachineBlocks(): Promise<void> {
+    this.setBusy(true, UI_TEXT.notifications.reviewingBlock);
+    const controller = new AbortController();
+    let cancelled = false;
+    try {
+      const result = await vscode.window.withProgress(
+        {
+          location: vscode.ProgressLocation.Notification,
+          title: "Markdown Bilingual Sync",
+          cancellable: true,
+        },
+        async (progress, token) => {
+          token.onCancellationRequested(() => {
+            cancelled = true;
+            controller.abort();
+          });
+          progress.report({
+            message: UI_TEXT.notifications.reviewingBlock,
+          });
+          return this.syncService.reviewBlocks(
+            this.sourceUri,
+            controller.signal,
+          );
+        },
+      );
+      await this.update({
+        text:
+          result.added > 0
+            ? formatText(UI_TEXT.notifications.reviewDone, {
+                count: result.added,
+              })
+            : UI_TEXT.notifications.reviewNoIssues,
+        kind: result.added > 0 ? "info" : "success",
+      });
+    } catch (error) {
+      if (cancelled || error instanceof CancelledError) {
+        this.showToast(UI_TEXT.notifications.reviewCancelled, "info");
+        return;
+      }
+      throw error;
+    } finally {
+      this.setBusy(false);
+    }
+  }
+
+  /** 保存用户批注。 */
+  private async saveAnnotation(
+    blockIndex: number,
+    input: {
+      side: "source" | "target";
+      kind: "note" | "request-change";
+      message: string;
+    },
+  ): Promise<void> {
+    this.setBusy(true, UI_TEXT.notifications.annotationSaving);
+    try {
+      await this.syncService.saveUserAnnotation(
+        this.sourceUri,
+        blockIndex,
+        input,
+      );
+      await this.update({
+        text: UI_TEXT.notifications.annotationSaved,
+        kind: "success",
+      });
+    } finally {
+      this.setBusy(false);
+    }
+  }
+
+  /** 更新批注状态。 */
+  private async setAnnotationStatus(
+    annotationId: string,
+    status: "open" | "resolved" | "dismissed",
+  ): Promise<void> {
+    this.setBusy(true, UI_TEXT.notifications.annotationSaving);
+    try {
+      await this.syncService.setAnnotationStatus(
+        this.sourceUri,
+        annotationId,
+        status,
+      );
+      await this.update({
+        text: UI_TEXT.notifications.annotationUpdated,
+        kind: "success",
+      });
+    } finally {
+      this.setBusy(false);
+    }
+  }
+
+  /** 删除批注。 */
+  private async deleteAnnotation(annotationId: string): Promise<void> {
+    this.setBusy(true, UI_TEXT.notifications.annotationSaving);
+    try {
+      await this.syncService.deleteAnnotation(
+        this.sourceUri,
+        annotationId,
+      );
+      await this.update({
+        text: UI_TEXT.notifications.annotationDeleted,
+        kind: "info",
+      });
+    } finally {
+      this.setBusy(false);
+    }
+  }
+
   // ---- 全文摘要 ----
 
   /**
@@ -2133,6 +2367,53 @@ class PreviewPanelSession implements vscode.Disposable {
         this.sourceUri,
         text,
       );
+      await this.update(
+        {
+          text: UI_TEXT.notifications.summarySaved,
+          kind: "success",
+        },
+        undefined,
+        cacheText,
+      );
+    } finally {
+      this.setBusy(false);
+    }
+  }
+
+  /**
+   * 一次保存文档简报：摘要 + brief + 术语表。
+   * 术语表逐行格式错误时不写盘，直接提示行号，保留用户输入。
+   */
+  private async saveBrief(
+    summaryText: string,
+    brief: ReturnType<typeof normalizeTranslationBrief> | undefined,
+    glossaryText: string | undefined,
+  ): Promise<void> {
+    if (!summaryText.trim()) {
+      throw new Error(UI_TEXT.preview.summary.empty);
+    }
+    const parsed = parseDocumentGlossaryText(glossaryText ?? "");
+    if (parsed.errorLines.length > 0) {
+      throw new Error(
+        formatText(UI_TEXT.notifications.glossaryInvalidLines, {
+          lines: parsed.errorLines.join(", "),
+        }),
+      );
+    }
+    if (parsed.overflow) {
+      throw new Error(
+        formatText(UI_TEXT.notifications.glossaryTooMany, {
+          max: MAX_DOCUMENT_GLOSSARY_ENTRIES,
+        }),
+      );
+    }
+    this.setBusy(true, UI_TEXT.notifications.summarySaving);
+    try {
+      const cacheText = await this.syncService.saveBrief(this.sourceUri, {
+        text: summaryText,
+        brief,
+        glossary: parsed.entries,
+      });
       await this.update(
         {
           text: UI_TEXT.notifications.summarySaved,

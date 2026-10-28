@@ -9,7 +9,7 @@
 
 ## 1. 数据集
 
-- `eval/manifest.json`：语言对、全局术语表和 16 个用例。
+- `eval/manifest.json`：语言对、全局术语表和 17 个用例（新增 `heading-idiom`，覆盖标题习语与单块上下文回归）。
 - `eval/cases/<id>/source.md`：英文原文。
 - `eval/cases/<id>/reference.zh.md`：人工中文参考译文。
 - 用例覆盖标题、段落、嵌套列表、表格、代码/公式、链接/图片/脚注、GitHub Alerts、跨段指代、术语、混合语言、长段落、frontmatter、中文标点、内联 HTML/转义、否定/数量表达，以及两篇完整的真实风格文档（项目 README 和运维 Runbook）。

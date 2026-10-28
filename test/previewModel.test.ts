@@ -774,6 +774,12 @@ describe("buildPreviewHtml", () => {
           updatedAt: "2026-10-24T00:00:00.000Z",
           model: "test-model",
           tokens: 12,
+          brief: {
+            audience: "开发者",
+            toneAndStyle: "简洁技术说明",
+          },
+          briefTokens: 18,
+          briefFilledCount: 2,
           canGenerate: true,
           glossaryText: "table => 表格\ncache => 缓存",
           glossaryCount: 2,
@@ -810,7 +816,7 @@ describe("buildPreviewHtml", () => {
       `title="${UI_TEXT.preview.summary.stableTranslationTitle}"`,
     );
     expect(html).toContain(`title="${UI_TEXT.preview.summary.useSummaryTitle}"`);
-    expect(UI_TEXT.preview.summary.stableTranslationTitle).toContain("与全文摘要");
+    expect(UI_TEXT.preview.summary.stableTranslationTitle).toContain("与文档简报");
     expect(UI_TEXT.preview.summary.useSummaryTitle).toContain("token 预算");
   });
 
@@ -829,6 +835,9 @@ describe("buildPreviewHtml", () => {
           updatedAt: "2026-10-24T00:00:00.000Z",
           model: "batch:openai",
           tokens: 12,
+          brief: {},
+          briefTokens: 0,
+          briefFilledCount: 0,
           canGenerate: true,
         },
       },
@@ -860,6 +869,9 @@ describe("buildPreviewHtml", () => {
             text: "",
             stale: false,
             tokens: 0,
+            brief: {},
+            briefTokens: 0,
+            briefFilledCount: 0,
             canGenerate: false,
           },
         },
@@ -876,6 +888,7 @@ describe("buildPreviewHtml", () => {
         },
         warnings: ["<script>alert(1)</script>"],
         pendingSourceCount: 0,
+        reviewSupported: false,
       },
       nonce: "test-nonce",
       csp: "default-src 'none'",

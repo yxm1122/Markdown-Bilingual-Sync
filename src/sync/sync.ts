@@ -44,6 +44,7 @@ import { normalizeBlockContent } from "../util/text";
 import {
   validateTranslationResult,
   type GlossaryEntry,
+  type TranslationBrief,
   type TranslationChunkHandler,
   type TranslationItem,
   type TranslationProvider,
@@ -80,6 +81,8 @@ export interface TranslationAssistOptions {
   stableTranslation?: boolean;
   /** 全文摘要（原文语言）；存在时作为每批固定上下文，并计入预算。 */
   summary?: string;
+  /** 文档简报的用户翻译要求；存在时随每批请求发送。 */
+  brief?: TranslationBrief;
 }
 
 /** `syncDocument` 的输入。 */
@@ -698,6 +701,9 @@ export async function syncDocument(options: SyncOptions): Promise<SyncResult> {
           glossary: [...glossary],
           ...(options.assist?.summary?.trim()
             ? { summary: options.assist.summary }
+            : {}),
+          ...(options.assist?.brief
+            ? { brief: options.assist.brief }
             : {}),
         },
         signal,

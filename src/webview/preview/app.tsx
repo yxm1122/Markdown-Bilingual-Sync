@@ -36,6 +36,24 @@ import {
   send,
   standaloneMode,
 } from "./bridge";
+import {
+  BRIEF_FIELD_LIMIT,
+  briefFilledCount,
+  briefSaveSignature,
+  normalizeBriefDraft,
+} from "./briefModel";
+import {
+  GLOSSARY_MAX_ENTRIES,
+  GLOSSARY_MAX_TERM_LENGTH,
+  canonicalGlossaryText,
+  cleanGlossaryText,
+  parseGlossaryRows,
+  serializeGlossaryRows,
+  validateGlossaryRows,
+  type GlossaryRow,
+} from "./glossaryModel";
+import type { TranslationBrief } from "../../translation/types";
+import type { AnnotationView } from "../../annotations/types";
 import type { BootData, MenuEntry, OutboundMessage, UiCatalog } from "./types";
 
 type Mode = "bilingual" | "source" | "target";
@@ -73,6 +91,12 @@ interface SplitScrollAnchor {
   progress: number;
   atTop: boolean;
   atBottom: boolean;
+}
+
+interface AnnotationTarget {
+  block: PreviewBlockView;
+  x: number;
+  y: number;
 }
 
 interface MenuState {
@@ -348,6 +372,313 @@ function Menu(props: {
   );
 }
 
+// ---- 批注 ----
+
+function annotationKindLabel(
+  annotation: AnnotationView,
+  text: UiCatalog,
+): string {
+  switch (annotation.kind) {
+    case "note":
+      return text.preview.annotations.kindNote;
+    case "request-change":
+      return text.preview.annotations.kindRequest;
+    case "source-issue":
+      return text.preview.annotations.typeSourceIssue;
+    case "translation-uncertain":
+      return text.preview.annotations.typeTranslationUncertain;
+    case "term":
+      return text.preview.annotations.typeTerm;
+    case "structure":
+      return text.preview.annotations.typeStructure;
+    default:
+      return annotation.kind;
+  }
+}
+
+function AnnotationPopover(props: {
+  target: AnnotationTarget;
+  block: PreviewBlockView;
+  text: UiCatalog;
+  busy: boolean;
+  reviewSupported: boolean;
+  onClose: () => void;
+  onReview: () => void;
+  onSave: (input: {
+    side: "source" | "target";
+    kind: "note" | "request-change";
+    message: string;
+  }) => void;
+  onStatus: (
+    annotationId: string,
+    status: "open" | "resolved" | "dismissed",
+  ) => void;
+  onDelete: (annotationId: string) => void;
+  onRetranslate: () => void;
+}) {
+  const text = props.text;
+  const ref = useRef<HTMLDivElement>(null);
+  const [position, setPosition] = useState({
+    left: props.target.x,
+    top: props.target.y,
+  });
+  const [draft, setDraft] = useState("");
+  const [requestChange, setRequestChange] = useState(false);
+  const [side, setSide] = useState<"source" | "target">(
+    props.block.targetRaw.trim() ? "target" : "source",
+  );
+
+  useLayoutEffect(() => {
+    const node = ref.current;
+    if (!node) {
+      return;
+    }
+    const rect = node.getBoundingClientRect();
+    let left = props.target.x - rect.width;
+    let top = props.target.y;
+    if (left < 4) {
+      left = 4;
+    }
+    if (left + rect.width > window.innerWidth - 4) {
+      left = Math.max(4, window.innerWidth - rect.width - 4);
+    }
+    if (top + rect.height > window.innerHeight - 4) {
+      top = Math.max(4, props.target.y - rect.height - 8);
+    }
+    setPosition({ left, top });
+  }, [props.target]);
+
+  useEffect(() => {
+    const onPointerDown = (event: MouseEvent) => {
+      if (!(event.target instanceof Node) || !ref.current?.contains(event.target)) {
+        props.onClose();
+      }
+    };
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        props.onClose();
+      }
+    };
+    const onScroll = (event: Event) => {
+      if (event.target instanceof Node && ref.current?.contains(event.target)) {
+        return;
+      }
+      props.onClose();
+    };
+    document.addEventListener("mousedown", onPointerDown);
+    document.addEventListener("keydown", onKeyDown);
+    window.addEventListener("scroll", onScroll, true);
+    return () => {
+      document.removeEventListener("mousedown", onPointerDown);
+      document.removeEventListener("keydown", onKeyDown);
+      window.removeEventListener("scroll", onScroll, true);
+    };
+  }, [props.onClose]);
+
+  const annotations = [...(props.block.annotations ?? [])].sort(
+    (left, right) =>
+      (left.status === "open" ? 0 : 1) -
+      (right.status === "open" ? 0 : 1),
+  );
+  const openUserAnnotations = annotations.some(
+    (annotation) =>
+      annotation.author === "user" && annotation.status === "open",
+  );
+  const canReview =
+    props.reviewSupported &&
+    props.block.hasCache &&
+    !props.block.standaloneTargetId &&
+    !props.block.pendingInsertId;
+
+  return (
+    <div
+      ref={ref}
+      class="pv-annotations"
+      role="dialog"
+      aria-label={text.preview.annotations.title}
+      style={{ left: `${position.left}px`, top: `${position.top}px` }}
+      onMouseDown={(event) => event.stopPropagation()}
+    >
+      <header class="pv-annotations-head">
+        <Icon name="comment-discussion" />
+        <span class="pv-annotations-title">{text.preview.annotations.title}</span>
+        <span class="pv-annotations-block">
+          {props.text.preview.kindLabels[props.block.kind] ?? props.block.kind}
+          {props.block.headingPath ? ` · ${props.block.headingPath}` : ""}
+        </span>
+        <button
+          type="button"
+          class="pv-action"
+          title={text.preview.annotations.title}
+          aria-label={text.preview.annotations.title}
+          onClick={props.onClose}
+        >
+          <Icon name="close" />
+        </button>
+      </header>
+      <div class="pv-annotations-body">
+        {annotations.length === 0 ? (
+          <p class="pv-annotations-empty">{text.preview.annotations.empty}</p>
+        ) : (
+          <div class="pv-annotation-list">
+            {annotations.map((annotation) => (
+              <article
+                class={`pv-annotation${annotation.status !== "open" ? " is-closed" : ""}`}
+                key={annotation.id}
+              >
+                <div class="pv-annotation-meta">
+                  <span
+                    class={`pv-annotation-author is-${annotation.author}`}
+                  >
+                    {annotation.author === "ai" ? text.preview.annotations.ai : text.preview.annotations.user}
+                  </span>
+                  <span>{annotationKindLabel(annotation, props.text)}</span>
+                  <span class="pv-annotation-side">
+                    {annotation.side === "source"
+                      ? props.text.preview.panes.source
+                      : props.text.preview.panes.target}
+                  </span>
+                  {annotation.author === "ai" ? (
+                    <span
+                      class={`pv-annotation-severity is-${annotation.severity}`}
+                    >
+                      {annotation.severity === "check"
+                        ? text.preview.annotations.severityCheck
+                        : text.preview.annotations.severityInfo}
+                    </span>
+                  ) : null}
+                  {annotation.stale ? (
+                    <span class="pv-annotation-stale" title={text.preview.annotations.stale}>
+                      !
+                    </span>
+                  ) : null}
+                </div>
+                <p class="pv-annotation-message">{annotation.message}</p>
+                {annotation.question ? (
+                  <p class="pv-annotation-question">{annotation.question}</p>
+                ) : null}
+                {annotation.suggestion ? (
+                  <p class="pv-annotation-suggestion">
+                    {annotation.suggestion}
+                  </p>
+                ) : null}
+                <div class="pv-annotation-actions">
+                  {annotation.status === "open" ? (
+                    <>
+                      <button
+                        type="button"
+                        class="pv-link"
+                        disabled={props.busy}
+                        onClick={() =>
+                          props.onStatus(annotation.id, "resolved")
+                        }
+                      >
+                        {text.preview.annotations.resolve}
+                      </button>
+                      <button
+                        type="button"
+                        class="pv-link"
+                        disabled={props.busy}
+                        onClick={() =>
+                          props.onStatus(annotation.id, "dismissed")
+                        }
+                      >
+                        {text.preview.annotations.dismiss}
+                      </button>
+                    </>
+                  ) : (
+                    <button
+                      type="button"
+                      class="pv-link"
+                      disabled={props.busy}
+                      onClick={() => props.onStatus(annotation.id, "open")}
+                    >
+                      {text.preview.annotations.reopen}
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    class="pv-link is-danger"
+                    disabled={props.busy}
+                    onClick={() => props.onDelete(annotation.id)}
+                  >
+                    {text.preview.annotations.delete}
+                  </button>
+                </div>
+              </article>
+            ))}
+          </div>
+        )}
+        <div class="pv-annotation-compose">
+          <textarea
+            class="pv-textarea"
+            rows={3}
+            value={draft}
+            spellcheck={false}
+            aria-label={text.preview.annotations.add}
+            placeholder={text.preview.annotations.placeholder}
+            disabled={props.busy}
+            onInput={(event) => setDraft(event.currentTarget.value)}
+          />
+          <div class="pv-annotation-compose-actions">
+            <label class="pv-check">
+              <input
+                type="checkbox"
+                checked={requestChange}
+                disabled={props.busy}
+                onChange={(event) =>
+                  setRequestChange(event.currentTarget.checked)
+                }
+              />
+              {text.preview.annotations.requestChange}
+            </label>
+            <select
+              class="pv-input pv-annotation-side"
+              aria-label={text.preview.annotations.title}
+              value={side}
+              disabled={props.busy}
+              onChange={(event) =>
+                setSide(event.currentTarget.value as "source" | "target")
+              }
+            >
+              <option value="source">{props.text.preview.panes.source}</option>
+              <option value="target">{props.text.preview.panes.target}</option>
+            </select>
+            <Button
+              disabled={props.busy || !draft.trim()}
+              onClick={() => {
+                props.onSave({
+                  side,
+                  kind: requestChange ? "request-change" : "note",
+                  message: draft,
+                });
+                setDraft("");
+                setRequestChange(false);
+              }}
+            >
+              {text.preview.annotations.save}
+            </Button>
+          </div>
+        </div>
+        <div class="pv-annotation-footer">
+          {canReview ? (
+            <Button disabled={props.busy} onClick={props.onReview}>
+              <Icon name="sparkle" /> {text.preview.annotations.review}
+            </Button>
+          ) : null}
+          {openUserAnnotations ? (
+            <Button disabled={props.busy} onClick={props.onRetranslate}>
+              <Icon name="refresh" /> {text.preview.annotations.retranslate}
+            </Button>
+          ) : null}
+          <span class="pv-summary-note">{text.preview.annotations.reviewHint}</span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ---- 工具栏 / 上下文栏 ----
 
 function Toolbar(props: {
@@ -586,6 +917,643 @@ function Notices(props: {
 
 // ---- 摘要 ----
 
+function formatGlossaryLines(lines: readonly number[]): string {
+  const shown = lines.slice(0, 8);
+  return lines.length > shown.length
+    ? `${shown.join(", ")}…`
+    : shown.join(", ");
+}
+
+const TERM_FIELD_MAX_WIDTH = 168;
+const TERM_EDIT_MIN_WIDTH = 260;
+
+function TermText(props: {
+  text: string;
+  className: string;
+  active: boolean;
+}) {
+  const fieldRef = useRef<HTMLSpanElement>(null);
+  const trackRef = useRef<HTMLSpanElement>(null);
+  const [distance, setDistance] = useState(0);
+
+  useLayoutEffect(() => {
+    if (!props.active) {
+      setDistance(0);
+      return;
+    }
+    const field = fieldRef.current;
+    const track = trackRef.current;
+    if (!field || !track) {
+      return;
+    }
+    const measure = () => {
+      const full = track.getBoundingClientRect().width || track.scrollWidth;
+      const visible =
+        field.getBoundingClientRect().width || field.clientWidth;
+      const overflow = Math.ceil(full - visible);
+      setDistance(overflow > 1 ? overflow : 0);
+    };
+    measure();
+    if (typeof ResizeObserver === "undefined") {
+      return;
+    }
+    const observer = new ResizeObserver(measure);
+    observer.observe(field);
+    return () => observer.disconnect();
+  }, [props.active, props.text]);
+
+  const duration = Math.min(6000, Math.max(1400, distance * 18));
+  return (
+    <span
+      ref={fieldRef}
+      class={`pv-term-text${props.className ? ` ${props.className}` : ""}${
+        distance > 0 ? " is-revealing" : ""
+      }`}
+      title={props.text}
+      style={
+        distance > 0
+          ? `--term-shift:-${distance}px;--term-duration:${duration}ms;`
+          : undefined
+      }
+    >
+      <span class="pv-term-static">{props.text}</span>
+      <span
+        ref={trackRef}
+        class="pv-term-track"
+        data-text={props.text}
+        aria-hidden="true"
+      />
+    </span>
+  );
+}
+
+function GlossaryTermCard(props: {
+  row: GlossaryRow;
+  index: number;
+  disabled: boolean;
+  editing: boolean;
+  invalid: boolean;
+  duplicate: boolean;
+  text: UiCatalog;
+  available: number;
+  onEdit: (side: Side, width: number) => void;
+  onDelete: () => void;
+}) {
+  const cardRef = useRef<HTMLDivElement>(null);
+  const [hovered, setHovered] = useState<Side | null>(null);
+  const [natural, setNatural] = useState(0);
+  const text = props.text;
+  const t = text.preview.summary;
+
+  useLayoutEffect(() => {
+    const card = cardRef.current;
+    if (!card) {
+      return;
+    }
+    const main = card.querySelector<HTMLElement>(".pv-term-main");
+    const tracks = card.querySelectorAll<HTMLElement>(".pv-term-track");
+    const separator = card.querySelector<HTMLElement>(".pv-term-separator");
+    if (!main || tracks.length < 2 || !separator) {
+      return;
+    }
+    const mainStyle = getComputedStyle(main);
+    const gap = parseFloat(mainStyle.columnGap || mainStyle.gap) || 0;
+    const padding =
+      (parseFloat(mainStyle.paddingLeft) || 0) +
+      (parseFloat(mainStyle.paddingRight) || 0);
+    setNatural(
+      Math.min(tracks[0].getBoundingClientRect().width, TERM_FIELD_MAX_WIDTH) +
+        Math.min(tracks[1].getBoundingClientRect().width, TERM_FIELD_MAX_WIDTH) +
+        separator.getBoundingClientRect().width +
+        gap * 2 +
+        padding +
+        (card.offsetWidth - card.clientWidth),
+    );
+  }, [props.row.source, props.row.target, props.available]);
+
+  const filling =
+    props.available > 1 && natural > props.available + 1;
+
+  const sideProps = (side: Side) => ({
+    type: "button" as const,
+    class: `pv-term-side pv-term-${side}`,
+    disabled: props.disabled || props.editing,
+    "aria-label": `${t.glossaryEditTerm} ${props.index + 1} ${
+      side === "source" ? t.glossaryTableSource : t.glossaryTableTarget
+    }`,
+    title: props.row[side],
+    onClick: () =>
+      props.onEdit(
+        side,
+        cardRef.current?.getBoundingClientRect().width ?? 0,
+      ),
+    onMouseEnter: () => setHovered(side),
+    onMouseLeave: () => setHovered(null),
+  });
+  return (
+    <div
+      ref={cardRef}
+      class={`pv-term-card${props.invalid ? " is-invalid" : ""}${
+        props.duplicate ? " is-warning" : ""
+      }${filling ? " is-filling" : ""}`}
+      role="listitem"
+      title={props.duplicate ? t.glossaryDuplicate : undefined}
+    >
+      <div class="pv-term-main">
+        <button {...sideProps("source")}>
+          <TermText
+            text={props.row.source}
+            className=""
+            active={hovered === "source"}
+          />
+        </button>
+        <span class="pv-term-separator" aria-hidden="true">
+          |
+        </span>
+        <button {...sideProps("target")}>
+          <TermText
+            text={props.row.target}
+            className=""
+            active={hovered === "target"}
+          />
+        </button>
+      </div>
+      <button
+        type="button"
+        class="pv-term-delete"
+        disabled={props.disabled || props.editing}
+        title={`${text.preview.summary.glossaryDelete} ${props.index + 1}`}
+        aria-label={`${text.preview.summary.glossaryDelete} ${props.index + 1}`}
+        onClick={props.onDelete}
+      >
+        <Icon name="close" />
+      </button>
+    </div>
+  );
+}
+
+function GlossaryTable(props: {
+  text: UiCatalog;
+  value: string;
+  disabled: boolean;
+  onDraft: (value: string) => void;
+  onEditing: (editing: boolean) => void;
+}) {
+  const text = props.text;
+  const t = text.preview.summary;
+  const parsed = useMemo(() => parseGlossaryRows(props.value), [props.value]);
+  const validation = useMemo(
+    () => validateGlossaryRows(parsed.rows),
+    [parsed.rows],
+  );
+  const [bulk, setBulk] = useState(false);
+  const [filter, setFilter] = useState("");
+  const [editing, setEditing] = useState<{
+    index: number;
+    original: GlossaryRow | null;
+    source: string;
+    target: string;
+    side: Side;
+    width: number;
+  } | null>(null);
+  const termFlowRef = useRef<HTMLDivElement>(null);
+  const [flowWidth, setFlowWidth] = useState(0);
+  const editorRef = useRef<HTMLDivElement>(null);
+  const settledRef = useRef(false);
+  const switchingRef = useRef(false);
+  const isEditing = Boolean(editing);
+
+  useEffect(() => {
+    props.onEditing(isEditing);
+    return () => {
+      if (isEditing) {
+        props.onEditing(false);
+      }
+    };
+  }, [isEditing]);
+
+  useEffect(() => {
+    if (!editing) {
+      return;
+    }
+    const input = editorRef.current?.querySelector<HTMLInputElement>(
+      `[data-glossary-edit="${editing.side}"]`,
+    );
+    if (input) {
+      input.focus();
+      input.select();
+    }
+  }, [editing?.index, editing?.original, editing?.side]);
+
+  useLayoutEffect(() => {
+    if (bulk) {
+      return;
+    }
+    const flow = termFlowRef.current;
+    if (!flow) {
+      return;
+    }
+    const measure = () => {
+      const style = getComputedStyle(flow);
+      const width =
+        flow.clientWidth -
+        (parseFloat(style.paddingLeft) || 0) -
+        (parseFloat(style.paddingRight) || 0);
+      setFlowWidth(width > 1 ? width : 0);
+    };
+    measure();
+    window.addEventListener("resize", measure);
+    if (typeof ResizeObserver === "undefined") {
+      return () => window.removeEventListener("resize", measure);
+    }
+    const observer = new ResizeObserver(measure);
+    observer.observe(flow);
+    return () => {
+      observer.disconnect();
+      window.removeEventListener("resize", measure);
+    };
+  }, [bulk]);
+
+  const filtered = useMemo(() => {
+    const needle = filter.trim().toLowerCase();
+    return parsed.rows
+      .map((row, index) => ({ row, index }))
+      .filter(({ row }) =>
+        needle
+          ? row.source.toLowerCase().includes(needle) ||
+            row.target.toLowerCase().includes(needle)
+          : true,
+      );
+  }, [parsed.rows, filter]);
+
+  const resolvedSide = (
+    draft: {
+      original: GlossaryRow | null;
+      source: string;
+      target: string;
+    },
+    side: Side,
+  ): string => {
+    const value = (side === "source" ? draft.source : draft.target).trim();
+    if (value) {
+      return value.slice(0, GLOSSARY_MAX_TERM_LENGTH);
+    }
+    if (!draft.original) {
+      return "";
+    }
+    return side === "source" ? draft.original.source : draft.original.target;
+  };
+  const beginEdit = (
+    index: number,
+    row: GlossaryRow,
+    side: Side,
+    width: number,
+  ) => {
+    if (props.disabled) {
+      return;
+    }
+    settledRef.current = false;
+    switchingRef.current = false;
+    setEditing({
+      index,
+      original: row,
+      source: row.source,
+      target: row.target,
+      side,
+      width,
+    });
+  };
+  const startNew = () => {
+    if (
+      props.disabled ||
+      validation.count >= GLOSSARY_MAX_ENTRIES
+    ) {
+      return;
+    }
+    settledRef.current = false;
+    switchingRef.current = false;
+    setEditing({
+      index: parsed.rows.length,
+      original: null,
+      source: "",
+      target: "",
+      side: "source",
+      width: 0,
+    });
+  };
+  const finishEdit = (commit: boolean) => {
+    if (!editing || settledRef.current) {
+      return;
+    }
+    settledRef.current = true;
+    if (commit) {
+      const source = resolvedSide(editing, "source");
+      const target = resolvedSide(editing, "target");
+      if (editing.original) {
+        const next = parsed.rows.slice();
+        next[editing.index] = { source, target };
+        props.onDraft(serializeGlossaryRows(next));
+      } else if (source && target) {
+        props.onDraft(
+          serializeGlossaryRows([...parsed.rows, { source, target }]),
+        );
+      }
+    }
+    setEditing(null);
+  };
+  const changeSide = (side: Side, value: string) => {
+    setEditing((current) => {
+      if (!current) {
+        return current;
+      }
+      return side === "source"
+        ? { ...current, source: value }
+        : { ...current, target: value };
+    });
+  };
+  const armSwitchGuard = () => {
+    switchingRef.current = true;
+    setTimeout(() => {
+      switchingRef.current = false;
+    }, 0);
+  };
+  const switchSide = (side: Side) => {
+    if (!editing || editing.side === side) {
+      return;
+    }
+    armSwitchGuard();
+    setEditing((current) => {
+      if (!current || current.side === side) {
+        return current;
+      }
+      return {
+        ...current,
+        [current.side]: resolvedSide(current, current.side),
+        side,
+      };
+    });
+  };
+  const commitSide = () => {
+    if (!editing) {
+      return;
+    }
+    const value = (
+      editing.side === "source" ? editing.source : editing.target
+    ).trim();
+    if (!editing.original) {
+      const other = (
+        editing.side === "source" ? editing.target : editing.source
+      ).trim();
+      if (!value) {
+        return;
+      }
+      if (!other) {
+        armSwitchGuard();
+        setEditing((current) => {
+          if (!current) {
+            return current;
+          }
+          return {
+            ...current,
+            [current.side]: value,
+            side: current.side === "source" ? "target" : "source",
+          };
+        });
+        return;
+      }
+    }
+    finishEdit(true);
+  };
+  const editKeyDown = (event: KeyboardEvent) => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      commitSide();
+    } else if (event.key === "Escape") {
+      event.preventDefault();
+      finishEdit(false);
+    }
+  };
+  const blurEdit = (related: Node | null) => {
+    if (settledRef.current) {
+      return;
+    }
+    if (switchingRef.current) {
+      switchingRef.current = false;
+      return;
+    }
+    if (related && editorRef.current?.contains(related)) {
+      return;
+    }
+    finishEdit(true);
+  };
+  const removeRow = (index: number) => {
+    if (props.disabled) {
+      return;
+    }
+    if (editing) {
+      settledRef.current = true;
+      setEditing(null);
+    }
+    const next = parsed.rows.filter((_, rowIndex) => rowIndex !== index);
+    props.onDraft(serializeGlossaryRows(next));
+  };
+  const renderEditSide = (side: Side) => {
+    if (!editing) {
+      return null;
+    }
+    const label =
+      side === "source"
+        ? text.preview.summary.glossaryTableSource
+        : text.preview.summary.glossaryTableTarget;
+    const value = side === "source" ? editing.source : editing.target;
+    return (
+      <span class="pv-term-edit-field">
+        {editing.side === side ? (
+          <input
+            class="pv-term-edit-input"
+            data-glossary-edit={side}
+            value={value}
+            maxLength={GLOSSARY_MAX_TERM_LENGTH}
+            spellcheck={false}
+            aria-label={label}
+            placeholder={label}
+            title={text.preview.summary.glossaryEditHint}
+            onInput={(event) => changeSide(side, event.currentTarget.value)}
+            onKeyDown={editKeyDown}
+            onBlur={(event) => blurEdit(event.relatedTarget as Node | null)}
+          />
+        ) : (
+          <button
+            type="button"
+            class={`pv-term-side pv-term-${side}`}
+            disabled={props.disabled}
+            aria-label={`${text.preview.summary.glossaryEditTerm} ${
+              editing.index + 1
+            } ${label}`}
+            title={value || label}
+            onClick={() => switchSide(side)}
+          >
+            {value || (
+              <span class="pv-term-placeholder">{label}</span>
+            )}
+          </button>
+        )}
+      </span>
+    );
+  };
+  const editor = editing ? (
+    <div
+      class="pv-term-card is-editing"
+      ref={editorRef}
+      title={text.preview.summary.glossaryEditHint}
+      style={`width:${Math.max(editing.width, TERM_EDIT_MIN_WIDTH)}px;`}
+    >
+      <div class="pv-term-main">
+        {renderEditSide("source")}
+        <span class="pv-term-separator" aria-hidden="true">
+          |
+        </span>
+        {renderEditSide("target")}
+      </div>
+    </div>
+  ) : null;
+
+  return (
+    <div class="pv-glossary">
+      {!bulk ? (
+        <div class="pv-glossary-toolbar">
+          <button
+            type="button"
+            class="pv-link"
+            disabled={props.disabled}
+            onClick={() => {
+              if (editing) {
+                finishEdit(true);
+              }
+              setBulk(true);
+            }}
+          >
+            {text.preview.summary.glossaryBulkEdit}
+          </button>
+        </div>
+      ) : (
+        <div class="pv-glossary-toolbar">
+          <button
+            type="button"
+            class="pv-link"
+            disabled={props.disabled}
+            onClick={() => {
+              if (parsed.invalidLines.length > 0) {
+                return;
+              }
+              setBulk(false);
+            }}
+          >
+            {text.preview.summary.glossaryTableEdit}
+          </button>
+        </div>
+      )}
+      {bulk ? (
+        <textarea
+          class="pv-textarea pv-glossary-text"
+          rows={6}
+          spellcheck={false}
+          aria-label={t.glossaryTitle}
+          value={props.value}
+          placeholder={t.glossaryPlaceholder}
+          onInput={(event) => props.onDraft(event.currentTarget.value)}
+        />
+      ) : (
+        <>
+          {validation.count > 10 ? (
+            <input
+              class="pv-input pv-glossary-filter"
+              value={filter}
+              spellcheck={false}
+              aria-label={text.preview.summary.glossaryFilter}
+              placeholder={text.preview.summary.glossaryFilter}
+              onInput={(event) => setFilter(event.currentTarget.value)}
+            />
+          ) : null}
+          {parsed.rows.length === 0 && !editing ? (
+            <p class="pv-glossary-empty">
+              {text.preview.summary.glossaryEmpty}
+            </p>
+          ) : null}
+          <div
+            class="pv-term-flow"
+            ref={termFlowRef}
+            role="list"
+            aria-label={t.glossaryTitle}
+          >
+            {filtered.map(({ row, index }) => {
+              if (editing?.original && editing.index === index) {
+                return <Fragment key={`edit-${index}`}>{editor}</Fragment>;
+              }
+              const invalid = validation.invalidRows.has(index);
+              const duplicate = validation.duplicateRows.has(index);
+              return (
+                <GlossaryTermCard
+                  key={index}
+                  row={row}
+                  index={index}
+                  disabled={props.disabled}
+                  editing={Boolean(editing)}
+                  invalid={invalid}
+                  duplicate={duplicate}
+                  text={text}
+                  available={flowWidth}
+                  onEdit={(side, width) =>
+                    beginEdit(index, row, side, width)
+                  }
+                  onDelete={() => removeRow(index)}
+                />
+              );
+            })}
+            {editing && !editing.original
+              ? <Fragment key="new">{editor}</Fragment>
+              : null}
+            {!editing ? (
+              <button
+                type="button"
+                class="pv-term-add"
+                disabled={
+                  props.disabled ||
+                  validation.count >= GLOSSARY_MAX_ENTRIES
+                }
+                onClick={startNew}
+              >
+                <Icon name="add" /> {text.preview.summary.glossaryAdd}
+              </button>
+            ) : null}
+          </div>
+        </>
+      )}
+      {parsed.invalidLines.length > 0 ? (
+        <p class="pv-summary-note is-error">
+          {fmt(text.preview.summary.glossaryInvalidLines, {
+            lines: formatGlossaryLines(parsed.invalidLines),
+          })}
+        </p>
+      ) : null}
+      {validation.invalidRows.size > 0 ? (
+        <p class="pv-summary-note is-error">
+          {fmt(text.preview.summary.glossaryInvalid, { max: GLOSSARY_MAX_TERM_LENGTH })}
+        </p>
+      ) : null}
+      {validation.tooMany ? (
+        <p class="pv-summary-note is-error">
+          {fmt(text.preview.summary.glossaryTooMany, { max: GLOSSARY_MAX_ENTRIES })}
+        </p>
+      ) : null}
+      {validation.duplicateRows.size > 0 ? (
+        <p class="pv-summary-note is-warning">{text.preview.summary.glossaryDuplicate}</p>
+      ) : null}
+      <p class="pv-summary-note">{t.glossaryHint}</p>
+    </div>
+  );
+}
+
 function SummaryPanel(props: {
   text: UiCatalog;
   summary: Summary;
@@ -595,20 +1563,42 @@ function SummaryPanel(props: {
   summaryContext: boolean;
   summaryDraft: string;
   glossaryDraft: string;
+  brief: TranslationBrief;
   onToggle: () => void;
   onDraft: (value: string) => void;
   onGlossaryDraft: (value: string) => void;
+  onBriefDraft: (patch: Partial<TranslationBrief>) => void;
   onGenerate: () => void;
   onSave: () => void;
   onClear: () => void;
-  onSaveGlossary: () => void;
   onAssist: (key: "stableTranslation" | "summaryContext", value: boolean) => void;
 }) {
   const { text, summary } = props;
   const hasSummary = Boolean(summary.text.trim());
+  const [openSection, setOpenSection] = useState<
+    "brief" | "glossary" | null
+  >(null);
+  const [glossaryEditing, setGlossaryEditing] = useState(false);
+  const toggleSection = (section: "brief" | "glossary") => {
+    setOpenSection((current) => (current === section ? null : section));
+  };
+  const glossaryParsed = useMemo(
+    () => parseGlossaryRows(props.glossaryDraft),
+    [props.glossaryDraft],
+  );
+  const glossaryValidation = useMemo(
+    () => validateGlossaryRows(glossaryParsed.rows),
+    [glossaryParsed.rows],
+  );
+  const glossaryBlocked =
+    glossaryEditing ||
+    glossaryParsed.invalidLines.length > 0 ||
+    glossaryValidation.hasErrors;
+  const filledBrief = briefFilledCount(props.brief);
+  const totalTokens = summary.tokens + (summary.briefTokens ?? 0);
   const meta: string[] = [];
   if (hasSummary) {
-    meta.push(fmt(text.preview.summary.tokens, { count: summary.tokens }));
+    meta.push(fmt(text.preview.summary.tokens, { count: totalTokens }));
     if (summary.updatedAt) {
       meta.push(
         fmt(text.preview.summary.generatedAt, {
@@ -650,7 +1640,15 @@ function SummaryPanel(props: {
             >
               {text.preview.summary.generate}
             </Button>
-            <Button disabled={props.busy} onClick={props.onSave}>
+            <Button
+              disabled={props.busy || glossaryBlocked}
+              title={
+                glossaryBlocked
+                  ? text.preview.summary.glossarySaveBlocked
+                  : undefined
+              }
+              onClick={props.onSave}
+            >
               {text.preview.summary.save}
             </Button>
             <Button disabled={props.busy || !hasSummary} onClick={props.onClear}>
@@ -688,35 +1686,138 @@ function SummaryPanel(props: {
             {meta.join(" · ")}
             {summary.stale ? ` · ${text.preview.summary.staleHint}` : ""}
           </p>
-          {hasSummary ? (
-            <div class="pv-glossary">
-              <div class="pv-glossary-head">
-                <span class="pv-glossary-title">{text.preview.summary.glossaryTitle}</span>
-                <span class="pv-glossary-count">
-                  {fmt(text.preview.summary.glossaryCount, { count: summary.glossaryCount ?? 0 })}
-                </span>
+          <div class={`pv-brief${openSection === "brief" ? " is-open" : ""}`}>
+            <button
+              type="button"
+              class="pv-brief-toggle"
+              aria-expanded={openSection === "brief"}
+              onClick={() => toggleSection("brief")}
+            >
+              <Icon name="settings" />
+              <span class="pv-brief-title">
+                {text.preview.summary.briefAdvanced}
+              </span>
+              <span class="pv-brief-count">
+                {fmt(text.preview.summary.briefFilled, {
+                  count: filledBrief,
+                })}
+              </span>
+              <Icon name="chevron-down" />
+            </button>
+            {openSection === "brief" ? (
+              <div class="pv-brief-fields">
+                <label class="pv-brief-field">
+                  <span>{text.preview.summary.briefAudience}</span>
+                  <input
+                    class="pv-input"
+                    value={props.brief.audience ?? ""}
+                    maxLength={BRIEF_FIELD_LIMIT}
+                    spellcheck={false}
+                    placeholder={text.preview.summary.briefAudiencePlaceholder}
+                    onInput={(event) =>
+                      props.onBriefDraft({ audience: event.currentTarget.value })
+                    }
+                  />
+                </label>
+                <label class="pv-brief-field">
+                  <span>{text.preview.summary.briefTone}</span>
+                  <textarea
+                    class="pv-textarea"
+                    rows={2}
+                    value={props.brief.toneAndStyle ?? ""}
+                    maxLength={BRIEF_FIELD_LIMIT}
+                    spellcheck={false}
+                    placeholder={text.preview.summary.briefTonePlaceholder}
+                    onInput={(event) =>
+                      props.onBriefDraft({
+                        toneAndStyle: event.currentTarget.value,
+                      })
+                    }
+                  />
+                </label>
+                <label class="pv-brief-field">
+                  <span>{text.preview.summary.briefAmbiguities}</span>
+                  <textarea
+                    class="pv-textarea"
+                    rows={3}
+                    value={props.brief.ambiguities ?? ""}
+                    maxLength={BRIEF_FIELD_LIMIT}
+                    spellcheck={false}
+                    placeholder={
+                      text.preview.summary.briefAmbiguitiesPlaceholder
+                    }
+                    onInput={(event) =>
+                      props.onBriefDraft({
+                        ambiguities: event.currentTarget.value,
+                      })
+                    }
+                  />
+                </label>
+                <label class="pv-brief-field">
+                  <span>{text.preview.summary.briefDoNotTranslate}</span>
+                  <textarea
+                    class="pv-textarea"
+                    rows={2}
+                    value={props.brief.doNotTranslate ?? ""}
+                    maxLength={BRIEF_FIELD_LIMIT}
+                    spellcheck={false}
+                    placeholder={
+                      text.preview.summary.briefDoNotTranslatePlaceholder
+                    }
+                    onInput={(event) =>
+                      props.onBriefDraft({
+                        doNotTranslate: event.currentTarget.value,
+                      })
+                    }
+                  />
+                </label>
+                <p class="pv-summary-note">
+                  {text.preview.summary.briefHint}
+                </p>
               </div>
-              <textarea
-                class="pv-textarea pv-glossary-text"
-                rows={4}
-                spellcheck={false}
-                aria-label={text.preview.summary.glossaryTitle}
-                value={props.glossaryDraft}
-                placeholder={text.preview.summary.glossaryPlaceholder}
-                onInput={(event) => props.onGlossaryDraft(event.currentTarget.value)}
-              />
-              <div class="pv-summary-actions" style="margin-top:6px">
-                <Button disabled={props.busy} onClick={props.onSaveGlossary}>
-                  {text.preview.summary.saveGlossary}
-                </Button>
-                <span class="pv-summary-note" style="margin:0">
-                  {text.preview.summary.glossaryHint}
-                </span>
-              </div>
-            </div>
-          ) : (
-            <p class="pv-summary-note">{text.preview.summary.glossaryNeedsSummary}</p>
-          )}
+            ) : null}
+          </div>
+          <div
+            class={`pv-brief pv-glossary-section${
+              openSection === "glossary" ? " is-open" : ""
+            }`}
+          >
+            <button
+              type="button"
+              class="pv-brief-toggle"
+              aria-expanded={openSection === "glossary"}
+              onClick={() => toggleSection("glossary")}
+            >
+              <Icon name="book" />
+              <span class="pv-brief-title">
+                {text.preview.summary.glossaryTitle}
+              </span>
+              <span class="pv-brief-count">
+                {fmt(text.preview.summary.glossaryCount, {
+                  count: glossaryValidation.count,
+                })}
+              </span>
+              <span class="pv-glossary-limit">
+                / {GLOSSARY_MAX_ENTRIES}
+              </span>
+              <Icon name="chevron-down" />
+            </button>
+            {openSection === "glossary" ? (
+              hasSummary ? (
+                <GlossaryTable
+                  text={text}
+                  value={props.glossaryDraft}
+                  disabled={props.busy}
+                  onDraft={props.onGlossaryDraft}
+                  onEditing={setGlossaryEditing}
+                />
+              ) : (
+                <p class="pv-summary-note">
+                  {text.preview.summary.glossaryNeedsSummary}
+                </p>
+              )
+            ) : null}
+          </div>
         </div>
       ) : null}
     </section>
@@ -1035,12 +2136,45 @@ function PendingBadges({ block, text }: { block: PreviewBlockView; text: UiCatal
   return <Fragment>{badges}</Fragment>;
 }
 
+function openAnnotationCount(block: PreviewBlockView): number {
+  return (block.annotations ?? []).filter(
+    (annotation) => annotation.status === "open",
+  ).length;
+}
+
+function AnnotationBadge(props: {
+  block: PreviewBlockView;
+  text: UiCatalog;
+  onClick?: () => void;
+}) {
+  const count = openAnnotationCount(props.block);
+  if (count === 0) {
+    return null;
+  }
+  return (
+    <button
+      type="button"
+      class="pv-annotation-badge"
+      title={fmt(props.text.preview.annotations.openCount, { count })}
+      aria-label={fmt(props.text.preview.annotations.openCount, { count })}
+      onClick={(event) => {
+        event.stopPropagation();
+        props.onClick?.();
+      }}
+    >
+      <Icon name="comment-discussion" />
+      <span>{count}</span>
+    </button>
+  );
+}
+
 function BlockHead(props: {
   block: PreviewBlockView;
   text: UiCatalog;
   actions?: boolean;
   onMenu?: (event: MouseEvent) => void;
   onRetranslate?: () => void;
+  onAnnotations?: () => void;
   showLine?: boolean;
 }) {
   const { block, text } = props;
@@ -1052,6 +2186,11 @@ function BlockHead(props: {
         <strong>{block.statusLabel}</strong>
       </span>
       <PendingBadges block={block} text={text} />
+      <AnnotationBadge
+        block={block}
+        text={text}
+        onClick={props.onAnnotations}
+      />
       {block.headingPath ? (
         <span class="pv-heading-path" title={text.preview.actions.headingPathTitle}>
           {block.headingPath}
@@ -1096,6 +2235,7 @@ function PairedBlock(props: {
   insert: InsertState | null;
   onMenu: (event: MouseEvent, block: PreviewBlockView, side?: Side) => void;
   onRetranslate: (block: PreviewBlockView) => void;
+  onAnnotations: (block: PreviewBlockView) => void;
   onStartEdit: (block: PreviewBlockView, side: Side) => void;
   onSave: (text: string) => void;
   onCancel: () => void;
@@ -1118,6 +2258,7 @@ function PairedBlock(props: {
           showLine
           onMenu={(event) => props.onMenu(event, block)}
           onRetranslate={() => props.onRetranslate(block)}
+          onAnnotations={() => props.onAnnotations(block)}
         />
         <div class="pv-pair">
           <PaneContent
@@ -1164,6 +2305,7 @@ function SplitCell(props: {
   onMenu: (event: MouseEvent, block: PreviewBlockView, side: Side) => void;
   onStartEdit: (block: PreviewBlockView, side: Side) => void;
   onRetranslate: (block: PreviewBlockView) => void;
+  onAnnotations: (block: PreviewBlockView) => void;
   onSave: (text: string) => void;
   onCancel: () => void;
   onOpenLink: (href: string) => void;
@@ -1188,6 +2330,13 @@ function SplitCell(props: {
             <strong>{block.statusLabel}</strong>
           </span>
           <PendingBadges block={block} text={text} />
+          {(isTarget ? Boolean(block.standaloneTargetId) : !block.standaloneTargetId) ? (
+            <AnnotationBadge
+              block={block}
+              text={text}
+              onClick={() => props.onAnnotations(block)}
+            />
+          ) : null}
           {block.sourceLine ? <span class="pv-line">L{block.sourceLine}</span> : null}
           <span class="pv-cell-actions">
             <button
@@ -1238,6 +2387,7 @@ function SplitView(props: {
   insert: InsertState | null;
   onMenu: (event: MouseEvent, block: PreviewBlockView, side: Side) => void;
   onRetranslate: (block: PreviewBlockView) => void;
+  onAnnotations: (block: PreviewBlockView) => void;
   onStartEdit: (block: PreviewBlockView, side: Side) => void;
   onSave: (text: string) => void;
   onCancel: () => void;
@@ -1495,6 +2645,7 @@ function SplitView(props: {
                 onMenu={props.onMenu}
                 onStartEdit={props.onStartEdit}
                 onRetranslate={props.onRetranslate}
+                onAnnotations={props.onAnnotations}
                 onSave={props.onSave}
                 onCancel={props.onCancel}
                 onOpenLink={props.onOpenLink}
@@ -1545,6 +2696,7 @@ function SplitView(props: {
                 onMenu={props.onMenu}
                 onStartEdit={props.onStartEdit}
                 onRetranslate={props.onRetranslate}
+                onAnnotations={props.onAnnotations}
                 onSave={props.onSave}
                 onCancel={props.onCancel}
                 onOpenLink={props.onOpenLink}
@@ -1762,10 +2914,14 @@ function DiffDialog(props: {
 function ToastHost(props: {
   toasts: Toast[];
   closeLabel: string;
+  shifted: boolean;
   onDismiss: (id: number) => void;
 }) {
   return (
-    <div class="toast-host" aria-live="polite">
+    <div
+      class={`toast-host${props.shifted ? " is-shifted" : ""}`}
+      aria-live="polite"
+    >
       {props.toasts.map((toast) => (
         <div key={toast.id} class="toast" data-tone={toast.kind}>
           <Icon
@@ -1788,15 +2944,6 @@ function ToastHost(props: {
   );
 }
 
-function normalizeGlossaryText(value: string): string {
-  return value
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter(Boolean)
-    .map((line) => line.replace(/\s*=>\s*/, " => "))
-    .join("\n");
-}
-
 // ---- App ----
 
 export function App(props: { boot: BootData; text: UiCatalog }) {
@@ -1812,6 +2959,10 @@ export function App(props: { boot: BootData; text: UiCatalog }) {
   const [summaryOpen, setSummaryOpen] = useState(false);
   const [summaryDraft, setSummaryDraft] = useState(props.boot.state.model.assist.summary.text);
   const [summaryDirty, setSummaryDirty] = useState(false);
+  const [briefDraft, setBriefDraft] = useState<TranslationBrief>(
+    props.boot.state.model.assist.summary.brief,
+  );
+  const [briefDirty, setBriefDirty] = useState(false);
   const [glossaryDraft, setGlossaryDraft] = useState(
     props.boot.state.model.assist.summary.glossaryText ?? "",
   );
@@ -1823,6 +2974,8 @@ export function App(props: { boot: BootData; text: UiCatalog }) {
   const [editing, setEditing] = useState<EditingState | null>(null);
   const [insert, setInsert] = useState<InsertState | null>(null);
   const [menu, setMenu] = useState<MenuState | null>(null);
+  const [annotationTarget, setAnnotationTarget] =
+    useState<AnnotationTarget | null>(null);
   const [toasts, setToasts] = useState<Toast[]>([]);
   const [exportDialog, setExportDialog] = useState<ExportDialogState | null>(
     props.boot.exportConfirmation
@@ -1833,10 +2986,13 @@ export function App(props: { boot: BootData; text: UiCatalog }) {
   const toastId = useRef(0);
   const bodyRef = useRef<HTMLDivElement>(null);
   const summaryDraftRef = useRef(summaryDraft);
+  const briefDraftRef = useRef(briefDraft);
   const glossaryDraftRef = useRef(glossaryDraft);
   const pendingSummarySave = useRef<string | null>(null);
   const pendingGlossarySave = useRef<string | null>(null);
+  const pendingBriefSave = useRef<string | null>(null);
   summaryDraftRef.current = summaryDraft;
+  briefDraftRef.current = briefDraft;
   glossaryDraftRef.current = glossaryDraft;
 
   const showToast = useCallback((message: string, kind: PreviewToastKind = "info") => {
@@ -1900,13 +3056,36 @@ export function App(props: { boot: BootData; text: UiCatalog }) {
           const savedGlossary = message.state.model.assist.summary.glossaryText ?? "";
           if (pendingGlossarySave.current !== null) {
             if (
-              normalizeGlossaryText(savedGlossary) ===
-                normalizeGlossaryText(pendingGlossarySave.current) &&
-              glossaryDraftRef.current === pendingGlossarySave.current
+              canonicalGlossaryText(savedGlossary) ===
+                canonicalGlossaryText(pendingGlossarySave.current) &&
+              canonicalGlossaryText(glossaryDraftRef.current) ===
+                canonicalGlossaryText(pendingGlossarySave.current)
             ) {
               setGlossaryDirty(false);
             }
             pendingGlossarySave.current = null;
+          }
+          if (pendingBriefSave.current !== null) {
+            const saved = message.state.model.assist.summary;
+            const savedSignature = briefSaveSignature(
+              saved.text,
+              saved.brief,
+              saved.glossaryText ?? "",
+            );
+            const currentSignature = briefSaveSignature(
+              summaryDraftRef.current,
+              briefDraftRef.current,
+              glossaryDraftRef.current,
+            );
+            if (
+              savedSignature === pendingBriefSave.current &&
+              currentSignature === pendingBriefSave.current
+            ) {
+              setSummaryDirty(false);
+              setBriefDirty(false);
+              setGlossaryDirty(false);
+            }
+            pendingBriefSave.current = null;
           }
           break;
         }
@@ -1964,6 +3143,11 @@ export function App(props: { boot: BootData; text: UiCatalog }) {
     }
   }, [host.model.assist.summary.text, summaryDirty]);
   useEffect(() => {
+    if (!briefDirty) {
+      setBriefDraft(host.model.assist.summary.brief);
+    }
+  }, [host.model.assist.summary.brief, briefDirty]);
+  useEffect(() => {
     if (!glossaryDirty) {
       setGlossaryDraft(host.model.assist.summary.glossaryText ?? "");
     }
@@ -1978,12 +3162,20 @@ export function App(props: { boot: BootData; text: UiCatalog }) {
     host.model.assist.summaryContext,
   ]);
 
-  // 块被移除时关闭编辑/插入
+  // 块被移除时关闭编辑/插入/批注
   useEffect(() => {
     if (editing && !host.model.blocks.some((block) => block.key === editing.key)) {
       setEditing(null);
     }
-  }, [editing, host.model.blocks]);
+    if (
+      annotationTarget &&
+      !host.model.blocks.some(
+        (block) => block.key === annotationTarget.block.key,
+      )
+    ) {
+      setAnnotationTarget(null);
+    }
+  }, [editing, annotationTarget, host.model.blocks]);
 
   // 模式持久化 + 页面滚动位置恢复
   useEffect(() => {
@@ -2137,6 +3329,21 @@ export function App(props: { boot: BootData; text: UiCatalog }) {
     setInsert(null);
   };
 
+  const openAnnotationsForBlock = (block: PreviewBlockView) => {
+    if (busy) {
+      return;
+    }
+    const node = Array.from(
+      document.querySelectorAll<HTMLElement>(".pv-block, .pv-cell"),
+    ).find((element) => element.dataset.key === block.key);
+    const rect = node?.getBoundingClientRect();
+    setAnnotationTarget({
+      block,
+      x: rect ? Math.min(window.innerWidth - 8, rect.right) : window.innerWidth - 16,
+      y: rect ? Math.max(8, rect.top + 24) : 72,
+    });
+  };
+
   const blockMenuItems = (block: PreviewBlockView, side?: Side): MenuEntry[] => {
     const items: MenuEntry[] = [];
     const isStandalone = Boolean(block.standaloneTargetId);
@@ -2269,6 +3476,16 @@ export function App(props: { boot: BootData; text: UiCatalog }) {
         );
       }
     }
+    items.push(
+      { separator: true },
+      {
+        label: fmt(text.preview.annotations.openCount, {
+          count: openAnnotationCount(block),
+        }),
+        icon: "comment-discussion",
+        onSelect: () => openAnnotationsForBlock(block),
+      },
+    );
     if (side === "source" && !block.sourceDeleted && !isStandalone) {
       // 分栏源单元格只提供源侧插入/删除；目标侧操作在译文单元格中。
       items.push(
@@ -2293,6 +3510,15 @@ export function App(props: { boot: BootData; text: UiCatalog }) {
         icon: "checklist",
         disabled: !host.model.cacheExists || busy,
         onSelect: () => sendMessage({ type: "checkConsistency" }),
+      },
+      {
+        label: text.preview.toolbar.reviewMachine,
+        icon: "comment-discussion",
+        disabled:
+          !host.model.cacheExists ||
+          busy ||
+          !host.model.reviewSupported,
+        onSelect: () => sendMessage({ type: "reviewMachineBlocks" }),
       },
       {
         label: text.preview.toolbar.refresh,
@@ -2371,7 +3597,11 @@ export function App(props: { boot: BootData; text: UiCatalog }) {
       sendMessage({ type: "retranslateBlock", blockIndex: index });
     }
   };
-  const saveSummary = () => {
+  const updateBrief = (patch: Partial<TranslationBrief>) => {
+    setBriefDraft((current) => ({ ...current, ...patch }));
+    setBriefDirty(true);
+  };
+  const saveBrief = () => {
     if (busy) {
       return;
     }
@@ -2379,15 +3609,27 @@ export function App(props: { boot: BootData; text: UiCatalog }) {
       showToast(text.preview.summary.empty, "error");
       return;
     }
-    pendingSummarySave.current = summaryDraft;
-    sendMessage({ type: "saveSummary", summaryText: summaryDraft });
-  };
-  const saveGlossary = () => {
-    if (busy) {
+    const parsed = parseGlossaryRows(glossaryDraft);
+    const validation = validateGlossaryRows(parsed.rows);
+    if (parsed.invalidLines.length > 0 || validation.hasErrors) {
+      showToast(text.preview.summary.glossarySaveBlocked, "error");
       return;
     }
-    pendingGlossarySave.current = glossaryDraft;
-    sendMessage({ type: "saveGlossary", glossaryText: glossaryDraft });
+    const cleaned = cleanGlossaryText(glossaryDraft);
+    const brief = normalizeBriefDraft(briefDraft);
+    pendingBriefSave.current = briefSaveSignature(
+      summaryDraft,
+      brief,
+      cleaned,
+    );
+    glossaryDraftRef.current = cleaned;
+    setGlossaryDraft(cleaned);
+    sendMessage({
+      type: "saveBrief",
+      summaryText: summaryDraft,
+      brief,
+      glossaryText: cleaned,
+    });
   };
 
   const openBlockMenu = (
@@ -2400,6 +3642,12 @@ export function App(props: { boot: BootData; text: UiCatalog }) {
     }
     openMenu(event, blockMenuItems(block, side));
   };
+
+  const activeAnnotationBlock = annotationTarget
+    ? host.model.blocks.find(
+        (block) => block.key === annotationTarget.block.key,
+      ) ?? annotationTarget.block
+    : null;
 
   return (
     <div
@@ -2445,6 +3693,7 @@ export function App(props: { boot: BootData; text: UiCatalog }) {
           summaryContext={assist.summaryContext}
           summaryDraft={summaryDraft}
           glossaryDraft={glossaryDraft}
+          brief={briefDraft}
           onToggle={() => setSummaryOpen((open) => !open)}
           onDraft={(value) => {
             setSummaryDirty(true);
@@ -2454,24 +3703,28 @@ export function App(props: { boot: BootData; text: UiCatalog }) {
             setGlossaryDirty(true);
             setGlossaryDraft(value);
           }}
+          onBriefDraft={updateBrief}
           onGenerate={() => {
             if (busy) return;
             pendingSummarySave.current = null;
             pendingGlossarySave.current = null;
+            pendingBriefSave.current = null;
             setSummaryDirty(false);
+            setBriefDirty(false);
             setGlossaryDirty(false);
             sendMessage({ type: "generateSummary" });
           }}
-          onSave={saveSummary}
+          onSave={saveBrief}
           onClear={() => {
             if (busy) return;
             pendingSummarySave.current = null;
             pendingGlossarySave.current = null;
+            pendingBriefSave.current = null;
             setSummaryDirty(false);
+            setBriefDirty(false);
             setGlossaryDirty(false);
             sendMessage({ type: "clearSummary" });
           }}
-          onSaveGlossary={saveGlossary}
           onAssist={(key, value) => {
             if (busy) return;
             setAssist((current) => ({ ...current, [key]: value }));
@@ -2500,6 +3753,7 @@ export function App(props: { boot: BootData; text: UiCatalog }) {
             insert={insert}
             onMenu={openBlockMenu}
             onRetranslate={retranslateBlock}
+            onAnnotations={openAnnotationsForBlock}
             onStartEdit={startEdit}
             onSave={saveEdit}
             onCancel={() => setEditing(null)}
@@ -2530,6 +3784,7 @@ export function App(props: { boot: BootData; text: UiCatalog }) {
                 insert={insert}
                 onMenu={(event, target, side) => openBlockMenu(event, target, side)}
                 onRetranslate={retranslateBlock}
+                onAnnotations={openAnnotationsForBlock}
                 onStartEdit={startEdit}
                 onSave={saveEdit}
                 onCancel={() => setEditing(null)}
@@ -2542,6 +3797,46 @@ export function App(props: { boot: BootData; text: UiCatalog }) {
           </div>
         )}
       </div>
+      {annotationTarget && activeAnnotationBlock ? (
+        <AnnotationPopover
+          target={annotationTarget}
+          block={activeAnnotationBlock}
+          text={text}
+          busy={busy}
+          reviewSupported={host.model.reviewSupported}
+          onClose={() => setAnnotationTarget(null)}
+          onReview={() =>
+            sendMessage({
+              type: "reviewBlock",
+              blockIndex: activeAnnotationBlock.blockIndex,
+            })
+          }
+          onSave={(input) =>
+            sendMessage({
+              type: "saveAnnotation",
+              blockIndex: activeAnnotationBlock.blockIndex,
+              ...input,
+            })
+          }
+          onStatus={(annotationId, status) =>
+            sendMessage({
+              type: "setAnnotationStatus",
+              annotationId,
+              status,
+            })
+          }
+          onDelete={(annotationId) =>
+            sendMessage({ type: "deleteAnnotation", annotationId })
+          }
+          onRetranslate={() => {
+            sendMessage({
+              type: "retranslateBlock",
+              blockIndex: activeAnnotationBlock.blockIndex,
+            });
+            setAnnotationTarget(null);
+          }}
+        />
+      ) : null}
       {menu ? <Menu state={menu} onClose={() => setMenu(null)} /> : null}
       {exportDialog ? (
         <DiffDialog
@@ -2580,6 +3875,7 @@ export function App(props: { boot: BootData; text: UiCatalog }) {
       <ToastHost
         toasts={toasts}
         closeLabel={text.preview.modal.close}
+        shifted={Boolean(annotationTarget)}
         onDismiss={(id) => setToasts((current) => current.filter((toast) => toast.id !== id))}
       />
     </div>

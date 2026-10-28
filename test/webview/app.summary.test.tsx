@@ -42,6 +42,12 @@ function renderPreview(model = makeModel()) {
   return result;
 }
 
+function openGlossary(body: HTMLElement) {
+  fireEvent.click(
+    body.querySelector(".pv-glossary-section .pv-brief-toggle") as HTMLElement,
+  );
+}
+
 describe("summary and glossary", () => {
   it("opens the summary panel and sends edited text", () => {
     const text = harness.text.preview;
@@ -70,8 +76,10 @@ describe("summary and glossary", () => {
       within(body).getByRole("button", { name: text.summary.save }),
     );
     expect(actions(harness)).toContainEqual({
-      type: "saveSummary",
+      type: "saveBrief",
       summaryText: "Edited summary",
+      brief: {},
+      glossaryText: "",
     });
   });
 
@@ -181,7 +189,7 @@ describe("summary and glossary", () => {
     ).toBe(false);
   });
 
-  it("saves a normalized-glossary draft and preserves it while dirty", () => {
+  it("edits a glossary card and preserves a dirty draft", () => {
     const text = harness.text.preview;
     const model = makeModel({
       summary: {
@@ -192,12 +200,40 @@ describe("summary and glossary", () => {
     });
     const { container } = renderPreview(model);
     const body = container.querySelector(".pv-summary-body") as HTMLElement;
-    const glossary = within(body).getByPlaceholderText(
-      text.summary.glossaryPlaceholder,
-    ) as HTMLTextAreaElement;
-    expect(glossary.value).toBe("table => 表格");
+    openGlossary(body);
+    fireEvent.click(
+      within(body).getByLabelText(
+        `${text.summary.glossaryEditTerm} 1 ${text.summary.glossaryTableSource}`,
+      ),
+    );
+    const source = within(body).getByLabelText(
+      text.summary.glossaryTableSource,
+    ) as HTMLInputElement;
+    expect(source.value).toBe("table");
+    expect(
+      within(body).queryByLabelText(text.summary.glossaryTableTarget),
+    ).toBeNull();
 
-    fireEvent.input(glossary, { target: { value: "table=>表格\ncode=>代码" } });
+    fireEvent.click(
+      within(body).getByLabelText(
+        `${text.summary.glossaryEditTerm} 1 ${text.summary.glossaryTableTarget}`,
+      ),
+    );
+    const target = within(body).getByLabelText(
+      text.summary.glossaryTableTarget,
+    ) as HTMLInputElement;
+    expect(target.value).toBe("表格");
+    expect(
+      within(body).queryByLabelText(text.summary.glossaryTableSource),
+    ).toBeNull();
+    expect(
+      body.querySelector(".pv-term-card.is-editing .pv-term-edit-actions"),
+    ).toBeNull();
+
+    fireEvent.input(target, { target: { value: "数据表" } });
+    fireEvent.keyDown(target, { key: "Enter" });
+    expect(within(body).getByText("数据表")).toBeTruthy();
+
     // 未保存时，宿主刷新不能覆盖用户草稿。
     postHostMessage({
       type: "state",
@@ -211,30 +247,32 @@ describe("summary and glossary", () => {
         }),
       ).state,
     });
-    expect(glossary.value).toBe("table=>表格\ncode=>代码");
+    expect(within(body).getByText("数据表")).toBeTruthy();
 
     fireEvent.click(
-      within(body).getByRole("button", { name: text.summary.saveGlossary }),
+      within(body).getByRole("button", { name: text.summary.save }),
     );
     expect(actions(harness)).toContainEqual({
-      type: "saveGlossary",
-      glossaryText: "table=>表格\ncode=>代码",
+      type: "saveBrief",
+      summaryText: "Summary",
+      brief: {},
+      glossaryText: "table => 数据表",
     });
 
-    // 保存成功后接受宿主的规范化结果（空白样式以宿主为准）。
+    // 保存成功后接受宿主的规范化结果。
     postHostMessage({
       type: "state",
       state: makeBoot(
         makeModel({
           summary: {
             text: "Summary",
-            glossaryText: "table => 表格\ncode => 代码",
-            glossaryCount: 2,
+            glossaryText: "table => 数据表",
+            glossaryCount: 1,
           },
         }),
       ).state,
     });
-    expect(glossary.value).toBe("table => 表格\ncode => 代码");
+    expect(within(body).getByText("数据表")).toBeTruthy();
 
     postHostMessage({
       type: "state",
@@ -248,16 +286,395 @@ describe("summary and glossary", () => {
         }),
       ).state,
     });
-    expect(glossary.value).toBe("new => 新");
+    expect(within(body).getByText("新")).toBeTruthy();
+  });
+
+  it("commits an inline side on blur and cancels it on Escape", () => {
+    const text = harness.text.preview;
+    const { container } = renderPreview(
+      makeModel({
+        summary: {
+          text: "Summary",
+          glossaryText: "table => 表格",
+          glossaryCount: 1,
+        },
+      }),
+    );
+    const body = container.querySelector(".pv-summary-body") as HTMLElement;
+    openGlossary(body);
+    const sourceLabel = `${text.summary.glossaryEditTerm} 1 ${text.summary.glossaryTableSource}`;
+
+    fireEvent.click(within(body).getByLabelText(sourceLabel));
+    const source = within(body).getByLabelText(
+      text.summary.glossaryTableSource,
+    ) as HTMLInputElement;
+    fireEvent.input(source, { target: { value: "数据表" } });
+    fireEvent.blur(source);
+    expect(body.querySelector(".pv-term-card.is-editing")).toBeNull();
+    expect(within(body).getByText("数据表")).toBeTruthy();
+    expect(
+      (within(body).getByRole("button", {
+        name: text.summary.save,
+      }) as HTMLButtonElement).disabled,
+    ).toBe(false);
+
+    fireEvent.click(within(body).getByLabelText(sourceLabel));
+    const reopened = within(body).getByLabelText(
+      text.summary.glossaryTableSource,
+    ) as HTMLInputElement;
+    expect(reopened.value).toBe("数据表");
+    fireEvent.input(reopened, { target: { value: "不保存" } });
+    fireEvent.keyDown(reopened, { key: "Escape" });
+    expect(body.querySelector(".pv-term-card.is-editing")).toBeNull();
+    expect(within(body).getByText("数据表")).toBeTruthy();
+    expect(within(body).queryByText("不保存")).toBeNull();
+  });
+
+  it("adds, deletes, and validates glossary cards", () => {
+    const text = harness.text.preview;
+    const { container } = renderPreview(
+      makeModel({
+        summary: {
+          text: "Summary",
+          glossaryText: "table => 表格",
+          glossaryCount: 1,
+        },
+      }),
+    );
+    const body = container.querySelector(".pv-summary-body") as HTMLElement;
+    openGlossary(body);
+    fireEvent.click(
+      within(body).getByRole("button", { name: text.summary.glossaryAdd }),
+    );
+    const source = within(body).getByLabelText(
+      text.summary.glossaryTableSource,
+    ) as HTMLInputElement;
+    expect(source.value).toBe("");
+    expect(document.activeElement).toBe(source);
+
+    const save = within(body).getByRole("button", {
+      name: text.summary.save,
+    }) as HTMLButtonElement;
+    expect(save.disabled).toBe(true);
+    fireEvent.input(source, { target: { value: "Table" } });
+    fireEvent.keyDown(source, { key: "Enter" });
+    const nextTarget = within(body).getByLabelText(
+      text.summary.glossaryTableTarget,
+    ) as HTMLInputElement;
+    expect(nextTarget.value).toBe("");
+    expect(save.disabled).toBe(true);
+    fireEvent.keyDown(nextTarget, { key: "Enter" });
+    expect(
+      within(body).getByLabelText(text.summary.glossaryTableTarget),
+    ).toBeTruthy();
+
+    fireEvent.input(nextTarget, { target: { value: "表格 2" } });
+    fireEvent.keyDown(nextTarget, { key: "Enter" });
+    expect(save.disabled).toBe(false);
+    expect(within(body).getByText(text.summary.glossaryDuplicate)).toBeTruthy();
+
+    fireEvent.click(
+      within(body).getByRole("button", {
+        name: `${text.summary.glossaryDelete} 2`,
+      }),
+    );
+    expect(
+      within(body).queryByLabelText(
+        `${text.summary.glossaryEditTerm} 2 ${text.summary.glossaryTableSource}`,
+      ),
+    ).toBeNull();
+  });
+
+  it("cancels a new term without changing the draft", () => {
+    const text = harness.text.preview;
+    const { container } = renderPreview(
+      makeModel({
+        summary: {
+          text: "Summary",
+          glossaryText: "table => 表格",
+          glossaryCount: 1,
+        },
+      }),
+    );
+    const body = container.querySelector(".pv-summary-body") as HTMLElement;
+    openGlossary(body);
+    fireEvent.click(
+      within(body).getByRole("button", { name: text.summary.glossaryAdd }),
+    );
+    const source = within(body).getByLabelText(
+      text.summary.glossaryTableSource,
+    ) as HTMLInputElement;
+    fireEvent.input(source, { target: { value: "ignored" } });
+    fireEvent.keyDown(source, { key: "Escape" });
+    fireEvent.click(
+      within(body).getByRole("button", { name: text.summary.save }),
+    );
+    expect(actions(harness)).toContainEqual({
+      type: "saveBrief",
+      summaryText: "Summary",
+      brief: {},
+      glossaryText: "table => 表格",
+    });
+  });
+
+  it("renders the maximum glossary size", () => {
+    const text = harness.text.preview;
+    const glossaryText = Array.from(
+      { length: 200 },
+      (_, index) => `term-${index + 1} => 术语-${index + 1}`,
+    ).join("\n");
+    const { container } = renderPreview(
+      makeModel({
+        summary: {
+          text: "Summary",
+          glossaryText,
+          glossaryCount: 200,
+        },
+      }),
+    );
+    const body = container.querySelector(".pv-summary-body") as HTMLElement;
+    openGlossary(body);
+    expect(
+      within(body).getByLabelText(
+        `${text.summary.glossaryEditTerm} 200 ${text.summary.glossaryTableSource}`,
+      ),
+    ).toBeTruthy();
+  });
+
+  it("reveals only the hovered term side", () => {
+    const { container } = renderPreview(
+      makeModel({
+        summary: {
+          text: "Summary",
+          glossaryText: `${"a".repeat(80)} => ${"译".repeat(80)}`,
+          glossaryCount: 1,
+        },
+      }),
+    );
+    const body = container.querySelector(".pv-summary-body") as HTMLElement;
+    openGlossary(body);
+    const card = body.querySelector(".pv-term-card") as HTMLElement;
+    const sides = card.querySelectorAll(".pv-term-side");
+    const terms = card.querySelectorAll<HTMLElement>(".pv-term-text");
+    const tracks = card.querySelectorAll<HTMLElement>(".pv-term-track");
+    Object.defineProperty(tracks[0], "scrollWidth", {
+      configurable: true,
+      value: 300,
+    });
+    Object.defineProperty(terms[0], "clientWidth", {
+      configurable: true,
+      value: 100,
+    });
+    Object.defineProperty(tracks[1], "scrollWidth", {
+      configurable: true,
+      value: 260,
+    });
+    Object.defineProperty(terms[1], "clientWidth", {
+      configurable: true,
+      value: 100,
+    });
+
+    fireEvent.mouseEnter(sides[0]);
+    expect(terms[0].className).toContain("is-revealing");
+    expect(terms[0].getAttribute("style")).toContain("--term-shift: -200px");
+    expect(terms[1].className).not.toContain("is-revealing");
+    fireEvent.mouseLeave(sides[0]);
+    expect(terms[0].className).not.toContain("is-revealing");
+
+    fireEvent.mouseEnter(sides[1]);
+    expect(terms[1].className).toContain("is-revealing");
+    expect(terms[1].getAttribute("style")).toContain("--term-shift: -160px");
+    expect(terms[0].className).not.toContain("is-revealing");
+    fireEvent.mouseLeave(sides[1]);
+    expect(terms[1].className).not.toContain("is-revealing");
+  });
+
+  it("fills only cards whose terms no longer fit", () => {
+    const { container } = renderPreview(
+      makeModel({
+        summary: {
+          text: "Summary",
+          glossaryText: "short => 短\nlong => 长",
+          glossaryCount: 2,
+        },
+      }),
+    );
+    const body = container.querySelector(".pv-summary-body") as HTMLElement;
+    openGlossary(body);
+    const flow = body.querySelector(".pv-term-flow") as HTMLElement;
+    const cards = Array.from(
+      body.querySelectorAll<HTMLElement>(".pv-term-card"),
+    );
+    const trackWidths = [
+      [40, 30],
+      [300, 200],
+    ];
+    cards.forEach((card, index) => {
+      card
+        .querySelectorAll<HTMLElement>(".pv-term-track")
+        .forEach((track, side) => {
+          Object.defineProperty(track, "getBoundingClientRect", {
+            configurable: true,
+            value: () => ({ width: trackWidths[index][side] }),
+          });
+        });
+      Object.defineProperty(
+        card.querySelector(".pv-term-separator") as HTMLElement,
+        "getBoundingClientRect",
+        { configurable: true, value: () => ({ width: 3 }) },
+      );
+    });
+    Object.defineProperty(flow, "clientWidth", {
+      configurable: true,
+      value: 300,
+    });
+    fireEvent(window, new Event("resize"));
+    expect(cards[0].className).not.toContain("is-filling");
+    expect(cards[1].className).toContain("is-filling");
+
+    Object.defineProperty(flow, "clientWidth", {
+      configurable: true,
+      value: 500,
+    });
+    fireEvent(window, new Event("resize"));
+    expect(cards[1].className).not.toContain("is-filling");
+  });
+
+  it("filters a large glossary table", () => {
+    const text = harness.text.preview;
+    const glossaryText = Array.from(
+      { length: 11 },
+      (_, index) => `term-${index + 1} => 术语-${index + 1}`,
+    ).join("\n");
+    const { container } = renderPreview(
+      makeModel({
+        summary: {
+          text: "Summary",
+          glossaryText,
+          glossaryCount: 11,
+        },
+      }),
+    );
+    const body = container.querySelector(".pv-summary-body") as HTMLElement;
+    openGlossary(body);
+    const filter = within(body).getByLabelText(
+      text.summary.glossaryFilter,
+    ) as HTMLInputElement;
+    fireEvent.input(filter, { target: { value: "term-10" } });
+    expect(
+      within(body).getByLabelText(
+        `${text.summary.glossaryEditTerm} 10 ${text.summary.glossaryTableSource}`,
+      ),
+    ).toBeTruthy();
+    expect(
+      within(body).queryByLabelText(
+        `${text.summary.glossaryEditTerm} 1 ${text.summary.glossaryTableSource}`,
+      ),
+    ).toBeNull();
+  });
+
+  it("switches between table and bulk glossary editing", () => {
+    const text = harness.text.preview;
+    const { container } = renderPreview(
+      makeModel({
+        summary: {
+          text: "Summary",
+          glossaryText: "table => 表格",
+          glossaryCount: 1,
+        },
+      }),
+    );
+    const body = container.querySelector(".pv-summary-body") as HTMLElement;
+    openGlossary(body);
+    fireEvent.click(
+      within(body).getByRole("button", { name: text.summary.glossaryBulkEdit }),
+    );
+    const bulk = within(body).getByPlaceholderText(
+      text.summary.glossaryPlaceholder,
+    ) as HTMLTextAreaElement;
+    fireEvent.input(bulk, {
+      target: { value: "table=>表格\ncode=>代码" },
+    });
+    fireEvent.click(
+      within(body).getByRole("button", { name: text.summary.glossaryTableEdit }),
+    );
+    expect(within(body).getByText("code")).toBeTruthy();
+    expect(within(body).getByText("代码")).toBeTruthy();
+  });
+
+  it("edits optional brief fields and sends them with the summary", () => {
+    const text = harness.text.preview;
+    const model = makeModel({
+      summary: {
+        text: "Summary",
+        brief: { audience: "Developers" },
+        briefFilledCount: 1,
+      },
+    });
+    const { container } = renderPreview(model);
+    const body = container.querySelector(".pv-summary-body") as HTMLElement;
+    const toggle = container.querySelector(".pv-brief-toggle") as HTMLElement;
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
+    fireEvent.click(toggle);
+    expect(toggle.getAttribute("aria-expanded")).toBe("true");
+
+    const audience = within(body).getByLabelText(
+      text.summary.briefAudience,
+    ) as HTMLInputElement;
+    expect(audience.value).toBe("Developers");
+    fireEvent.input(audience, { target: { value: "Operators" } });
+    fireEvent.input(
+      within(body).getByLabelText(text.summary.briefTone) as HTMLTextAreaElement,
+      { target: { value: "Formal" } },
+    );
+    fireEvent.click(
+      within(body).getByRole("button", { name: text.summary.save }),
+    );
+
+    expect(actions(harness)).toContainEqual({
+      type: "saveBrief",
+      summaryText: "Summary",
+      brief: { audience: "Operators", toneAndStyle: "Formal" },
+      glossaryText: "",
+    });
+  });
+
+  it("opens the brief and glossary exclusively and starts collapsed", () => {
+    const { container } = renderPreview(
+      makeModel({
+        summary: {
+          text: "Summary",
+          glossaryText: "table => 表格",
+          glossaryCount: 1,
+        },
+      }),
+    );
+    const brief = container.querySelector(
+      ".pv-brief:not(.pv-glossary-section) .pv-brief-toggle",
+    ) as HTMLElement;
+    const glossary = container.querySelector(
+      ".pv-glossary-section .pv-brief-toggle",
+    ) as HTMLElement;
+    expect(brief.getAttribute("aria-expanded")).toBe("false");
+    expect(glossary.getAttribute("aria-expanded")).toBe("false");
+
+    fireEvent.click(brief);
+    expect(brief.getAttribute("aria-expanded")).toBe("true");
+    expect(glossary.getAttribute("aria-expanded")).toBe("false");
+    fireEvent.click(glossary);
+    expect(brief.getAttribute("aria-expanded")).toBe("false");
+    expect(glossary.getAttribute("aria-expanded")).toBe("true");
+    fireEvent.click(glossary);
+    expect(glossary.getAttribute("aria-expanded")).toBe("false");
   });
 
   it("explains that a glossary requires a summary", () => {
     const text = harness.text.preview;
     const { container } = renderPreview(makeModel());
+    const body = container.querySelector(".pv-summary-body") as HTMLElement;
+    openGlossary(body);
     expect(
-      within(container.querySelector(".pv-summary-body") as HTMLElement).getByText(
-        text.summary.glossaryNeedsSummary,
-      ),
+      within(body).getByText(text.summary.glossaryNeedsSummary),
     ).toBeTruthy();
   });
 

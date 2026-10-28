@@ -150,6 +150,40 @@ describe("BatchTranslationCoordinator", () => {
     ]);
   });
 
+  it("does not coalesce calls with different document briefs", async () => {
+    const calls: TranslationRequest[] = [];
+    const delegate: TranslationProvider = {
+      id: "fake",
+      label: "Fake",
+      async translate(requested) {
+        calls.push(requested);
+        return requested.items.map((entry) => ({
+          id: entry.id,
+          text: `译:${entry.text}`,
+        }));
+      },
+    };
+    const coordinator = new BatchTranslationCoordinator(delegate, {
+      flushDelayMs: 0,
+    });
+
+    await Promise.all([
+      coordinator.translate({
+        ...request([item("a1", "A1")]),
+        brief: { audience: "Developers" },
+      }),
+      coordinator.translate({
+        ...request([item("b1", "B1")]),
+        brief: { audience: "Operators" },
+      }),
+    ]);
+
+    expect(calls).toHaveLength(2);
+    expect(
+      calls.map((entry) => entry.brief?.audience).sort(),
+    ).toEqual(["Developers", "Operators"]);
+  });
+
   it("does not coalesce calls with different glossaries", async () => {
     const calls: TranslationRequest[] = [];
     const delegate: TranslationProvider = {

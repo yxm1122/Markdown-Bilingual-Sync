@@ -30,6 +30,7 @@ cases/<case-id>/reference.zh.md
 | `cjk-punctuation` | Chinese punctuation and CJK/Latin spacing | `cjk-punctuation`, `spacing`, `links`, `inline-code` |
 | `inline-html-escapes` | Inline HTML, escaped Markdown, double-backtick code, link title | `inline-html`, `escaped-markdown`, `double-backtick`, `link-title` |
 | `negation-quantities` | Negation, quantities, and time conditions | `negation`, `quantities`, `dates`, `accuracy` |
+| `heading-idiom` | A title whose idiom is clarified by the following paragraph; batch vs single-block context regression | `headings`, `idiom`, `tone`, `single-block-context` |
 | `real-project-readme` | Full project README with tables, code, links, footnote | `real-document`, `readme`, `tables`, `code`, `links`, `footnotes` |
 | `real-operations-runbook` | Deployment runbook with alert, JSON, error table, rollback | `real-document`, `runbook`, `github-alerts`, `code`, `tables`, `operations` |
 

@@ -128,7 +128,14 @@ JSON 载荷：
   "text": "摘要正文",
   "sourceHash": "整篇原文的 sha256",
   "updatedAt": "2026-10-25T00:00:00.000Z",
-  "model": "可选：生成模型或 Provider 标签"
+  "model": "可选：生成模型或 Provider 标签",
+  "glossary": [{ "source": "table", "target": "表格" }],
+  "brief": {
+    "audience": "可选：目标读者",
+    "toneAndStyle": "可选：语气与风格",
+    "ambiguities": "可选：歧义与决策",
+    "doNotTranslate": "可选：禁译项"
+  }
 }
 ```
 
@@ -141,9 +148,53 @@ JSON 载荷：
 - 重复的合法摘要标记：采用最后一条，其余告警。
 - 看起来像摘要标记但格式无效：整行剥离并告警，避免变成未跟踪内容阻断写回。
 - `sourceHash` 与当前原文不一致时，预览提示“可能过期”，但仍作为上下文使用。
+- `glossary` 是随摘要生成的文档术语表；`brief` 是可选翻译要求，每个字段 trim 后最多 400 字符，空字段不写入。
+- 旧缓存没有 `glossary`/`brief` 时按空处理，兼容读取。
 - 清除缓存会删除摘要；清除摘要但保留译文时，缓存会重新序列化。
 
 实现：`summarySourceHash` 会先统一换行再计算 SHA-256，避免 CRLF 造成误判。
+
+## 4.1 本机批注 sidecar
+
+批注不写入缓存 Markdown，也不进入导出；它存放在与缓存同目录的 sidecar：
+
+```text
+<cache>.annotations.json
+```
+
+例如 `demo.zh.md` 对应 `demo.zh.annotations.json`。结构：
+
+```json
+{
+  "version": 1,
+  "annotations": [
+    {
+      "id": "user-a1b2c3d4e5f6",
+      "blockId": "缓存锚点 id 或 src-<sourceHash>",
+      "side": "source|target",
+      "author": "ai|user",
+      "kind": "source-issue|translation-uncertain|term|structure|note|request-change",
+      "severity": "info|check",
+      "message": "批注正文",
+      "question": "可选",
+      "sourceExcerpt": "可选",
+      "targetExcerpt": "可选",
+      "suggestion": "可选",
+      "status": "open|resolved|dismissed",
+      "sourceHash": "可选：写入时的原文哈希",
+      "createdAt": "ISO 时间",
+      "updatedAt": "ISO 时间"
+    }
+  ]
+}
+```
+
+规则：
+
+- 写入使用临时文件 + rename；损坏 JSON 读取为空白批注并记录告警，不阻断预览。
+- 按 `blockId` 关联块；`sourceHash` 与当前块不同标记 stale，缓存重建后找不到则视为 orphan。
+- AI 批注重跑会替换该块旧的 AI 批注，用户批注保留。
+- 删除单个缓存会同时删除 sidecar；清空全部缓存会递归删除缓存根目录（含 sidecar）。
 
 ## 5. 删除墓碑
 

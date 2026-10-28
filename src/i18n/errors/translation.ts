@@ -370,6 +370,26 @@ export const TRANSLATION_ERRORS = [
     zh: "当前翻译服务不支持连接测试，请切换到 OpenAI 兼容或自定义 HTTP 服务。",
   },
   {
+    key: "translation.routerReviewUnsupported",
+    en: "The current provider does not support semantic review. Switch to an OpenAI-compatible provider.",
+    zh: "当前翻译服务不支持语义审校，请切换到 OpenAI 兼容服务。",
+  },
+  {
+    key: "translation.reviewInvalidJson",
+    en: "The review response was not a valid annotation list. Retry the review.",
+    zh: "审校返回的不是有效批注列表，请重试审校。",
+  },
+  {
+    key: "translation.reviewEmpty",
+    en: "The review returned no content.",
+    zh: "审校没有返回内容。",
+  },
+  {
+    key: "translation.reviewTooLong",
+    en: "The review response is too long.",
+    zh: "审校返回内容过长。",
+  },
+  {
     key: "translation.batchSummaryUnsupported",
     en: "The current provider does not support automatic full-document summaries. Enter one manually.",
     zh: "当前翻译服务不支持自动生成全文摘要，请手动填写。",

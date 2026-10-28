@@ -33,6 +33,11 @@ import { createMarkdownRuntime } from "../markdown/markdown";
 import { parseMarkdownDocument } from "../markdown/segmenter";
 import type { SourceStage } from "../source/editSource";
 import { isDeletedMarker } from "../cache/deletedMarker";
+import type { TranslationBrief } from "../translation/types";
+import type {
+  AnnotationRecord,
+  AnnotationView,
+} from "../annotations/types";
 
 /** 缓存中「没有对应原文」的译文独占块（视图侧裁剪后的最小字段集）。 */
 interface TargetOnlyView {
@@ -108,6 +113,8 @@ export interface PreviewBlockView {
   canEditTarget: boolean;
   /** 是否可回译：有缓存、可翻译且译文非空。 */
   canBackTranslate: boolean;
+  /** 本机批注；有批注时 UI 显示块级标记。 */
+  annotations?: AnnotationView[];
 }
 
 /** 底部统计计数；「已删除」与译文独占块计入 human（译文锁定）。 */
@@ -134,6 +141,12 @@ export interface PreviewSummaryView {
   model?: string;
   /** 摘要估算 token 数。 */
   tokens: number;
+  /** 文档简报的翻译要求。 */
+  brief: TranslationBrief;
+  /** brief 额外字段的估算 token 数。 */
+  briefTokens: number;
+  /** brief 已填写的字段数。 */
+  briefFilledCount: number;
   /** 当前 Provider 是否支持自动生成摘要。 */
   canGenerate: boolean;
   /** 缓存中的文档术语表，文本域每行 `source => target`。 */
@@ -171,6 +184,8 @@ export interface PreviewModel {
   warnings: string[];
   /** 当前暂存的原文修改、删除、插入总数，用于「应用原文修改 N」按钮。 */
   pendingSourceCount: number;
+  /** 当前 Provider 是否支持审校。 */
+  reviewSupported: boolean;
 }
 
 /** `buildPreviewModel` 的输入；除文本外均为展示或暂存信息。 */
@@ -188,6 +203,10 @@ export interface PreviewModelInput {
   pendingSource?: SourceStage;
   /** 稳定翻译/摘要上下文面板状态；缺省为关闭摘要、开启稳定翻译。 */
   assist?: PreviewAssistView;
+  /** 本机批注；按块 id 映射到视图。 */
+  annotations?: readonly AnnotationRecord[];
+  /** 当前 Provider 是否支持审校。 */
+  reviewSupported?: boolean;
 }
 
 /** 块状态到中文文案的映射；文案来自 i18n，避免在渲染层散落字符串。 */
@@ -692,6 +711,43 @@ export function buildPreviewModel(input: PreviewModelInput): PreviewModel {
     }
   }
 
+  // 批注按块 id 挂到视图；sourceHash 与当前块不一致时标记过期。
+  if (input.annotations?.length) {
+    const hashById = new Map<string, string>();
+    for (const block of blocks) {
+      const id =
+        block.cacheId ??
+        (block.sourceHash ? `src-${block.sourceHash}` : undefined);
+      if (id) {
+        hashById.set(id, block.sourceHash);
+      }
+    }
+    const byId = new Map<string, AnnotationView[]>();
+    for (const record of input.annotations) {
+      const currentHash = hashById.get(record.blockId);
+      const view: AnnotationView = {
+        ...record,
+        stale: Boolean(
+          record.sourceHash &&
+            currentHash &&
+            record.sourceHash !== currentHash,
+        ),
+      };
+      const list = byId.get(record.blockId) ?? [];
+      list.push(view);
+      byId.set(record.blockId, list);
+    }
+    for (const block of blocks) {
+      const id =
+        block.cacheId ??
+        (block.sourceHash ? `src-${block.sourceHash}` : undefined);
+      const list = id ? byId.get(id) : undefined;
+      if (list?.length) {
+        block.annotations = list;
+      }
+    }
+  }
+
   // 译文独占块（targetBlocks）同样是有效缓存内容：删除全部原文后只剩它们时，
   // 导出仍然可用，不应提示“尚未生成缓存”。
   const cacheExists = Boolean(
@@ -714,6 +770,9 @@ export function buildPreviewModel(input: PreviewModelInput): PreviewModel {
         text: "",
         stale: false,
         tokens: 0,
+        brief: {},
+        briefTokens: 0,
+        briefFilledCount: 0,
         canGenerate: false,
         glossaryText: "",
         glossaryCount: 0,
@@ -733,5 +792,6 @@ export function buildPreviewModel(input: PreviewModelInput): PreviewModel {
     },
     warnings: [...warnings],
     pendingSourceCount,
+    reviewSupported: input.reviewSupported === true,
   };
 }

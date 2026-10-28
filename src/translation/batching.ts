@@ -14,7 +14,13 @@
  * 安全边界：token 数是启发式估算（CJK 约 1.1 token/字，其他约 1/3.5），
  * 只用于控制请求大小，不用于计费或安全判断。
  */
-import type { TranslationItem } from "./types";
+import { translationBriefText } from "./types";
+import type {
+  TranslationAnnotationInput,
+  TranslationBrief,
+  TranslationContext,
+  TranslationItem,
+} from "./types";
 
 /** 分批参数；数值会经 normalizeOptions 取整并裁剪。 */
 export interface TranslationBatchOptions {
@@ -75,6 +81,42 @@ export function estimateItemTokens(item: TranslationItem): number {
 /** 估算每批固定上下文（全文摘要）的 token；无摘要时为 0。纯函数。 */
 export function estimateSummaryContextTokens(summary?: string): number {
   return summary?.trim() ? estimateTokenCount(summary) + 24 : 0;
+}
+
+/** 估算文档简报额外字段的 token；无内容时为 0。纯函数。 */
+export function estimateTranslationBriefTokens(
+  brief?: TranslationBrief,
+): number {
+  const text = translationBriefText(brief);
+  return text ? estimateTokenCount(text) + 64 : 0;
+}
+
+/** 估算只读邻块上下文的 token；无内容时为 0。纯函数。 */
+export function estimateTranslationContextTokens(
+  context?: TranslationContext,
+): number {
+  if (!context) {
+    return 0;
+  }
+  const text = [...(context.before ?? []), ...(context.after ?? [])]
+    .map((block) => block.text.trim())
+    .filter(Boolean)
+    .join("\n");
+  return text ? estimateTokenCount(text) + 32 : 0;
+}
+
+/** 估算用户批注指令的 token；无内容时为 0。纯函数。 */
+export function estimateTranslationAnnotationTokens(
+  annotations: readonly TranslationAnnotationInput[] | undefined,
+): number {
+  if (!annotations || annotations.length === 0) {
+    return 0;
+  }
+  const text = annotations
+    .map((annotation) => annotation.text.trim())
+    .filter(Boolean)
+    .join("\n");
+  return text ? estimateTokenCount(text) + 32 : 0;
 }
 
 /** 规范化分批参数：取整并保证下界，非法数值回退到默认值。纯函数。 */
