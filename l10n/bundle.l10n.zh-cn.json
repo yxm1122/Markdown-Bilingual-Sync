@@ -40,6 +40,7 @@
   "Anchor {id} records kind {anchorKind}, but the actual translation block is {blockKind}.": "锚点 {id} 记录的类型为 {anchorKind}，实际译文块为 {blockKind}。",
   "Annotation deleted.": "批注已删除。",
   "Annotation saved.": "批注已保存。",
+  "Annotation side": "批注对象",
   "Annotation updated.": "批注已更新。",
   "Annotations": "批注",
   "Annotations ({count})": "批注（{count}）",

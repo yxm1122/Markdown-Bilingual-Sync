@@ -25,6 +25,7 @@ function record(
     severity: "info",
     message: "Check this.",
     status: "open",
+    sourceIndex: 2,
     createdAt: "2026-10-28T00:00:00.000Z",
     updatedAt: "2026-10-28T00:00:00.000Z",
     ...overrides,
@@ -120,6 +121,9 @@ describe("annotation store", () => {
     );
     expect(corrupt.annotations).toEqual([]);
     expect(corrupt.warning).toContain("invalid annotations sidecar");
+    expect(
+      [...files.keys()].some((key) => key.includes(".corrupt-")),
+    ).toBe(true);
   });
 
   it("deletes the sidecar and treats a missing file as empty", async () => {

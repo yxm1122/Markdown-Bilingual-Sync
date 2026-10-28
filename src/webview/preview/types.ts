@@ -80,6 +80,8 @@ export type OutboundMessage =
       side: "source" | "target";
       kind: "note" | "request-change";
       message: string;
+      sourceHash?: string;
+      cacheId?: string;
     }
   | {
       type: "setAnnotationStatus";

@@ -37,6 +37,8 @@ export interface AnnotationRecord {
   status: AnnotationStatus;
   /** 创建批注时的原文哈希，用于判断是否过期。 */
   sourceHash?: string;
+  /** 创建时的源块序号；用于无缓存批注在首次翻译后迁移到锚点。 */
+  sourceIndex?: number;
   createdAt: string;
   updatedAt: string;
 }

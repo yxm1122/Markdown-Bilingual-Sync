@@ -40,6 +40,7 @@
   "Anchor {id} records kind {anchorKind}, but the actual translation block is {blockKind}.": "Anchor {id} records kind {anchorKind}, but the actual translation block is {blockKind}.",
   "Annotation deleted.": "Annotation deleted.",
   "Annotation saved.": "Annotation saved.",
+  "Annotation side": "Annotation side",
   "Annotation updated.": "Annotation updated.",
   "Annotations": "Annotations",
   "Annotations ({count})": "Annotations ({count})",

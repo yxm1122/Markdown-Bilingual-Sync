@@ -6,14 +6,17 @@ import {
   fireEvent,
   render,
   screen,
+  waitFor,
   within,
 } from "@testing-library/preact";
 import {
   actions,
   loadHarness,
+  postHostMessage,
   resetHarness,
   type WebviewHarness,
 } from "./harness";
+import { MAX_ANNOTATION_MESSAGE } from "../../src/annotations/types";
 import { makeBlock, makeBoot, makeModel } from "./fixtures";
 import { formatText as fmt } from "../../src/i18n";
 import type { AnnotationView } from "../../src/annotations/types";
@@ -94,7 +97,29 @@ describe("block annotations", () => {
     });
   });
 
-  it("saves a user annotation with the selected side and change request", () => {
+  it("focuses the composer and returns focus to the badge on close", async () => {
+    const text = harness.text.preview.annotations;
+    const { container } = renderWithAnnotation();
+    const badge = within(container).getByLabelText(
+      fmt(text.openCount, { count: 1 }),
+    ) as HTMLElement;
+    fireEvent.click(badge);
+    const dialog = screen.getByRole("dialog", { name: text.title });
+    expect(document.activeElement).toBe(
+      within(dialog).getByLabelText(text.add),
+    );
+    fireEvent.keyDown(document, { key: "Escape" });
+    await waitFor(() => {
+      expect(
+        screen.queryByRole("dialog", { name: text.title }),
+      ).toBeNull();
+    });
+    await waitFor(() => {
+      expect(document.activeElement).toBe(badge);
+    });
+  });
+
+  it("keeps the annotation draft until the host confirms it", async () => {
     const text = harness.text.preview.annotations;
     const { container } = renderWithAnnotation([]);
     // 没有批注时块头不显示标记，通过块菜单打开。
@@ -114,10 +139,14 @@ describe("block annotations", () => {
     fireEvent.click(menuItem!);
 
     const dialog = screen.getByRole("dialog", { name: text.title });
-    fireEvent.input(
-      within(dialog).getByLabelText(text.add),
-      { target: { value: "Use the business sense." } },
-    );
+    const compose = within(dialog).getByLabelText(
+      text.add,
+    ) as HTMLTextAreaElement;
+    expect(document.activeElement).toBe(compose);
+    expect(compose.maxLength).toBe(MAX_ANNOTATION_MESSAGE);
+    fireEvent.input(compose, {
+      target: { value: "Use the business sense." },
+    });
     fireEvent.click(within(dialog).getByText(text.requestChange));
     fireEvent.click(
       within(dialog).getByRole("button", { name: text.save }),
@@ -128,6 +157,35 @@ describe("block annotations", () => {
       side: "target",
       kind: "request-change",
       message: "Use the business sense.",
+      sourceHash: "source-hash-0",
+      cacheId: "cache-0",
+    });
+    expect(compose.value).toBe("Use the business sense.");
+
+    postHostMessage({
+      type: "state",
+      state: makeBoot(
+        makeModel({
+          blocks: [
+            makeBlock({
+              annotations: [
+                annotation({
+                  id: "u1",
+                  author: "user",
+                  kind: "request-change",
+                  message: "Use the business sense.",
+                }),
+              ],
+            }),
+          ],
+        }),
+      ).state,
+    });
+    await waitFor(() => {
+      const current = within(
+        screen.getByRole("dialog", { name: text.title }),
+      ).getByLabelText(text.add) as HTMLTextAreaElement;
+      expect(current.value).toBe("");
     });
   });
 

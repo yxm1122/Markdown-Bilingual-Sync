@@ -711,38 +711,44 @@ export function buildPreviewModel(input: PreviewModelInput): PreviewModel {
     }
   }
 
-  // 批注按块 id 挂到视图；sourceHash 与当前块不一致时标记过期。
+  // 批注按块 id 挂到视图；无缓存批注可按 sourceIndex 定位，sourceHash 不一致时标记过期。
   if (input.annotations?.length) {
-    const hashById = new Map<string, string>();
+    const blocksById = new Map<string, PreviewBlockView[]>();
     for (const block of blocks) {
       const id =
         block.cacheId ??
         (block.sourceHash ? `src-${block.sourceHash}` : undefined);
-      if (id) {
-        hashById.set(id, block.sourceHash);
+      if (!id) {
+        continue;
       }
+      const list = blocksById.get(id) ?? [];
+      list.push(block);
+      blocksById.set(id, list);
     }
-    const byId = new Map<string, AnnotationView[]>();
     for (const record of input.annotations) {
-      const currentHash = hashById.get(record.blockId);
-      const view: AnnotationView = {
-        ...record,
-        stale: Boolean(
-          record.sourceHash &&
-            currentHash &&
-            record.sourceHash !== currentHash,
-        ),
-      };
-      const list = byId.get(record.blockId) ?? [];
-      list.push(view);
-      byId.set(record.blockId, list);
-    }
-    for (const block of blocks) {
-      const id =
-        block.cacheId ??
-        (block.sourceHash ? `src-${block.sourceHash}` : undefined);
-      const list = id ? byId.get(id) : undefined;
-      if (list?.length) {
+      let targets = blocksById.get(record.blockId) ?? [];
+      if (
+        record.blockId.startsWith("src-") &&
+        record.sourceIndex !== undefined
+      ) {
+        const byIndex = blocks.find(
+          (block) => block.blockIndex === record.sourceIndex,
+        );
+        if (byIndex) {
+          targets = [byIndex];
+        }
+      }
+      for (const block of targets) {
+        const view: AnnotationView = {
+          ...record,
+          stale: Boolean(
+            record.sourceHash &&
+              block.sourceHash &&
+              record.sourceHash !== block.sourceHash,
+          ),
+        };
+        const list = block.annotations ?? [];
+        list.push(view);
         block.annotations = list;
       }
     }

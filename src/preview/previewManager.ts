@@ -1156,6 +1156,7 @@ class PreviewPanelSession implements vscode.Disposable {
               side: annotationSide,
               kind: annotationKind,
               message: annotationMessage,
+              expected: { sourceHash, cacheId },
             });
           }
           break;
@@ -2242,6 +2243,7 @@ class PreviewPanelSession implements vscode.Disposable {
       side: "source" | "target";
       kind: "note" | "request-change";
       message: string;
+      expected?: { sourceHash?: string; cacheId?: string };
     },
   ): Promise<void> {
     this.setBusy(true, UI_TEXT.notifications.annotationSaving);

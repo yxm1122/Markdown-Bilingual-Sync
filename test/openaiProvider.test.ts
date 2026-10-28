@@ -1034,6 +1034,28 @@ describe("OpenAITranslationProvider", () => {
     expect(results).toHaveLength(2);
   });
 
+  it("allows short CJK, link-only, and code-only items to stay unchanged", async () => {
+    const items = [
+      item("b1", "产品名称"),
+      item("b2", "[Architecture](/架构/设计.md)"),
+      item("b3", "`pnpm install --filter @scope/app --frozen-lockfile`"),
+    ];
+    const { provider } = configuredProvider(async () =>
+      completion(
+        JSON.stringify({
+          items: items.map((entry) => ({ id: entry.id, text: entry.text })),
+        }),
+      ),
+    );
+
+    const results = await provider.translate({
+      ...request(items),
+      sourceLanguage: "zh-CN",
+      targetLanguage: "en",
+    });
+    expect(results).toHaveLength(3);
+  });
+
   it("rejects partial translations that keep a long source sentence", async () => {
     const source =
       "The quick brown fox jumps over the lazy dog. This paragraph keeps a short English text next to its Chinese translation.";

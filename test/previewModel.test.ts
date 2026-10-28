@@ -96,6 +96,39 @@ describe("buildPreviewModel", () => {
     expect(code?.canBackTranslate).toBe(false);
   });
 
+  it("attaches source-indexed untranslated annotations and marks them stale", async () => {
+    const result = await translate();
+    const paragraph = inspect(SOURCE, result.cacheText).alignment.blocks.find(
+      (block) => block.source.kind === "paragraph",
+    )!;
+    const model = buildPreviewModel({
+      sourceText: SOURCE,
+      cacheText: result.cacheText,
+      ...LABELS,
+      annotations: [
+        {
+          id: "a1",
+          blockId: `src-${paragraph.source.hash}`,
+          side: "source",
+          author: "user",
+          kind: "note",
+          severity: "info",
+          message: "Use the earlier wording.",
+          status: "open",
+          sourceHash: "old-hash",
+          sourceIndex: paragraph.source.index,
+          createdAt: "2026-10-28T00:00:00.000Z",
+          updatedAt: "2026-10-28T00:00:00.000Z",
+        },
+      ],
+    });
+    const view = model.blocks.find(
+      (block) => block.blockIndex === paragraph.source.index,
+    );
+    expect(view?.annotations?.[0].message).toBe("Use the earlier wording.");
+    expect(view?.annotations?.[0].stale).toBe(true);
+  });
+
   it("renders staged insertions and marks staged deletions", async () => {
     const result = await translate();
     const alignment = inspect(SOURCE, result.cacheText).alignment;

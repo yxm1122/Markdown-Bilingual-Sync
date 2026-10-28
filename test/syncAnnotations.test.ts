@@ -1,7 +1,10 @@
 /** 测试：审校批注、用户批注与按批注重译的集成链路。 */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OutputChannel, Uri } from "vscode";
-import { SyncService } from "../src/sync/syncService";
+import {
+  SyncService,
+  planReviewChunks,
+} from "../src/sync/syncService";
 import type { CacheStore } from "../src/cache/cacheStore";
 import type { GlossaryStore } from "../src/glossary/glossaryStore";
 import type {
@@ -130,6 +133,8 @@ describe("sync annotations", () => {
   let requests: TranslationRequest[];
   let reviewRequests: ReviewRequest[];
   let reviewDrafts: ReviewAnnotationDraft[];
+  let reviewGate: Promise<void> | null;
+  let reviewCalled: (() => void) | undefined;
 
   beforeEach(async () => {
     mocks.documentState.text = SOURCE;
@@ -140,6 +145,8 @@ describe("sync annotations", () => {
     requests = [];
     reviewRequests = [];
     reviewDrafts = [];
+    reviewGate = null;
+    reviewCalled = undefined;
     const provider: TranslationProvider = {
       id: "batch:test",
       label: "Test",
@@ -163,6 +170,10 @@ describe("sync annotations", () => {
       },
       async review(request) {
         reviewRequests.push(request);
+        reviewCalled?.();
+        if (reviewGate) {
+          await reviewGate;
+        }
         return reviewDrafts;
       },
     };
@@ -335,5 +346,126 @@ describe("sync annotations", () => {
       paragraph().source.index,
     );
     expect(result).toEqual({ annotations: [], added: 0 });
+  });
+
+  it("migrates an untranslated-block annotation to the new anchor", async () => {
+    const uri = mocks.FakeUri.file("/project/demo.md") as unknown as Uri;
+    cacheStore.text = "";
+    const target = inspect(SOURCE, "").alignment.blocks.find(
+      (block) => block.source.kind === "paragraph",
+    )!;
+    const saved = await service.saveUserAnnotation(uri, target.source.index, {
+      side: "source",
+      kind: "request-change",
+      message: "Apply before the first sync.",
+    });
+    expect(saved[0].blockId.startsWith("src-")).toBe(true);
+    expect(saved[0].sourceIndex).toBe(target.source.index);
+
+    await service.sync(uri, false);
+    const anchorId = inspect(SOURCE, cacheStore.text!).alignment.blocks.find(
+      (block) => block.source.index === target.source.index,
+    )?.cache?.anchor.id;
+    expect(anchorId).toBeTruthy();
+    const preview = await service.loadPreviewState(uri);
+    expect(
+      preview.annotations?.find((entry) => entry.id === saved[0].id)?.blockId,
+    ).toBe(anchorId);
+
+    requests = [];
+    await service.retranslateBlock(uri, target.source.index);
+    expect(requests[0].annotations).toEqual([
+      {
+        author: "user",
+        kind: "request-change",
+        text: "Apply before the first sync.",
+      },
+    ]);
+  });
+
+  it("rejects a stale annotation save and drops stale instructions", async () => {
+    const uri = mocks.FakeUri.file("/project/demo.md") as unknown as Uri;
+    const target = paragraph();
+    await expect(
+      service.saveUserAnnotation(uri, target.source.index, {
+        side: "source",
+        kind: "note",
+        message: "This should not save.",
+        expected: { sourceHash: "stale-hash" },
+      }),
+    ).rejects.toThrow(/原文已更新/);
+
+    await service.saveUserAnnotation(uri, target.source.index, {
+      side: "source",
+      kind: "request-change",
+      message: "Old instruction.",
+    });
+    mocks.documentState.text = SOURCE.replace(
+      "First paragraph.",
+      "First paragraph changed.",
+    );
+    requests = [];
+    await service.retranslateBlock(uri, target.source.index);
+    expect(requests[0].annotations).toBeUndefined();
+  });
+
+  it("preserves annotations added during review and blocks clear-all", async () => {
+    const uri = mocks.FakeUri.file("/project/demo.md") as unknown as Uri;
+    const target = paragraph();
+    let release!: () => void;
+    reviewGate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let started!: () => void;
+    const startedPromise = new Promise<void>((resolve) => {
+      started = resolve;
+    });
+    reviewCalled = started;
+    reviewDrafts = [];
+    const reviewing = service.reviewBlocks(uri);
+    await startedPromise;
+    await service.saveUserAnnotation(uri, target.source.index, {
+      side: "target",
+      kind: "note",
+      message: "Added while review is running.",
+    });
+    await expect(service.clearAllCaches()).rejects.toThrow(/同步或导入/);
+    release();
+    const result = await reviewing;
+    expect(
+      result.annotations.some(
+        (entry) =>
+          entry.author === "user" &&
+          entry.message === "Added while review is running.",
+      ),
+    ).toBe(true);
+  });
+
+  it("refuses to review a deleted translation", async () => {
+    const uri = mocks.FakeUri.file("/project/demo.md") as unknown as Uri;
+    const target = paragraph();
+    await service.deleteTargetBlock(uri, target.source.index);
+    await expect(
+      service.reviewBlock(uri, target.source.index),
+    ).rejects.toThrow(/译文/);
+  });
+
+  it("splits review requests by token budget", () => {
+    const item = (id: string, size: number) => ({
+      id,
+      kind: "paragraph" as const,
+      headingPath: [],
+      sourceText: "a".repeat(size),
+      targetText: "译".repeat(size),
+    });
+    const chunks = planReviewChunks(
+      [item("a", 20_000), item("b", 10), item("c", 10)],
+      6,
+      6_000,
+    );
+    expect(chunks.map((chunk) => chunk.map((entry) => entry.id))).toEqual([
+      ["a"],
+      ["b", "c"],
+    ]);
   });
 });

@@ -182,6 +182,7 @@ JSON 载荷：
       "suggestion": "可选",
       "status": "open|resolved|dismissed",
       "sourceHash": "可选：写入时的原文哈希",
+      "sourceIndex": "可选：写入时的源块序号；无缓存批注首次翻译后据此迁移",
       "createdAt": "ISO 时间",
       "updatedAt": "ISO 时间"
     }
@@ -191,10 +192,11 @@ JSON 载荷：
 
 规则：
 
-- 写入使用临时文件 + rename；损坏 JSON 读取为空白批注并记录告警，不阻断预览。
-- 按 `blockId` 关联块；`sourceHash` 与当前块不同标记 stale，缓存重建后找不到则视为 orphan。
-- AI 批注重跑会替换该块旧的 AI 批注，用户批注保留。
-- 删除单个缓存会同时删除 sidecar；清空全部缓存会递归删除缓存根目录（含 sidecar）。
+- 写入使用唯一临时文件 + rename，并在同一文件的锁内完成读改写；损坏 JSON 会先备份为 `<sidecar>.corrupt-<id>.json`，再读取为空白批注并记录告警。
+- 按 `blockId` 关联块；`sourceHash` 与当前块不同标记 stale，缓存重建后找不到则视为 orphan。过期用户批注不会进入重译请求。
+- 无缓存块的用户批注保存 `sourceIndex`；首次同步生成锚点后，按 sourceIndex + 原文哈希迁移为锚点 id。旧数据仅在同哈希唯一时迁移。
+- AI 批注重跑会替换该块旧的 AI 批注，用户批注保留；审校最终写入前会重新校验原文/译文/锚点，已变化的块结果会被丢弃。
+- 删除单个缓存会同时删除 sidecar；清空全部缓存会递归删除缓存根目录（含 sidecar），审校进行中会拒绝清空。
 
 ## 5. 删除墓碑
 

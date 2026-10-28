@@ -291,6 +291,7 @@ export const UI_TEXT = {
       empty: "No annotations for this block yet.",
       review: "Review this block",
       add: "Add annotation",
+      side: "Annotation side",
       placeholder: "Add information or request a change…",
       requestChange: "Request a change",
       save: "Save annotation",

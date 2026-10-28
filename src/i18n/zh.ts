@@ -274,6 +274,7 @@ export const UI_TEXT = {
       empty: "这个块还没有批注。",
       review: "审校此块",
       add: "添加批注",
+      side: "批注对象",
       placeholder: "补充信息或要求修改…",
       requestChange: "要求修改",
       save: "保存批注",

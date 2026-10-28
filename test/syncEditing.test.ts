@@ -7,6 +7,7 @@ import { parseMarkdownDocument } from "../src/markdown/segmenter";
 import type { CacheStore } from "../src/cache/cacheStore";
 import type { GlossaryStore } from "../src/glossary/glossaryStore";
 import type {
+  TranslationBrief,
   TranslationProvider,
   TranslationRequest,
 } from "../src/translation/types";
@@ -115,6 +116,7 @@ describe("SyncService block editing and back-translation", () => {
   let service: SyncService;
   let cacheStore: FakeCacheStore;
   let requests: TranslationRequest[];
+  let summaryBrief: TranslationBrief | undefined;
 
   beforeEach(async () => {
     mocks.documentState.text = SOURCE;
@@ -122,6 +124,10 @@ describe("SyncService block editing and back-translation", () => {
     cacheStore = new FakeCacheStore();
     cacheStore.text = result.cacheText;
     requests = [];
+    summaryBrief = {
+      audience: "Developers",
+      toneAndStyle: "Concise technical prose",
+    };
     const provider: TranslationProvider = {
       id: "batch:test",
       label: "Test",
@@ -140,10 +146,7 @@ describe("SyncService block editing and back-translation", () => {
         return {
           summary: `摘要：${summaryRequest.text.split("\n")[0]}`,
           glossary: [{ source: "summary", target: "摘要" }],
-          brief: {
-            audience: "Developers",
-            toneAndStyle: "Concise technical prose",
-          },
+          ...(summaryBrief ? { brief: summaryBrief } : {}),
         };
       },
     };
@@ -812,6 +815,42 @@ describe("SyncService block editing and back-translation", () => {
     const updated = parseCacheDocument(updatedText, makeMd()).summary;
     expect(updated?.brief).toEqual(summary?.brief);
     expect(updated?.text).toBe(summary?.text);
+  });
+
+  it("preserves omitted brief fields and keeps the summary hash for brief-only saves", async () => {
+    const uri = mocks.FakeUri.file("/project/demo.md") as unknown as Uri;
+    const first = await service.saveBrief(uri, {
+      text: "简报正文",
+      brief: { audience: "Operators" },
+      glossary: [{ source: "table", target: "表格" }],
+    });
+    const initial = parseCacheDocument(first, makeMd()).summary!;
+
+    const second = await service.saveBrief(uri, { text: initial.text });
+    const kept = parseCacheDocument(second, makeMd()).summary!;
+    expect(kept.brief).toEqual(initial.brief);
+    expect(kept.glossary).toEqual(initial.glossary);
+
+    mocks.documentState.text = `${SOURCE}\n\nNew paragraph.`;
+    const third = await service.saveBrief(uri, {
+      text: initial.text,
+      brief: { audience: "Updated" },
+    });
+    const updated = parseCacheDocument(third, makeMd()).summary!;
+    expect(updated.sourceHash).toBe(initial.sourceHash);
+    expect(updated.brief?.audience).toBe("Updated");
+  });
+
+  it("keeps a manual brief when summary generation returns none", async () => {
+    const uri = mocks.FakeUri.file("/project/demo.md") as unknown as Uri;
+    await service.saveBrief(uri, {
+      text: "旧摘要",
+      brief: { audience: "Operators" },
+    });
+    summaryBrief = undefined;
+    const text = await service.generateSummary(uri);
+    const summary = parseCacheDocument(text, makeMd()).summary;
+    expect(summary?.brief?.audience).toBe("Operators");
   });
 
   it("drops invalid brief fields and preserves existing brief when saving a summary", async () => {

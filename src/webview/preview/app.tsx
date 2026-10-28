@@ -45,7 +45,6 @@ import {
 import {
   GLOSSARY_MAX_ENTRIES,
   GLOSSARY_MAX_TERM_LENGTH,
-  canonicalGlossaryText,
   cleanGlossaryText,
   parseGlossaryRows,
   serializeGlossaryRows,
@@ -53,7 +52,10 @@ import {
   type GlossaryRow,
 } from "./glossaryModel";
 import type { TranslationBrief } from "../../translation/types";
-import type { AnnotationView } from "../../annotations/types";
+import {
+  MAX_ANNOTATION_MESSAGE,
+  type AnnotationView,
+} from "../../annotations/types";
 import type { BootData, MenuEntry, OutboundMessage, UiCatalog } from "./types";
 
 type Mode = "bilingual" | "source" | "target";
@@ -418,11 +420,13 @@ function AnnotationPopover(props: {
 }) {
   const text = props.text;
   const ref = useRef<HTMLDivElement>(null);
+  const composeRef = useRef<HTMLTextAreaElement>(null);
   const [position, setPosition] = useState({
     left: props.target.x,
     top: props.target.y,
   });
   const [draft, setDraft] = useState("");
+  const [pendingMessage, setPendingMessage] = useState<string | null>(null);
   const [requestChange, setRequestChange] = useState(false);
   const [side, setSide] = useState<"source" | "target">(
     props.block.targetRaw.trim() ? "target" : "source",
@@ -433,20 +437,75 @@ function AnnotationPopover(props: {
     if (!node) {
       return;
     }
-    const rect = node.getBoundingClientRect();
-    let left = props.target.x - rect.width;
-    let top = props.target.y;
-    if (left < 4) {
-      left = 4;
+    const place = () => {
+      const rect = node.getBoundingClientRect();
+      let left = props.target.x - rect.width;
+      let top = props.target.y;
+      if (left < 4) {
+        left = 4;
+      }
+      if (left + rect.width > window.innerWidth - 4) {
+        left = Math.max(4, window.innerWidth - rect.width - 4);
+      }
+      if (top + rect.height > window.innerHeight - 4) {
+        top = Math.max(4, props.target.y - rect.height - 8);
+      }
+      setPosition({ left, top });
+    };
+    place();
+    window.addEventListener("resize", place);
+    if (typeof ResizeObserver === "undefined") {
+      return () => window.removeEventListener("resize", place);
     }
-    if (left + rect.width > window.innerWidth - 4) {
-      left = Math.max(4, window.innerWidth - rect.width - 4);
-    }
-    if (top + rect.height > window.innerHeight - 4) {
-      top = Math.max(4, props.target.y - rect.height - 8);
-    }
-    setPosition({ left, top });
+    const observer = new ResizeObserver(place);
+    observer.observe(node);
+    return () => {
+      observer.disconnect();
+      window.removeEventListener("resize", place);
+    };
   }, [props.target]);
+
+  useEffect(() => {
+    composeRef.current?.focus();
+  }, []);
+
+  useEffect(() => {
+    const blockKey = props.block.key;
+    return () => {
+      window.setTimeout(() => {
+        const active = document.activeElement;
+        if (active && active !== document.body) {
+          return;
+        }
+        const badge = Array.from(
+          document.querySelectorAll<HTMLElement>(".pv-annotation-badge"),
+        ).find((element) => element.dataset.blockKey === blockKey);
+        const blockNode = badge
+          ? undefined
+          : Array.from(
+              document.querySelectorAll<HTMLElement>(".pv-block, .pv-cell"),
+            ).find((element) => element.dataset.key === blockKey);
+        (badge ?? blockNode?.querySelector<HTMLElement>(".pv-action"))?.focus();
+      }, 0);
+    };
+  }, [props.block.key]);
+
+  useEffect(() => {
+    if (!pendingMessage) {
+      return;
+    }
+    const saved = (props.block.annotations ?? []).some(
+      (annotation) =>
+        annotation.author === "user" &&
+        annotation.status === "open" &&
+        annotation.message === pendingMessage,
+    );
+    if (saved) {
+      setPendingMessage(null);
+      setDraft("");
+      setRequestChange(false);
+    }
+  }, [pendingMessage, props.block.annotations]);
 
   useEffect(() => {
     const onPointerDown = (event: MouseEvent) => {
@@ -488,6 +547,9 @@ function AnnotationPopover(props: {
   const canReview =
     props.reviewSupported &&
     props.block.hasCache &&
+    props.block.status !== "deleted" &&
+    props.block.status !== "copy" &&
+    Boolean(props.block.targetRaw.trim()) &&
     !props.block.standaloneTargetId &&
     !props.block.pendingInsertId;
 
@@ -612,14 +674,19 @@ function AnnotationPopover(props: {
         )}
         <div class="pv-annotation-compose">
           <textarea
+            ref={composeRef}
             class="pv-textarea"
             rows={3}
             value={draft}
+            maxLength={MAX_ANNOTATION_MESSAGE}
             spellcheck={false}
             aria-label={text.preview.annotations.add}
             placeholder={text.preview.annotations.placeholder}
             disabled={props.busy}
-            onInput={(event) => setDraft(event.currentTarget.value)}
+            onInput={(event) => {
+              setDraft(event.currentTarget.value);
+              setPendingMessage(null);
+            }}
           />
           <div class="pv-annotation-compose-actions">
             <label class="pv-check">
@@ -635,7 +702,7 @@ function AnnotationPopover(props: {
             </label>
             <select
               class="pv-input pv-annotation-side"
-              aria-label={text.preview.annotations.title}
+              aria-label={text.preview.annotations.side}
               value={side}
               disabled={props.busy}
               onChange={(event) =>
@@ -648,13 +715,16 @@ function AnnotationPopover(props: {
             <Button
               disabled={props.busy || !draft.trim()}
               onClick={() => {
+                const message = draft.trim();
+                if (!message) {
+                  return;
+                }
+                setPendingMessage(message);
                 props.onSave({
                   side,
                   kind: requestChange ? "request-change" : "note",
-                  message: draft,
+                  message,
                 });
-                setDraft("");
-                setRequestChange(false);
               }}
             >
               {text.preview.annotations.save}
@@ -1040,7 +1110,7 @@ function GlossaryTermCard(props: {
     disabled: props.disabled || props.editing,
     "aria-label": `${t.glossaryEditTerm} ${props.index + 1} ${
       side === "source" ? t.glossaryTableSource : t.glossaryTableTarget
-    }`,
+    }: ${props.row[side]}`,
     title: props.row[side],
     onClick: () =>
       props.onEdit(
@@ -1049,6 +1119,9 @@ function GlossaryTermCard(props: {
       ),
     onMouseEnter: () => setHovered(side),
     onMouseLeave: () => setHovered(null),
+    onFocus: () => setHovered(side),
+    onBlur: () =>
+      setHovered((current) => (current === side ? null : current)),
   });
   return (
     <div
@@ -1056,6 +1129,7 @@ function GlossaryTermCard(props: {
       class={`pv-term-card${props.invalid ? " is-invalid" : ""}${
         props.duplicate ? " is-warning" : ""
       }${filling ? " is-filling" : ""}`}
+      data-term-index={props.index}
       role="listitem"
       title={props.duplicate ? t.glossaryDuplicate : undefined}
     >
@@ -1121,6 +1195,10 @@ function GlossaryTable(props: {
   const editorRef = useRef<HTMLDivElement>(null);
   const settledRef = useRef(false);
   const switchingRef = useRef(false);
+  const restoreFocusRef = useRef<{
+    index: number;
+    side: Side;
+  } | null>(null);
   const isEditing = Boolean(editing);
 
   useEffect(() => {
@@ -1144,6 +1222,40 @@ function GlossaryTable(props: {
       input.select();
     }
   }, [editing?.index, editing?.original, editing?.side]);
+
+  useEffect(() => {
+    if (editing) {
+      return;
+    }
+    const target = restoreFocusRef.current;
+    if (!target) {
+      return;
+    }
+    restoreFocusRef.current = null;
+    const timer = window.setTimeout(() => {
+      const active = document.activeElement;
+      if (active && active !== document.body) {
+        return;
+      }
+      const flow = termFlowRef.current;
+      if (!flow) {
+        return;
+      }
+      const card =
+        target.index >= 0
+          ? flow.querySelector<HTMLElement>(
+              `[data-term-index="${target.index}"]`,
+            )
+          : null;
+      const side = card?.querySelector<HTMLElement>(
+        `.pv-term-side.pv-term-${target.side}`,
+      );
+      const element =
+        side ?? flow.querySelector<HTMLElement>(".pv-term-add");
+      element?.focus();
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [editing]);
 
   useLayoutEffect(() => {
     if (bulk) {
@@ -1214,6 +1326,7 @@ function GlossaryTable(props: {
     }
     settledRef.current = false;
     switchingRef.current = false;
+    restoreFocusRef.current = null;
     setEditing({
       index,
       original: row,
@@ -1232,6 +1345,7 @@ function GlossaryTable(props: {
     }
     settledRef.current = false;
     switchingRef.current = false;
+    restoreFocusRef.current = null;
     setEditing({
       index: parsed.rows.length,
       original: null,
@@ -1246,12 +1360,23 @@ function GlossaryTable(props: {
       return;
     }
     settledRef.current = true;
+    const source = resolvedSide(editing, "source");
+    const target = resolvedSide(editing, "target");
     if (commit) {
-      const source = resolvedSide(editing, "source");
-      const target = resolvedSide(editing, "target");
       if (editing.original) {
+        const original = editing.original;
+        const matches = (row: GlossaryRow | undefined) =>
+          row?.source === original.source && row?.target === original.target;
+        const index = matches(parsed.rows[editing.index])
+          ? editing.index
+          : parsed.rows.findIndex(matches);
+        if (index < 0) {
+          restoreFocusRef.current = { index: -1, side: "source" };
+          setEditing(null);
+          return;
+        }
         const next = parsed.rows.slice();
-        next[editing.index] = { source, target };
+        next[index] = { source, target };
         props.onDraft(serializeGlossaryRows(next));
       } else if (source && target) {
         props.onDraft(
@@ -1259,6 +1384,11 @@ function GlossaryTable(props: {
         );
       }
     }
+    restoreFocusRef.current = editing.original
+      ? { index: editing.index, side: editing.side }
+      : commit && source && target
+        ? { index: parsed.rows.length, side: editing.side }
+        : { index: -1, side: "source" };
     setEditing(null);
   };
   const changeSide = (side: Side, value: string) => {
@@ -1389,8 +1519,9 @@ function GlossaryTable(props: {
             disabled={props.disabled}
             aria-label={`${text.preview.summary.glossaryEditTerm} ${
               editing.index + 1
-            } ${label}`}
+            } ${label}${value ? `: ${value}` : ""}`}
             title={value || label}
+            onMouseDown={(event) => event.preventDefault()}
             onClick={() => switchSide(side)}
           >
             {value || (
@@ -1405,6 +1536,8 @@ function GlossaryTable(props: {
     <div
       class="pv-term-card is-editing"
       ref={editorRef}
+      role="listitem"
+      data-term-index={editing.index}
       title={text.preview.summary.glossaryEditHint}
       style={`width:${Math.max(editing.width, TERM_EDIT_MIN_WIDTH)}px;`}
     >
@@ -1514,17 +1647,19 @@ function GlossaryTable(props: {
               ? <Fragment key="new">{editor}</Fragment>
               : null}
             {!editing ? (
-              <button
-                type="button"
-                class="pv-term-add"
-                disabled={
-                  props.disabled ||
-                  validation.count >= GLOSSARY_MAX_ENTRIES
-                }
-                onClick={startNew}
-              >
-                <Icon name="add" /> {text.preview.summary.glossaryAdd}
-              </button>
+              <div class="pv-term-add-row" role="listitem">
+                <button
+                  type="button"
+                  class="pv-term-add"
+                  disabled={
+                    props.disabled ||
+                    validation.count >= GLOSSARY_MAX_ENTRIES
+                  }
+                  onClick={startNew}
+                >
+                  <Icon name="add" /> {text.preview.summary.glossaryAdd}
+                </button>
+              </div>
             ) : null}
           </div>
         </>
@@ -2155,6 +2290,7 @@ function AnnotationBadge(props: {
     <button
       type="button"
       class="pv-annotation-badge"
+      data-block-key={props.block.key}
       title={fmt(props.text.preview.annotations.openCount, { count })}
       aria-label={fmt(props.text.preview.annotations.openCount, { count })}
       onClick={(event) => {
@@ -2988,8 +3124,6 @@ export function App(props: { boot: BootData; text: UiCatalog }) {
   const summaryDraftRef = useRef(summaryDraft);
   const briefDraftRef = useRef(briefDraft);
   const glossaryDraftRef = useRef(glossaryDraft);
-  const pendingSummarySave = useRef<string | null>(null);
-  const pendingGlossarySave = useRef<string | null>(null);
   const pendingBriefSave = useRef<string | null>(null);
   summaryDraftRef.current = summaryDraft;
   briefDraftRef.current = briefDraft;
@@ -3041,30 +3175,8 @@ export function App(props: { boot: BootData; text: UiCatalog }) {
               ? { data: message.exportConfirmation, writing: false }
               : null;
           });
-          // 只有宿主确实回写了与提交内容一致的摘要/术语表，才清除 dirty；
+          // 只有宿主确实回写了与提交内容一致的简报，才清除 dirty；
           // 校验失败或用户在保存期间继续输入时保留草稿。
-          const savedSummary = message.state.model.assist.summary.text;
-          if (pendingSummarySave.current !== null) {
-            if (
-              savedSummary === pendingSummarySave.current &&
-              summaryDraftRef.current === pendingSummarySave.current
-            ) {
-              setSummaryDirty(false);
-            }
-            pendingSummarySave.current = null;
-          }
-          const savedGlossary = message.state.model.assist.summary.glossaryText ?? "";
-          if (pendingGlossarySave.current !== null) {
-            if (
-              canonicalGlossaryText(savedGlossary) ===
-                canonicalGlossaryText(pendingGlossarySave.current) &&
-              canonicalGlossaryText(glossaryDraftRef.current) ===
-                canonicalGlossaryText(pendingGlossarySave.current)
-            ) {
-              setGlossaryDirty(false);
-            }
-            pendingGlossarySave.current = null;
-          }
           if (pendingBriefSave.current !== null) {
             const saved = message.state.model.assist.summary;
             const savedSignature = briefSaveSignature(
@@ -3706,8 +3818,6 @@ export function App(props: { boot: BootData; text: UiCatalog }) {
           onBriefDraft={updateBrief}
           onGenerate={() => {
             if (busy) return;
-            pendingSummarySave.current = null;
-            pendingGlossarySave.current = null;
             pendingBriefSave.current = null;
             setSummaryDirty(false);
             setBriefDirty(false);
@@ -3717,8 +3827,6 @@ export function App(props: { boot: BootData; text: UiCatalog }) {
           onSave={saveBrief}
           onClear={() => {
             if (busy) return;
-            pendingSummarySave.current = null;
-            pendingGlossarySave.current = null;
             pendingBriefSave.current = null;
             setSummaryDirty(false);
             setBriefDirty(false);
@@ -3815,6 +3923,8 @@ export function App(props: { boot: BootData; text: UiCatalog }) {
             sendMessage({
               type: "saveAnnotation",
               blockIndex: activeAnnotationBlock.blockIndex,
+              sourceHash: activeAnnotationBlock.sourceHash,
+              cacheId: activeAnnotationBlock.cacheId,
               ...input,
             })
           }

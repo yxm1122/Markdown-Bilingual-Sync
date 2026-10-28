@@ -826,11 +826,15 @@ function assertNoUntranslatedSentences(
       if (!sentence) {
         continue;
       }
-      const spaces = (sentence.match(/ /g) ?? []).length;
-      const cjk = (sentence.match(CJK_CHAR) ?? []).length;
+      const visible = stripProtectedForGlossary(sentence).trim();
+      if (!visible) {
+        continue;
+      }
+      const spaces = (visible.match(/ /g) ?? []).length;
+      const cjk = (visible.match(CJK_CHAR) ?? []).length;
       const substantial = cjkSource
-        ? sentence.length >= 8 && cjk >= 4
-        : sentence.length >= 30 && spaces >= 4;
+        ? visible.length >= 12 && cjk >= 8
+        : visible.length >= 30 && spaces >= 4;
       if (substantial && entry.text.includes(sentence)) {
         throw new ProviderRequestError(
           tError("translation.untranslatedSentences"),
@@ -936,15 +940,19 @@ function assertTranslationsChanged(
     if (normalizeForComparison(entry.text) !== normalizedSource) {
       continue;
     }
+    const visibleSource = stripProtectedForGlossary(normalizedSource).trim();
+    if (!visibleSource) {
+      continue;
+    }
     if (cjkToNonCjk) {
-      const cjk = (normalizedSource.match(CJK_CHAR) ?? []).length;
-      if (normalizedSource.length >= 6 && cjk >= 4) {
+      const cjk = (visibleSource.match(CJK_CHAR) ?? []).length;
+      if (visibleSource.length >= 12 && cjk >= 8) {
         substantialUnchanged += 1;
       }
       continue;
     }
-    const spaces = (normalizedSource.match(/ /g) ?? []).length;
-    if (normalizedSource.length >= 40 && spaces >= 4) {
+    const spaces = (visibleSource.match(/ /g) ?? []).length;
+    if (visibleSource.length >= 40 && spaces >= 4) {
       substantialUnchanged += 1;
     }
   }

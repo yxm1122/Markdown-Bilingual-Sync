@@ -81,7 +81,7 @@
 
 `CacheSummary`：`text`、`sourceHash`、`updatedAt`、可选 `model`、`glossary`、`brief`（`audience` / `toneAndStyle` / `ambiguities` / `doNotTranslate`）。摘要属于缓存元数据，不参与对齐与导出；源文变化后只标记过期，仍可作为上下文使用。brief 每个字段最多 400 字符，旧缓存缺失时按空处理。
 
-批注不在缓存 Markdown 中，而存放在缓存同目录的 `<cache>.annotations.json` sidecar；`SyncService.loadPreviewState` 读取后在 `buildPreviewModel` 中按块 id 挂到视图。批注记录包含作者（AI/用户）、类型、严重度、状态与 sourceHash；源文变化标记 stale。
+批注不在缓存 Markdown 中，而存放在缓存同目录的 `<cache>.annotations.json` sidecar；`SyncService.loadPreviewState` 读取后在 `buildPreviewModel` 中按块 id 挂到视图。批注记录包含作者（AI/用户）、类型、严重度、状态、sourceHash 与可选 sourceIndex；源文变化标记 stale，过期用户批注不再作为重译指令。无缓存块的批注带 `src-<hash>` id 和 sourceIndex，首次同步生成锚点后迁移为锚点 id。所有批注读改写走同一文件锁；审校模型调用不占锁，但写入前重新读取并对齐校验原文、译文与锚点，用户批注在审校期间新增也会保留。
 
 ## 3. 主要流程
 
@@ -198,7 +198,7 @@ batchTranslateFolder
 - 简报过期（源文哈希变化）仍作为上下文使用，只提示用户。
 - 同步/重译/全部重译/回译可以携带摘要与 brief；二者 token 从每批预算中扣除；不同摘要、brief、context 或 annotations 的请求不会被合并。
 - 单块重译/回译由 `sync/blockContext` 从同一 section 取 1 个前块/后块（标题优先取后一块正文），作为只读 `context` 发送；大块或超过 600 token 时不加。回译的 adjacent context 来自目标语言缓存。
-- 审校可手动按块或按文件触发；文件级审校跳过 human/deleted/未翻译块，按 6 块一批调用 reviewer，只替换这些块的 AI 批注，用户批注保留。
+- 审校可手动按块或按文件触发；文件级审校跳过 human/deleted/copy/未翻译块，按块数（最多 6）和 token 预算分批调用 reviewer，只替换仍通过原文/译文校验的块的 AI 批注，用户批注保留。
 - 稳定翻译仍由 `stableTranslation` 控制：重译参考旧译文，回译参考当前原文；单块上下文不会替代 reference。
 
 ### 3.8 术语表与译后一致性

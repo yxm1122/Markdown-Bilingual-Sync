@@ -72,6 +72,7 @@ import {
   validateTranslationResult,
   type GlossaryEntry,
   type ReviewAnnotationDraft,
+  type ReviewItem,
   type TranslationBrief,
   type TranslationProvider,
 } from "../translation/types";
@@ -88,6 +89,40 @@ import { tError } from "../i18n/errors";
 /** 摘要是一个手动触发的单次请求；超过该输入规模时提示手动填写，避免超出模型上下文。 */
 const SUMMARY_MAX_INPUT_TOKENS = 12_000;
 const REVIEW_BATCH_SIZE = 6;
+const REVIEW_TOKEN_BUDGET = 6_000;
+const REVIEW_ITEM_OVERHEAD = 24;
+
+/** 按块数与 token 预算切分审校批次；单片超预算时仍独占一批。 */
+export function planReviewChunks(
+  items: readonly ReviewItem[],
+  maxItems: number,
+  tokenBudget: number,
+): ReviewItem[][] {
+  const chunks: ReviewItem[][] = [];
+  let current: ReviewItem[] = [];
+  let tokens = 0;
+  for (const item of items) {
+    const cost =
+      REVIEW_ITEM_OVERHEAD +
+      estimateTokenCount(item.sourceText) +
+      estimateTokenCount(item.targetText) +
+      estimateTokenCount(item.headingPath.join(" > "));
+    if (
+      current.length > 0 &&
+      (current.length >= maxItems || tokens + cost > tokenBudget)
+    ) {
+      chunks.push(current);
+      current = [];
+      tokens = 0;
+    }
+    current.push(item);
+    tokens += cost;
+  }
+  if (current.length > 0) {
+    chunks.push(current);
+  }
+  return chunks;
+}
 
 // ---- 公共类型 ----
 
@@ -159,6 +194,8 @@ export class SyncService {
   private readonly md = createMarkdownRuntime();
   /** 正在执行带锁操作的文件 URI 集合，用于拒绝同文件的并发写。 */
   private readonly inFlight = new Set<string>();
+  /** 审校模型调用不占文件锁，但仍需阻止同一文件的并发审校。 */
+  private readonly reviewInFlight = new Set<string>();
   /** 清空全部缓存期间为 true，阻止新的带锁操作与并发清空。 */
   private clearingAllCaches = false;
   /** 本机批注 sidecar 读写。 */
@@ -350,6 +387,69 @@ export class SyncService {
     );
   }
 
+  /**
+   * 把无缓存块上的 `src-<hash>` 批注迁移到新生成的缓存锚点。
+   * 优先用保存批注时的 sourceIndex 区分同内容块；旧数据仅在同哈希唯一时迁移。
+   */
+  private async migrateSourceAnnotations(
+    sourceUri: vscode.Uri,
+    targetLanguage: string,
+    sourceText: string,
+    cacheText: string,
+  ): Promise<void> {
+    const existing = await this.annotationStore.read(sourceUri, targetLanguage);
+    if (existing.warning) {
+      this.log(existing.warning);
+    }
+    if (!existing.annotations.some((entry) => entry.blockId.startsWith("src-"))) {
+      return;
+    }
+    const source = parseMarkdownDocument(sourceText, this.md);
+    const cache = parseCacheDocument(cacheText, this.md);
+    const alignment = alignDocument(source.blocks, cache);
+    const byHash = new Map<
+      string,
+      Array<{ id: string; index: number }>
+    >();
+    for (const aligned of alignment.blocks) {
+      if (!aligned.cache) {
+        continue;
+      }
+      const list = byHash.get(aligned.source.hash) ?? [];
+      list.push({
+        id: aligned.cache.anchor.id,
+        index: aligned.source.index,
+      });
+      byHash.set(aligned.source.hash, list);
+    }
+    let migrated = 0;
+    const next = existing.annotations.map((entry) => {
+      if (!entry.blockId.startsWith("src-")) {
+        return entry;
+      }
+      const hash = entry.blockId.slice(4).trim();
+      const candidates = byHash.get(hash) ?? [];
+      let target =
+        entry.sourceIndex !== undefined
+          ? candidates.find((item) => item.index === entry.sourceIndex)
+          : undefined;
+      if (!target && candidates.length === 1) {
+        target = candidates[0];
+      }
+      if (!target) {
+        return entry;
+      }
+      migrated += 1;
+      return { ...entry, blockId: target.id };
+    });
+    if (migrated > 0) {
+      await this.annotationStore.write(sourceUri, targetLanguage, next);
+      this.log(
+        `migrated ${migrated} annotation(s) to cache anchors of ${path.basename(sourceUri.fsPath)}`,
+      );
+    }
+  }
+
   /** 读取某个块的批注；sidecar 损坏时只记录不阻断。 */
   private async readAnnotationsForBlock(
     sourceUri: vscode.Uri,
@@ -434,6 +534,19 @@ export class SyncService {
     blockIndex: number,
     signal?: AbortSignal,
   ): Promise<{ annotations: AnnotationRecord[]; added: number }> {
+    const release = this.beginReview(sourceUri);
+    try {
+      return await this.reviewBlockInternal(sourceUri, blockIndex, signal);
+    } finally {
+      release();
+    }
+  }
+
+  private async reviewBlockInternal(
+    sourceUri: vscode.Uri,
+    blockIndex: number,
+    signal?: AbortSignal,
+  ): Promise<{ annotations: AnnotationRecord[]; added: number }> {
     if (signal?.aborted) {
       throw new CancelledError();
     }
@@ -457,9 +570,15 @@ export class SyncService {
     if (!aligned.source.translatable) {
       throw new Error(tError("sync.blockNotTranslatable"));
     }
-    if (!aligned.cache) {
+    if (
+      !aligned.cache ||
+      aligned.status === "deleted" ||
+      aligned.status === "copy" ||
+      !aligned.cache.block.raw.trim()
+    ) {
       throw new Error(tError("sync.noTranslationReview"));
     }
+    const reviewedTarget = aligned.cache.block.raw;
     const headingPaths = buildHeadingPaths(source.blocks);
     const assistSettings = this.resolveAssist();
     const summary = this.summaryForCache(cache, assistSettings);
@@ -496,30 +615,55 @@ export class SyncService {
       throw new CancelledError();
     }
     const now = new Date().toISOString();
-    const records = this.annotationRecordsFromDrafts(
-      drafts,
-      new Map([[blockId, aligned.source.hash]]),
-      now,
-    );
-    const existing = await this.annotationStore.read(
-      sourceUri,
-      state.targetLanguage,
-    );
-    const next = [
-      ...existing.annotations.filter(
-        (entry) => !(entry.author === "ai" && entry.blockId === blockId),
-      ),
-      ...records,
-    ];
-    await this.annotationStore.write(
-      sourceUri,
-      state.targetLanguage,
-      next,
-    );
+    const result = await this.withLock(sourceUri, async () => {
+      const current = await this.loadState(sourceUri, false);
+      if (
+        current.sourceLanguage !== state.sourceLanguage ||
+        current.targetLanguage !== state.targetLanguage
+      ) {
+        throw new Error(tError("sync.translationChangedRefresh"));
+      }
+      const currentSource = parseMarkdownDocument(current.sourceText, this.md);
+      const currentCache = parseCacheDocument(current.cacheText ?? "", this.md);
+      const currentAlignment = alignDocument(currentSource.blocks, currentCache);
+      const currentBlock = currentAlignment.blocks.find(
+        (item) => item.cache?.anchor.id === blockId,
+      );
+      if (
+        !currentBlock ||
+        currentBlock.source.hash !== aligned.source.hash ||
+        currentBlock.cache?.block.raw !== reviewedTarget ||
+        currentBlock.status === "deleted" ||
+        currentBlock.status === "copy"
+      ) {
+        throw new Error(tError("sync.translationChangedRefresh"));
+      }
+      const records = this.annotationRecordsFromDrafts(
+        drafts,
+        new Map([[blockId, aligned.source.hash]]),
+        now,
+      );
+      const existing = await this.annotationStore.read(
+        sourceUri,
+        state.targetLanguage,
+      );
+      const next = [
+        ...existing.annotations.filter(
+          (entry) => !(entry.author === "ai" && entry.blockId === blockId),
+        ),
+        ...records,
+      ];
+      await this.annotationStore.write(
+        sourceUri,
+        state.targetLanguage,
+        next,
+      );
+      return { annotations: next, added: records.length };
+    });
     this.log(
-      `review block ${blockIndex} of ${path.basename(sourceUri.fsPath)}: ${records.length} annotation(s)`,
+      `review block ${blockIndex} of ${path.basename(sourceUri.fsPath)}: ${result.added} annotation(s)`,
     );
-    return { annotations: next, added: records.length };
+    return result;
   }
 
   /**
@@ -527,6 +671,22 @@ export class SyncService {
    * 只替换这些块的 AI 批注，用户批注保留；任一批失败则不写入新结果。
    */
   async reviewBlocks(
+    sourceUri: vscode.Uri,
+    signal?: AbortSignal,
+  ): Promise<{
+    annotations: AnnotationRecord[];
+    added: number;
+    reviewed: number;
+  }> {
+    const release = this.beginReview(sourceUri);
+    try {
+      return await this.reviewBlocksInternal(sourceUri, signal);
+    } finally {
+      release();
+    }
+  }
+
+  private async reviewBlocksInternal(
     sourceUri: vscode.Uri,
     signal?: AbortSignal,
   ): Promise<{
@@ -579,6 +739,12 @@ export class SyncService {
         aligned.source.hash,
       ]),
     );
+    const targetTextById = new Map(
+      candidates.map((aligned) => [
+        aligned.cache!.anchor.id,
+        aligned.cache!.block.raw,
+      ]),
+    );
     const items = candidates.map((aligned) => {
       const context = buildBlockContext({
         blocks: source.blocks,
@@ -597,11 +763,15 @@ export class SyncService {
     });
     const now = new Date().toISOString();
     const records: AnnotationRecord[] = [];
-    for (let index = 0; index < items.length; index += REVIEW_BATCH_SIZE) {
+    const chunks = planReviewChunks(
+      items,
+      REVIEW_BATCH_SIZE,
+      REVIEW_TOKEN_BUDGET,
+    );
+    for (const chunk of chunks) {
       if (signal?.aborted) {
         throw new CancelledError();
       }
-      const chunk = items.slice(index, index + REVIEW_BATCH_SIZE);
       const drafts = await this.provider.review!(
         {
           sourceLanguage: state.sourceLanguage,
@@ -621,26 +791,80 @@ export class SyncService {
       );
     }
     const reviewedIds = new Set(sourceHashById.keys());
-    const next = [
-      ...existing.annotations.filter(
-        (entry) =>
-          !(entry.author === "ai" && reviewedIds.has(entry.blockId)),
-      ),
-      ...records,
-    ];
-    await this.annotationStore.write(
-      sourceUri,
-      state.targetLanguage,
-      next,
-    );
-    this.log(
-      `review ${candidates.length} block(s) of ${path.basename(sourceUri.fsPath)}: ${records.length} annotation(s)`,
-    );
-    return {
-      annotations: next,
-      added: records.length,
-      reviewed: candidates.length,
-    };
+    return this.withLock(sourceUri, async () => {
+      const current = await this.loadState(sourceUri, false);
+      if (
+        current.sourceLanguage !== state.sourceLanguage ||
+        current.targetLanguage !== state.targetLanguage
+      ) {
+        const existingNow = await this.annotationStore.read(
+          sourceUri,
+          current.targetLanguage,
+        );
+        return {
+          annotations: existingNow.annotations,
+          added: 0,
+          reviewed: 0,
+        };
+      }
+      const currentSource = parseMarkdownDocument(current.sourceText, this.md);
+      const currentCache = parseCacheDocument(current.cacheText ?? "", this.md);
+      const currentAlignment = alignDocument(currentSource.blocks, currentCache);
+      const currentById = new Map(
+        currentAlignment.blocks
+          .filter((aligned) => aligned.cache)
+          .map((aligned) => [aligned.cache!.anchor.id, aligned]),
+      );
+      const validIds = new Set<string>();
+      for (const [id, sourceHash] of sourceHashById) {
+        const aligned = currentById.get(id);
+        if (
+          !aligned ||
+          aligned.source.hash !== sourceHash ||
+          aligned.cache!.block.raw !== targetTextById.get(id) ||
+          aligned.status === "deleted" ||
+          aligned.status === "copy" ||
+          aligned.human
+        ) {
+          continue;
+        }
+        validIds.add(id);
+      }
+      const existingNow = await this.annotationStore.read(
+        sourceUri,
+        state.targetLanguage,
+      );
+      if (validIds.size === 0) {
+        return {
+          annotations: existingNow.annotations,
+          added: 0,
+          reviewed: 0,
+        };
+      }
+      const next = [
+        ...existingNow.annotations.filter(
+          (entry) =>
+            !(entry.author === "ai" && reviewedIds.has(entry.blockId)),
+        ),
+        ...records.filter((entry) => validIds.has(entry.blockId)),
+      ];
+      await this.annotationStore.write(
+        sourceUri,
+        state.targetLanguage,
+        next,
+      );
+      const validRecords = records.filter((entry) =>
+        validIds.has(entry.blockId),
+      );
+      this.log(
+        `review ${validIds.size} block(s) of ${path.basename(sourceUri.fsPath)}: ${validRecords.length} annotation(s)`,
+      );
+      return {
+        annotations: next,
+        added: validRecords.length,
+        reviewed: validIds.size,
+      };
+    });
   }
 
   /** 添加用户批注（note 或 request-change）。 */
@@ -651,55 +875,73 @@ export class SyncService {
       side: "source" | "target";
       kind: "note" | "request-change";
       message: string;
+      expected?: { sourceHash?: string; cacheId?: string };
     },
   ): Promise<AnnotationRecord[]> {
-    const state = await this.loadState(sourceUri, false);
-    const source = parseMarkdownDocument(state.sourceText, this.md);
-    const cache = parseCacheDocument(state.cacheText ?? "", this.md);
-    const alignment = alignDocument(source.blocks, cache);
-    const aligned = alignment.blocks.find(
-      (item) => item.source.index === blockIndex,
-    );
-    if (!aligned) {
-      throw new Error(tError("common.missingSourceBlock", { index: blockIndex + 1 }));
-    }
-    const message = normalizeAnnotationText(
-      input.message,
-      MAX_ANNOTATION_MESSAGE,
-    );
-    if (!message) {
-      throw new Error(tError("sync.annotationEmpty"));
-    }
-    const blockId =
-      aligned.cache?.anchor.id ?? `src-${aligned.source.hash}`;
-    const now = new Date().toISOString();
-    const record: AnnotationRecord = {
-      id: `user-${newBlockId()}`,
-      blockId,
-      side: input.side,
-      author: "user",
-      kind: input.kind,
-      severity: "info",
-      message,
-      status: "open",
-      sourceHash: aligned.source.hash,
-      createdAt: now,
-      updatedAt: now,
-    };
-    const existing = await this.annotationStore.read(
-      sourceUri,
-      state.targetLanguage,
-    );
-    const next = [...existing.annotations, record];
-    await this.annotationStore.write(
-      sourceUri,
-      state.targetLanguage,
-      next,
-    );
-    this.log(
-      `save annotation on block ${blockIndex} of ${path.basename(sourceUri.fsPath)}`,
-    );
-    return next;
+    return this.withLock(sourceUri, async () => {
+      const state = await this.loadState(sourceUri, false);
+      const source = parseMarkdownDocument(state.sourceText, this.md);
+      const cache = parseCacheDocument(state.cacheText ?? "", this.md);
+      const alignment = alignDocument(source.blocks, cache);
+      const aligned = alignment.blocks.find(
+        (item) => item.source.index === blockIndex,
+      );
+      if (!aligned) {
+        throw new Error(
+          tError("common.missingSourceBlock", { index: blockIndex + 1 }),
+        );
+      }
+      if (
+        input.expected?.sourceHash &&
+        aligned.source.hash !== input.expected.sourceHash
+      ) {
+        throw new Error(tError("sync.sourceUpdatedRefresh"));
+      }
+      if (
+        input.expected?.cacheId &&
+        aligned.cache?.anchor.id !== input.expected.cacheId
+      ) {
+        throw new Error(tError("sync.translationChangedRefresh"));
+      }
+      const message = normalizeAnnotationText(
+        input.message,
+        MAX_ANNOTATION_MESSAGE,
+      );
+      if (!message) {
+        throw new Error(tError("sync.annotationEmpty"));
+      }
+      const blockId =
+        aligned.cache?.anchor.id ?? `src-${aligned.source.hash}`;
+      const now = new Date().toISOString();
+      const record: AnnotationRecord = {
+        id: `user-${newBlockId()}`,
+        blockId,
+        side: input.side,
+        author: "user",
+        kind: input.kind,
+        severity: "info",
+        message,
+        status: "open",
+        sourceHash: aligned.source.hash,
+        sourceIndex: aligned.source.index,
+        createdAt: now,
+        updatedAt: now,
+      };
+      const existing = await this.annotationStore.read(
+        sourceUri,
+        state.targetLanguage,
+      );
+      const next = [...existing.annotations, record];
+      await this.annotationStore.write(
+        sourceUri,
+        state.targetLanguage,
+        next,
+      );
+      this.log(
+        `save annotation on block ${blockIndex} of ${path.basename(sourceUri.fsPath)}`,
+      );
+      return next;
+    });
   }
 
   /** 更新批注状态（已核对/忽略/重新打开）。 */
@@ -708,32 +950,34 @@ export class SyncService {
     annotationId: string,
     status: AnnotationRecord["status"],
   ): Promise<AnnotationRecord[]> {
-    const state = await this.loadState(sourceUri, false);
-    const existing = await this.annotationStore.read(
-      sourceUri,
-      state.targetLanguage,
-    );
-    let found = false;
-    const next = existing.annotations.map((entry) => {
-      if (entry.id !== annotationId) {
-        return entry;
+    return this.withLock(sourceUri, async () => {
+      const state = await this.loadState(sourceUri, false);
+      const existing = await this.annotationStore.read(
+        sourceUri,
+        state.targetLanguage,
+      );
+      let found = false;
+      const next = existing.annotations.map((entry) => {
+        if (entry.id !== annotationId) {
+          return entry;
+        }
+        found = true;
+        return {
+          ...entry,
+          status,
+          updatedAt: new Date().toISOString(),
+        };
+      });
+      if (!found) {
+        throw new Error(tError("sync.annotationNotFound"));
       }
-      found = true;
-      return {
-        ...entry,
-        status,
-        updatedAt: new Date().toISOString(),
-      };
+      await this.annotationStore.write(
+        sourceUri,
+        state.targetLanguage,
+        next,
+      );
+      return next;
     });
-    if (!found) {
-      throw new Error(tError("sync.annotationNotFound"));
-    }
-    await this.annotationStore.write(
-      sourceUri,
-      state.targetLanguage,
-      next,
-    );
-    return next;
   }
 
   /** 删除批注。 */
@@ -741,23 +985,25 @@ export class SyncService {
     sourceUri: vscode.Uri,
     annotationId: string,
   ): Promise<AnnotationRecord[]> {
-    const state = await this.loadState(sourceUri, false);
-    const existing = await this.annotationStore.read(
-      sourceUri,
-      state.targetLanguage,
-    );
-    const next = existing.annotations.filter(
-      (entry) => entry.id !== annotationId,
-    );
-    if (next.length === existing.annotations.length) {
-      throw new Error(tError("sync.annotationNotFound"));
-    }
-    await this.annotationStore.write(
-      sourceUri,
-      state.targetLanguage,
-      next,
-    );
-    return next;
+    return this.withLock(sourceUri, async () => {
+      const state = await this.loadState(sourceUri, false);
+      const existing = await this.annotationStore.read(
+        sourceUri,
+        state.targetLanguage,
+      );
+      const next = existing.annotations.filter(
+        (entry) => entry.id !== annotationId,
+      );
+      if (next.length === existing.annotations.length) {
+        throw new Error(tError("sync.annotationNotFound"));
+      }
+      await this.annotationStore.write(
+        sourceUri,
+        state.targetLanguage,
+        next,
+      );
+      return next;
+    });
   }
 
   /**
@@ -984,6 +1230,8 @@ export class SyncService {
           (entry) =>
             entry.author === "user" &&
             entry.status === "open" &&
+            (!entry.sourceHash ||
+              entry.sourceHash === aligned.source.hash) &&
             (entry.kind === "note" || entry.kind === "request-change"),
         )
         .map((entry) => ({
@@ -1512,11 +1760,14 @@ export class SyncService {
     // 持久化稳定 provider id（mock/openai/http），显示名在渲染时按当前 locale 映射，
     // 避免缓存内容随界面语言变化。BatchTranslationCoordinator 的 id 带 batch: 前缀，
     // 只用于运行时路由，不写入缓存。
+    const generatedBrief = normalizeTranslationBrief(result.brief);
     return this.writeSummary(state, {
       text,
       model: this.provider.id.replace(/^batch:/, ""),
       glossary: mergeGlossaryEntries([result.glossary, existingGlossary]),
-      brief: normalizeTranslationBrief(result.brief),
+      brief: hasTranslationBrief(generatedBrief)
+        ? generatedBrief
+        : existingCache.summary?.brief,
     });
   }
 
@@ -1584,17 +1835,28 @@ export class SyncService {
     );
     const cache = parseCacheDocument(state.cacheText ?? "", this.md);
     const previous = cache.summary;
-    const brief = normalizeTranslationBrief(input.brief);
+    const brief =
+      input.brief !== undefined
+        ? normalizeTranslationBrief(input.brief)
+        : previous?.brief;
+    const glossary =
+      input.glossary !== undefined
+        ? [...input.glossary]
+        : previous?.glossary ?? [];
     const briefChanged =
+      input.brief !== undefined &&
       JSON.stringify(previous?.brief ?? {}) !== JSON.stringify(brief);
     const textChanged = !previous || previous.text.trim() !== text;
-    const changed = textChanged || briefChanged;
+    const detailsChanged = textChanged || briefChanged;
     return this.writeSummary(state, {
       text,
-      model: changed ? "manual" : previous?.model,
-      glossary: input.glossary ?? previous?.glossary ?? [],
-      updatedAt: changed ? new Date().toISOString() : previous?.updatedAt,
-      sourceHash: changed
+      model: detailsChanged ? "manual" : previous?.model,
+      glossary,
+      updatedAt: detailsChanged
+        ? new Date().toISOString()
+        : previous?.updatedAt,
+      // brief/术语表改动不代表摘要正文已跟上新原文。
+      sourceHash: textChanged
         ? summarySourceHash(state.sourceText)
         : previous?.sourceHash,
       brief,
@@ -2457,7 +2719,7 @@ export class SyncService {
    * 阻止新的带锁操作，避免删除与写入互相踩踏。
    */
   async clearAllCaches(): Promise<number> {
-    if (this.inFlight.size > 0) {
+    if (this.inFlight.size > 0 || this.reviewInFlight.size > 0) {
       throw new Error(tError("sync.clearAllBusy"));
     }
     if (this.clearingAllCaches) {
@@ -2621,6 +2883,20 @@ export class SyncService {
     });
     result.warnings.push(...glossary.warnings);
     await this.cacheStore.write(state.cacheUri, result.cacheText);
+    try {
+      await this.migrateSourceAnnotations(
+        state.sourceUri,
+        state.targetLanguage,
+        state.sourceText,
+        result.cacheText,
+      );
+    } catch (error) {
+      this.log(
+        `annotation migration failed for ${path.basename(state.sourceUri.fsPath)}: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
     this.log(
       `sync done: translated=${result.translatedCount}, failed=${result.failedTaskCount}, partial=${result.partial}, copied=${result.copiedCount}, human=${result.humanLockedCount}, warnings=${result.warnings.length}`,
     );
@@ -2691,6 +2967,21 @@ export class SyncService {
    * 进入前检查“正在清空全部缓存”，并拒绝同文件的并发操作；无论成功失败都会释放。
    * 注意该锁只覆盖本进程内调用同一 URI 字符串的操作。
    */
+  /** 标记同一文件的审校任务；模型调用期间不占文件锁。 */
+  private beginReview(sourceUri: vscode.Uri): () => void {
+    const key = sourceUri.toString();
+    if (this.clearingAllCaches) {
+      throw new Error(tError("sync.clearingCacheBusyOp"));
+    }
+    if (this.reviewInFlight.has(key)) {
+      throw new Error(tError("sync.fileSyncBusy"));
+    }
+    this.reviewInFlight.add(key);
+    return () => {
+      this.reviewInFlight.delete(key);
+    };
+  }
+
   private async withLock<T>(
     sourceUri: vscode.Uri,
     action: () => Promise<T>,

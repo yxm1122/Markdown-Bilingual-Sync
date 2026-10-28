@@ -8,6 +8,7 @@ import {
   fireEvent,
   render,
   screen,
+  waitFor,
   within,
 } from "@testing-library/preact";
 import {
@@ -46,6 +47,15 @@ function openGlossary(body: HTMLElement) {
   fireEvent.click(
     body.querySelector(".pv-glossary-section .pv-brief-toggle") as HTMLElement,
   );
+}
+
+function termSide(
+  body: HTMLElement,
+  position: number,
+  side: "source" | "target",
+): HTMLElement {
+  const card = body.querySelectorAll(".pv-term-card")[position];
+  return card.querySelector(`.pv-term-side.pv-term-${side}`) as HTMLElement;
 }
 
 describe("summary and glossary", () => {
@@ -201,11 +211,10 @@ describe("summary and glossary", () => {
     const { container } = renderPreview(model);
     const body = container.querySelector(".pv-summary-body") as HTMLElement;
     openGlossary(body);
-    fireEvent.click(
-      within(body).getByLabelText(
-        `${text.summary.glossaryEditTerm} 1 ${text.summary.glossaryTableSource}`,
-      ),
+    expect(termSide(body, 0, "source").getAttribute("aria-label")).toContain(
+      "table",
     );
+    fireEvent.click(termSide(body, 0, "source"));
     const source = within(body).getByLabelText(
       text.summary.glossaryTableSource,
     ) as HTMLInputElement;
@@ -214,11 +223,7 @@ describe("summary and glossary", () => {
       within(body).queryByLabelText(text.summary.glossaryTableTarget),
     ).toBeNull();
 
-    fireEvent.click(
-      within(body).getByLabelText(
-        `${text.summary.glossaryEditTerm} 1 ${text.summary.glossaryTableTarget}`,
-      ),
-    );
+    fireEvent.click(termSide(body, 0, "target"));
     const target = within(body).getByLabelText(
       text.summary.glossaryTableTarget,
     ) as HTMLInputElement;
@@ -227,8 +232,8 @@ describe("summary and glossary", () => {
       within(body).queryByLabelText(text.summary.glossaryTableSource),
     ).toBeNull();
     expect(
-      body.querySelector(".pv-term-card.is-editing .pv-term-edit-actions"),
-    ).toBeNull();
+      body.querySelectorAll(".pv-term-card.is-editing button"),
+    ).toHaveLength(1);
 
     fireEvent.input(target, { target: { value: "数据表" } });
     fireEvent.keyDown(target, { key: "Enter" });
@@ -289,6 +294,49 @@ describe("summary and glossary", () => {
     expect(within(body).getByText("新")).toBeTruthy();
   });
 
+  it("does not write an edit into a host-refreshed row", () => {
+    const text = harness.text.preview;
+    const { container } = renderPreview(
+      makeModel({
+        summary: {
+          text: "Summary",
+          glossaryText: "table => 表格",
+          glossaryCount: 1,
+        },
+      }),
+    );
+    const body = container.querySelector(".pv-summary-body") as HTMLElement;
+    openGlossary(body);
+    fireEvent.click(termSide(body, 0, "source"));
+    const input = within(body).getByLabelText(
+      text.summary.glossaryTableSource,
+    ) as HTMLInputElement;
+    fireEvent.input(input, { target: { value: "数据表" } });
+
+    postHostMessage({
+      type: "state",
+      state: makeBoot(
+        makeModel({
+          summary: {
+            text: "Summary",
+            glossaryText: "other => 其他",
+            glossaryCount: 1,
+          },
+        }),
+      ).state,
+    });
+    fireEvent.keyDown(input, { key: "Enter" });
+    fireEvent.click(
+      within(body).getByRole("button", { name: text.summary.save }),
+    );
+    expect(actions(harness)).toContainEqual({
+      type: "saveBrief",
+      summaryText: "Summary",
+      brief: {},
+      glossaryText: "other => 其他",
+    });
+  });
+
   it("commits an inline side on blur and cancels it on Escape", () => {
     const text = harness.text.preview;
     const { container } = renderPreview(
@@ -302,9 +350,8 @@ describe("summary and glossary", () => {
     );
     const body = container.querySelector(".pv-summary-body") as HTMLElement;
     openGlossary(body);
-    const sourceLabel = `${text.summary.glossaryEditTerm} 1 ${text.summary.glossaryTableSource}`;
 
-    fireEvent.click(within(body).getByLabelText(sourceLabel));
+    fireEvent.click(termSide(body, 0, "source"));
     const source = within(body).getByLabelText(
       text.summary.glossaryTableSource,
     ) as HTMLInputElement;
@@ -318,7 +365,7 @@ describe("summary and glossary", () => {
       }) as HTMLButtonElement).disabled,
     ).toBe(false);
 
-    fireEvent.click(within(body).getByLabelText(sourceLabel));
+    fireEvent.click(termSide(body, 0, "source"));
     const reopened = within(body).getByLabelText(
       text.summary.glossaryTableSource,
     ) as HTMLInputElement;
@@ -328,6 +375,50 @@ describe("summary and glossary", () => {
     expect(body.querySelector(".pv-term-card.is-editing")).toBeNull();
     expect(within(body).getByText("数据表")).toBeTruthy();
     expect(within(body).queryByText("不保存")).toBeNull();
+  });
+
+  it("restores focus after committing or cancelling an edit", async () => {
+    const text = harness.text.preview;
+    const { container } = renderPreview(
+      makeModel({
+        summary: {
+          text: "Summary",
+          glossaryText: "table => 表格",
+          glossaryCount: 1,
+        },
+      }),
+    );
+    const body = container.querySelector(".pv-summary-body") as HTMLElement;
+    openGlossary(body);
+
+    fireEvent.click(termSide(body, 0, "source"));
+    const input = within(body).getByLabelText(
+      text.summary.glossaryTableSource,
+    ) as HTMLInputElement;
+    fireEvent.input(input, { target: { value: "数据表" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    await waitFor(() => {
+      expect(document.activeElement).toBe(termSide(body, 0, "source"));
+    });
+
+    fireEvent.click(
+      within(body).getByRole("button", {
+        name: text.summary.glossaryAdd,
+      }),
+    );
+    fireEvent.keyDown(
+      within(body).getByLabelText(
+        text.summary.glossaryTableSource,
+      ) as HTMLInputElement,
+      { key: "Escape" },
+    );
+    await waitFor(() => {
+      expect(document.activeElement).toBe(
+        within(body).getByRole("button", {
+          name: text.summary.glossaryAdd,
+        }),
+      );
+    });
   });
 
   it("adds, deletes, and validates glossary cards", () => {
@@ -378,11 +469,7 @@ describe("summary and glossary", () => {
         name: `${text.summary.glossaryDelete} 2`,
       }),
     );
-    expect(
-      within(body).queryByLabelText(
-        `${text.summary.glossaryEditTerm} 2 ${text.summary.glossaryTableSource}`,
-      ),
-    ).toBeNull();
+    expect(body.querySelectorAll(".pv-term-card")).toHaveLength(1);
   });
 
   it("cancels a new term without changing the draft", () => {
@@ -434,11 +521,7 @@ describe("summary and glossary", () => {
     );
     const body = container.querySelector(".pv-summary-body") as HTMLElement;
     openGlossary(body);
-    expect(
-      within(body).getByLabelText(
-        `${text.summary.glossaryEditTerm} 200 ${text.summary.glossaryTableSource}`,
-      ),
-    ).toBeTruthy();
+    expect(termSide(body, 199, "source")).toBeTruthy();
   });
 
   it("reveals only the hovered term side", () => {
@@ -487,6 +570,12 @@ describe("summary and glossary", () => {
     expect(terms[0].className).not.toContain("is-revealing");
     fireEvent.mouseLeave(sides[1]);
     expect(terms[1].className).not.toContain("is-revealing");
+
+    fireEvent.focus(sides[0]);
+    expect(terms[0].className).toContain("is-revealing");
+    expect(terms[1].className).not.toContain("is-revealing");
+    fireEvent.blur(sides[0]);
+    expect(terms[0].className).not.toContain("is-revealing");
   });
 
   it("fills only cards whose terms no longer fit", () => {
@@ -561,16 +650,9 @@ describe("summary and glossary", () => {
       text.summary.glossaryFilter,
     ) as HTMLInputElement;
     fireEvent.input(filter, { target: { value: "term-10" } });
-    expect(
-      within(body).getByLabelText(
-        `${text.summary.glossaryEditTerm} 10 ${text.summary.glossaryTableSource}`,
-      ),
-    ).toBeTruthy();
-    expect(
-      within(body).queryByLabelText(
-        `${text.summary.glossaryEditTerm} 1 ${text.summary.glossaryTableSource}`,
-      ),
-    ).toBeNull();
+    const cards = body.querySelectorAll(".pv-term-card");
+    expect(cards).toHaveLength(1);
+    expect(cards[0].textContent).toContain("term-10");
   });
 
   it("switches between table and bulk glossary editing", () => {

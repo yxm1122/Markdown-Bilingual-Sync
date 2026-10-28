@@ -505,17 +505,6 @@ textarea:focus-visible {
   white-space: nowrap;
 }
 
-.pv-summary-chevron {
-  margin-left: auto;
-  color: var(--vscode-descriptionForeground);
-  font-size: 14px;
-  transition: transform 100ms ease;
-}
-
-.pv-summary.is-open .pv-summary-chevron {
-  transform: rotate(180deg);
-}
-
 .pv-summary-body {
   display: none;
   padding: 10px 16px 12px;
@@ -664,23 +653,6 @@ textarea:focus-visible {
   margin-top: 6px;
 }
 
-.pv-glossary-head {
-  display: flex;
-  align-items: baseline;
-  gap: 8px;
-  margin-bottom: 6px;
-}
-
-.pv-glossary-title {
-  font-size: 11.5px;
-  font-weight: 600;
-}
-
-.pv-glossary-count {
-  color: var(--vscode-descriptionForeground);
-  font-size: 11px;
-}
-
 .pv-glossary .pv-textarea {
   min-height: 64px;
   font-family: var(--vscode-editor-font-family);
@@ -762,6 +734,11 @@ textarea:focus-visible {
   flex: 1 1 100%;
   width: 100%;
   max-width: 100%;
+}
+
+.pv-term-card.is-filling .pv-term-main {
+  padding-right: 20px;
+  padding-left: 20px;
 }
 
 .pv-term-card.is-filling .pv-term-side {
@@ -958,6 +935,11 @@ textarea:focus-visible {
   color: var(--vscode-input-placeholderForeground);
 }
 
+.pv-term-add-row {
+  display: flex;
+  align-self: flex-start;
+}
+
 .pv-term-add {
   display: inline-flex;
   align-items: center;
@@ -984,95 +966,6 @@ textarea:focus-visible {
   cursor: default;
 }
 
-.pv-glossary-table {
-  overflow: hidden;
-  border: 1px solid var(--vscode-panel-border);
-  border-radius: 2px;
-  background: var(--vscode-input-background);
-}
-
-.pv-glossary-row {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 26px;
-  align-items: center;
-  gap: 4px;
-  padding: 2px 4px;
-  border-bottom: 1px solid var(--vscode-panel-border);
-}
-
-.pv-glossary-row:last-child {
-  border-bottom: 0;
-}
-
-.pv-glossary-row.is-head {
-  padding: 3px 6px;
-  background: var(--vscode-editorWidget-background);
-  color: var(--vscode-descriptionForeground);
-  font-size: 11px;
-}
-
-.pv-glossary-rows {
-  max-height: 260px;
-  overflow: auto;
-}
-
-.pv-glossary-row:not(.is-head):hover {
-  background: var(--vscode-list-hoverBackground);
-}
-
-.pv-glossary-row .pv-input {
-  height: 24px;
-  padding: 0 6px;
-  border-color: transparent;
-  background: transparent;
-}
-
-.pv-glossary-row .pv-input[data-glossary-side="source"] {
-  border-right-color: var(--vscode-panel-border);
-  border-right-style: solid;
-  border-right-width: 1px;
-}
-
-.pv-glossary-row:hover .pv-input,
-.pv-glossary-row:focus-within .pv-input {
-  border-color: var(--vscode-input-border);
-  background: var(--vscode-input-background);
-}
-
-.pv-glossary-row:hover .pv-input[data-glossary-side="source"],
-.pv-glossary-row:focus-within .pv-input[data-glossary-side="source"] {
-  border-right-color: var(--vscode-input-border);
-}
-
-.pv-glossary-row.is-invalid .pv-input {
-  border-color: var(--vscode-inputValidation-errorBorder);
-}
-
-.pv-glossary-row.is-warning .pv-input {
-  border-color: var(--vscode-editorWarning-foreground);
-}
-
-.pv-glossary-row .pv-icon-button {
-  width: 22px;
-  height: 22px;
-  opacity: 0;
-}
-
-.pv-glossary-row:hover .pv-icon-button,
-.pv-glossary-row:focus-within .pv-icon-button {
-  opacity: 1;
-}
-
-@media (hover: none) {
-  .pv-glossary-row .pv-icon-button {
-    opacity: 1;
-  }
-}
-
-.pv-glossary-actions {
-  margin-top: 6px;
-}
-
 .pv-glossary-empty {
   margin: 6px 0;
   color: var(--vscode-descriptionForeground);
@@ -1086,32 +979,6 @@ textarea:focus-visible {
 .pv-summary-note.is-warning {
   color: var(--vscode-editorWarning-foreground);
 }
-
-@media (max-width: 520px) {
-  .pv-glossary-row.is-head {
-    display: none;
-  }
-
-  .pv-glossary-row {
-    grid-template-columns: minmax(0, 1fr) 26px;
-  }
-
-  .pv-glossary-row [data-glossary-side="target"] {
-    grid-column: 1;
-  }
-
-  .pv-glossary-row .pv-input[data-glossary-side="source"] {
-    border-right-color: transparent;
-  }
-
-  .pv-glossary-row .pv-icon-button {
-    grid-row: 1 / span 2;
-    grid-column: 2;
-  }
-}
-
-
-
 
 .pv-body {
   flex: 1;
