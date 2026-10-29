@@ -782,6 +782,7 @@ class PreviewPanelSession implements vscode.Disposable {
         pendingSource: this.pendingSourceStage(),
         annotations: state.annotations,
         reviewSupported: this.syncService.reviewSupported,
+        annotationsSupported: this.syncService.annotationsSupported,
         assist: {
           stableTranslation: this.stableTranslation,
           summaryContext: this.summaryContext,
@@ -953,9 +954,18 @@ class PreviewPanelSession implements vscode.Disposable {
       message.side === "source" || message.side === "target"
         ? message.side
         : undefined;
-    const annotationKind =
-      message.kind === "note" || message.kind === "request-change"
-        ? message.kind
+    const annotationMode =
+      message.mode === "once" || message.mode === "persistent"
+        ? message.mode
+        : undefined;
+    const annotationReactivate = message.reactivate === true;
+    const originAnnotationId =
+      typeof message.originAnnotationId === "string"
+        ? message.originAnnotationId
+        : undefined;
+    const resolveAnnotationId =
+      typeof message.resolveAnnotationId === "string"
+        ? message.resolveAnnotationId
         : undefined;
     const annotationStatus =
       message.status === "open" ||
@@ -1149,14 +1159,33 @@ class PreviewPanelSession implements vscode.Disposable {
           if (
             blockIndex !== undefined &&
             annotationSide &&
-            annotationKind &&
             annotationMessage !== undefined
           ) {
             await this.saveAnnotation(blockIndex, {
               side: annotationSide,
-              kind: annotationKind,
+              mode: annotationMode,
               message: annotationMessage,
+              ...(originAnnotationId ? { originAnnotationId } : {}),
+              ...(resolveAnnotationId ? { resolveAnnotationId } : {}),
               expected: { sourceHash, cacheId },
+            });
+          }
+          break;
+        case "updateAnnotation":
+          if (
+            annotationId &&
+            (annotationMessage !== undefined ||
+              annotationMode !== undefined ||
+              annotationSide !== undefined ||
+              annotationReactivate)
+          ) {
+            await this.updateAnnotation(annotationId, {
+              ...(annotationMessage !== undefined
+                ? { message: annotationMessage }
+                : {}),
+              ...(annotationMode ? { mode: annotationMode } : {}),
+              ...(annotationSide ? { side: annotationSide } : {}),
+              ...(annotationReactivate ? { reactivate: true } : {}),
             });
           }
           break;
@@ -2246,8 +2275,10 @@ class PreviewPanelSession implements vscode.Disposable {
     blockIndex: number,
     input: {
       side: "source" | "target";
-      kind: "note" | "request-change";
+      mode?: "once" | "persistent";
       message: string;
+      originAnnotationId?: string;
+      resolveAnnotationId?: string;
       expected?: { sourceHash?: string; cacheId?: string };
     },
   ): Promise<void> {
@@ -2260,6 +2291,32 @@ class PreviewPanelSession implements vscode.Disposable {
       );
       await this.update({
         text: UI_TEXT.notifications.annotationSaved,
+        kind: "success",
+      });
+    } finally {
+      this.setBusy(false);
+    }
+  }
+
+  /** 编辑用户批注或重新激活一次性批注。 */
+  private async updateAnnotation(
+    annotationId: string,
+    input: {
+      message?: string;
+      mode?: "once" | "persistent";
+      side?: "source" | "target";
+      reactivate?: boolean;
+    },
+  ): Promise<void> {
+    this.setBusy(true, UI_TEXT.notifications.annotationSaving);
+    try {
+      await this.syncService.updateUserAnnotation(
+        this.sourceUri,
+        annotationId,
+        input,
+      );
+      await this.update({
+        text: UI_TEXT.notifications.annotationUpdated,
         kind: "success",
       });
     } finally {

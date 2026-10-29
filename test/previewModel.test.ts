@@ -34,6 +34,7 @@ describe("buildPreviewModel", () => {
       human: 0,
       untranslated: 0,
       copy: 1,
+      pendingAnnotations: 0,
     });
     expect(model.blocks).toHaveLength(4);
     expect(model.blocks.map((block) => block.status)).toEqual([
@@ -105,17 +106,34 @@ describe("buildPreviewModel", () => {
       sourceText: SOURCE,
       cacheText: result.cacheText,
       ...LABELS,
+      annotationsSupported: true,
       annotations: [
         {
           id: "a1",
           blockId: `src-${paragraph.source.hash}`,
           side: "source",
           author: "user",
-          kind: "note",
+          kind: "request-change",
           severity: "info",
           message: "Use the earlier wording.",
-          status: "open",
+          mode: "persistent",
+          status: "pending",
           sourceHash: "old-hash",
+          sourceIndex: paragraph.source.index,
+          createdAt: "2026-10-28T00:00:00.000Z",
+          updatedAt: "2026-10-28T00:00:00.000Z",
+        },
+        {
+          id: "a2",
+          blockId: `src-${paragraph.source.hash}`,
+          side: "target",
+          author: "user",
+          kind: "request-change",
+          severity: "info",
+          message: "Apply the current instruction.",
+          mode: "once",
+          status: "pending",
+          sourceHash: paragraph.source.hash,
           sourceIndex: paragraph.source.index,
           createdAt: "2026-10-28T00:00:00.000Z",
           updatedAt: "2026-10-28T00:00:00.000Z",
@@ -127,6 +145,7 @@ describe("buildPreviewModel", () => {
     );
     expect(view?.annotations?.[0].message).toBe("Use the earlier wording.");
     expect(view?.annotations?.[0].stale).toBe(true);
+    expect(model.counts.pendingAnnotations).toBe(1);
   });
 
   it("renders staged insertions and marks staged deletions", async () => {
@@ -918,10 +937,12 @@ describe("buildPreviewHtml", () => {
           human: 0,
           untranslated: 0,
           copy: 0,
+          pendingAnnotations: 0,
         },
         warnings: ["<script>alert(1)</script>"],
         pendingSourceCount: 0,
         reviewSupported: false,
+        annotationsSupported: false,
       },
       nonce: "test-nonce",
       csp: "default-src 'none'",

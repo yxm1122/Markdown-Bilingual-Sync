@@ -72,10 +72,10 @@ CI 会依次执行 `npm ci`、`typecheck`、`test`、`package`。本地提交前
 | `webview/app.scroll.test.tsx` | 虚拟块几何下的分栏双向同步、仅原文/仅译文切换位置还原、顶部/底部对齐 |
 | `webview/app.editing.test.tsx` | 译文/原文编辑、待插入/独立译文、插入、删除/撤销、链接、菜单键盘导航、滚动关闭菜单、选择文本不误触编辑 |
 | `webview/app.summary.test.tsx` | 文档简报/brief/术语卡内容自适应与分侧揭示、内联编辑/焦点恢复、assist 开关、提示条/toast、宿主刷新时草稿保持、忙碌、脚注 |
-| `webview/app.annotations.test.tsx` | 批注标记、popover 拖动/滚动保持、AI/我的分组折叠、焦点与草稿回显、保存/核对/删除/按批注重译 |
+| `webview/app.annotations.test.tsx` | 批注标记、popover 拖动/滚动保持、AI/我的分组折叠、焦点与草稿回显、一次性/持续模式、生效状态、编辑/重试、多个候选回答采用/改后采用 |
 | `webview/glossaryModel.test.ts` | 术语表文本解析/序列化/校验/规范化 |
-| `annotationStore.test.ts` | 本机批注 sidecar 往返/sourceIndex、损坏备份、字段裁剪、删除 |
-| `syncAnnotations.test.ts` | 审校批注替换、用户批注保留、未翻译批注迁移、并发写、并发分批请求、stale 过滤、token 分批、删除块拒绝、状态/删除 |
+| `annotationStore.test.ts` | 本机批注 sidecar 往返/sourceIndex、旧 open→pending 迁移、mode/status、suggestedAnswers 去重/上限、旧单个回答迁移、损坏备份、字段裁剪、删除 |
+| `syncAnnotations.test.ts` | 审校批注替换、用户批注保留、待生效批注进入同步、一次性消费/持续生效、生效标记、带批注仍发送 reference、未翻译批注迁移、并发写、并发分批请求、stale 过滤、token 分批、删除块拒绝、候选回答采纳并标记已核对 |
 | `webview/app.dialogs.test.tsx` | 导出/原文 diff、写入态竞态、错误恢复、关闭与焦点 |
 | `webview/bridge.test.ts` | 首屏 JSON、格式化、VS Code API 与静态预览 localStorage 回退 |
 

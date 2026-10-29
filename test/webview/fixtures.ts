@@ -129,6 +129,7 @@ export function makeModel(overrides: ModelOverrides = {}): PreviewModel {
     human: blocks.filter((block) => block.status === "human" || block.status === "deleted").length,
     untranslated: 0,
     copy: 0,
+    pendingAnnotations: 0,
     ...countOverrides,
   };
   const assist: PreviewAssistView = makeAssist({
@@ -151,6 +152,7 @@ export function makeModel(overrides: ModelOverrides = {}): PreviewModel {
     warnings: [],
     pendingSourceCount: 0,
     reviewSupported: true,
+    annotationsSupported: true,
     ...rest,
     assist,
   };

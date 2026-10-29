@@ -124,8 +124,9 @@ Webview 只通过 `vscode.postMessage` 与宿主通信。宿主在 `PreviewManag
 | `saveGlossary` | `glossaryText` | 兼容旧 UI：只保存术语表 |
 | `clearSummary` | — | 清空文档简报与术语表 |
 | `reviewBlock` | `blockIndex` | AI 审校单块，只返回批注 |
-| `saveAnnotation` | `blockIndex`, `side`, `kind`, `message` | 保存用户批注 |
-| `setAnnotationStatus` | `annotationId`, `status` | 标记已核对/忽略/重新打开 |
+| `saveAnnotation` | `blockIndex`, `side`, `mode`, `message`，可选 `originAnnotationId`/`resolveAnnotationId` | 保存用户批注；采纳候选回答时同时标记 AI 提问已核对 |
+| `updateAnnotation` | `annotationId`，可选 `message`/`mode`/`side`/`reactivate` | 编辑用户批注、改生效方式或重试 |
+| `setAnnotationStatus` | `annotationId`, `status` | AI 批注的已核对/忽略/重新打开 |
 | `deleteAnnotation` | `annotationId` | 删除批注 |
 | `setAssistToggle` | `key`, `value` | 切换会话级稳定翻译/文档简报上下文 |
 | `export` | — | 打开导出确认 |
@@ -234,12 +235,18 @@ Webview 只通过 `vscode.postMessage` 与宿主通信。宿主在 `PreviewManag
 
 ### 7.2 块级批注
 
-- 有批注的块在块头显示批注标记；点击打开原生 popover/sheet。面板按住标题栏可拖动，页面滚动不关闭；点击外部或 `Esc` 关闭，拖动位置不跨会话记忆。
-- popover 按“AI 审校”和“我的批注”两个可折叠分区展示（AI 在前，默认都展开）；条目使用统一紧凑卡片，问题与建议折叠在“详情”中，可标记已核对/忽略/重新打开/删除。
-- 用户可写备注或勾选“要求修改”；用户批注会进入下一次单块重译的 `annotations` 指令。
+- 有批注的块在块头显示待处理标记（AI 待核对 + 用户待生效/未生效）；点击打开原生 popover/sheet。面板按住标题栏可拖动，页面滚动不关闭；点击外部或 `Esc` 关闭，拖动位置不跨会话记忆。
+- popover 按“AI 审校”和“我的批注”两个可折叠分区展示（AI 在前，默认都展开）；条目使用统一紧凑卡片。
+- 用户批注没有“核对”动作；卡片显示“仅一次/持续”和“待生效/已生效/未生效/已失效”，可编辑正文、生效方式与本地分类，可重试或删除。AI 批注保留已核对/忽略/重新打开/删除。
+- 输入区“仅生效一次”默认开启：参与一次翻译后自动失效；关闭后持续参与后续翻译。用户批注不再区分“备注”和“要求修改”，所有用户批注都是修改指令。
+- 待生效批注会让已翻译块进入同步队列；同步、单块重译、全部重译在翻译该块时都会自动带上生效批注。human/deleted/copy 不会被强制覆盖。
+- 稳定翻译仍会把旧译文作为 `reference` 发送；system prompt 明确声明用户批注优先于 reference（但不能覆盖术语表和输出契约）。批注已从请求级下沉到每个 `TranslationItem`，不同块不会串批注。
+- 翻译成功后按块比较新旧译文：变化记“已生效”，未变化记“未生效”；一次性批注消费后失效，持续批注保持生效但不再强制同步；失败、取消或未翻译的块不更新。同块多条批注共享块级判断，这是启发式标记。
 - “审校此块”只返回批注，不改写译文；deleted/copy 或无译文块不提供审校，结果写入本机 sidecar。审校期间新增的用户批注会保留，写入前若原文/译文/锚点已变化则丢弃本次结果。
-- 同步译文右侧的“审校全文”按块数与 token 预算并发分批审校非 human/deleted/copy/未翻译块（复用 `translationConcurrency`）；只替换仍通过校验的块的 AI 批注，用户批注保留。完成提示包含已审校块数和新增批注数。
-- AI 批注和用户批注都不能覆盖 JSON/id/结构契约；AI 批注是观察，用户批注是指令。
+- “审校全文”按块数与 token 预算并发分批审校非 human/deleted/copy/未翻译块（复用 `translationConcurrency`）；只替换仍通过校验的块的 AI 批注，用户批注保留。完成提示包含已审校块数和新增批注数。
+- AI 候选回答：审校可为带 `question` 的批注返回 `suggestedAnswers`，最多 3 条、去重、不得为凑数而填充；`suggestion` 与候选回答互斥，由模型选择，且不强制每个问题都有回答。详情中逐条显示候选回答，每条提供“采用 / 改后采用”，底部提供“自己写”；采纳后在同一把文件锁内创建一次性用户批注并标记 AI 提问已核对，只弹 toast，不自动重译。`suggestion` 只读，不能直接采用为回答。
+- AI 批注是观察，用户批注是指令；AI 批注（包括 `suggestion`/`suggestedAnswers`）永远不会直接进入翻译请求。
+- 只有 OpenAI 兼容 Provider 会读取批注；Mock/自定义 HTTP 会在批注面板显示警告。`side` 仅用于本地分类，不会发送给模型；修改原文仍走原文内联编辑与 diff 写回，批注不会改源文件。
 
 ## 8. 导出与原文确认 modal
 

@@ -1,4 +1,4 @@
-/** 测试：审校批注、用户批注与按批注重译的集成链路。 */
+/** 测试：审校批注、用户批注、同步/重译应用与建议回答。 */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OutputChannel, Uri } from "vscode";
 import {
@@ -131,6 +131,7 @@ describe("sync annotations", () => {
   let service: SyncService;
   let cacheStore: FakeCacheStore;
   let requests: TranslationRequest[];
+  let translateOutput: string | undefined;
   let reviewRequests: ReviewRequest[];
   let reviewDrafts: ReviewAnnotationDraft[];
   let reviewGate: Promise<void> | null;
@@ -143,6 +144,7 @@ describe("sync annotations", () => {
     cacheStore = new FakeCacheStore();
     cacheStore.text = result.cacheText;
     requests = [];
+    translateOutput = undefined;
     reviewRequests = [];
     reviewDrafts = [];
     reviewGate = null;
@@ -152,14 +154,16 @@ describe("sync annotations", () => {
       label: "Test",
       supportsSummary: true,
       supportsReview: true,
+      supportsAnnotations: true,
       async translate(request) {
         requests.push(request);
         return request.items.map((item) => ({
           id: item.id,
           text:
-            item.kind === "heading"
+            translateOutput ??
+            (item.kind === "heading"
               ? `# 回译：${item.id}`
-              : `回译：${item.id}`,
+              : `回译：${item.id}`),
         }));
       },
       async summarize(summaryRequest) {
@@ -251,9 +255,7 @@ describe("sync annotations", () => {
       second.annotations.find((entry) => entry.author === "ai")?.message,
     ).toBe("Check the term.");
     expect(
-      second.annotations.some(
-        (entry) => entry.author === "user" && entry.kind === "note",
-      ),
+      second.annotations.some((entry) => entry.author === "user"),
     ).toBe(true);
   });
 
@@ -267,14 +269,218 @@ describe("sync annotations", () => {
     });
 
     requests = [];
-    await service.retranslateBlock(uri, target.source.index);
-    expect(requests[0].annotations).toEqual([
+    await service.retranslateBlock(
+      uri,
+      target.source.index,
+      undefined,
+      { stableTranslation: true, summaryContext: false },
+    );
+    expect(requests[0].items[0].annotations).toEqual([
       {
         author: "user",
         kind: "request-change",
         text: "Use the business sense of “bite”.",
       },
     ]);
+    expect(requests[0].items[0].reference).toEqual({
+      role: "previous-target",
+      text: target.cache!.block.raw,
+    });
+  });
+
+  it("applies pending one-shot annotations during sync and consumes them", async () => {
+    const uri = mocks.FakeUri.file("/project/demo.md") as unknown as Uri;
+    const target = paragraph();
+    const saved = await service.saveUserAnnotation(uri, target.source.index, {
+      side: "target",
+      message: "Use the new wording.",
+    });
+
+    requests = [];
+    const first = await service.sync(
+      uri,
+      false,
+      undefined,
+      undefined,
+      false,
+      { stableTranslation: true, summaryContext: false },
+    );
+    expect(first.result.translatedCount).toBe(1);
+    expect(requests[0].items[0].annotations).toEqual([
+      {
+        author: "user",
+        kind: "request-change",
+        text: "Use the new wording.",
+      },
+    ]);
+    expect(requests[0].items[0].reference).toEqual({
+      role: "previous-target",
+      text: target.cache!.block.raw,
+    });
+
+    const preview = await service.loadPreviewState(uri);
+    const applied = preview.annotations?.find(
+      (entry) => entry.id === saved[0].id,
+    );
+    expect(applied?.status).toBe("applied");
+    expect(applied?.lastAppliedAt).toBeTruthy();
+
+    requests = [];
+    const second = await service.sync(
+      uri,
+      false,
+      undefined,
+      undefined,
+      false,
+      { stableTranslation: true, summaryContext: false },
+    );
+    expect(second.result.translatedCount).toBe(0);
+    expect(requests).toHaveLength(0);
+  });
+
+  it("keeps persistent annotations active without forcing repeated sync", async () => {
+    const uri = mocks.FakeUri.file("/project/demo.md") as unknown as Uri;
+    const target = paragraph();
+    const saved = await service.saveUserAnnotation(uri, target.source.index, {
+      side: "target",
+      mode: "persistent",
+      message: "Keep this rule.",
+    });
+
+    requests = [];
+    const first = await service.sync(
+      uri,
+      false,
+      undefined,
+      undefined,
+      false,
+      { stableTranslation: true, summaryContext: false },
+    );
+    expect(first.result.translatedCount).toBe(1);
+    const preview = await service.loadPreviewState(uri);
+    expect(
+      preview.annotations?.find((entry) => entry.id === saved[0].id)?.status,
+    ).toBe("applied");
+
+    requests = [];
+    const second = await service.sync(
+      uri,
+      false,
+      undefined,
+      undefined,
+      false,
+      { stableTranslation: true, summaryContext: false },
+    );
+    expect(second.result.translatedCount).toBe(0);
+    expect(requests).toHaveLength(0);
+
+    requests = [];
+    await service.retranslateBlock(
+      uri,
+      target.source.index,
+      undefined,
+      { stableTranslation: true, summaryContext: false },
+    );
+    expect(requests[0].items[0].annotations).toEqual([
+      {
+        author: "user",
+        kind: "request-change",
+        text: "Keep this rule.",
+      },
+    ]);
+    expect(requests[0].items[0].reference?.role).toBe("previous-target");
+    expect(requests[0].items[0].reference?.text).toBeTruthy();
+  });
+
+  it("releases one-shot annotations even when the translation is unchanged", async () => {
+    const uri = mocks.FakeUri.file("/project/demo.md") as unknown as Uri;
+    const target = paragraph();
+    const saved = await service.saveUserAnnotation(uri, target.source.index, {
+      side: "target",
+      message: "This may not change.",
+    });
+    translateOutput = target.cache!.block.raw;
+    requests = [];
+    await service.sync(
+      uri,
+      false,
+      undefined,
+      undefined,
+      false,
+      { stableTranslation: true, summaryContext: false },
+    );
+    translateOutput = undefined;
+    const preview = await service.loadPreviewState(uri);
+    const result = preview.annotations?.find(
+      (entry) => entry.id === saved[0].id,
+    );
+    expect(result?.status).toBe("ineffective");
+    expect(result?.lastAppliedAt).toBeTruthy();
+  });
+
+  it("adopts a suggested answer and resolves the AI question atomically", async () => {
+    const uri = mocks.FakeUri.file("/project/demo.md") as unknown as Uri;
+    const target = paragraph();
+    const blockId = target.cache!.anchor.id;
+    reviewDrafts = [
+      {
+        id: blockId,
+        side: "target",
+        type: "translation-uncertain",
+        severity: "check",
+        message: "Check the register.",
+        question: "Which register should this use?",
+        suggestedAnswers: [
+          "Use a neutral, professional register.",
+          "Match the document brief's tone.",
+        ],
+      },
+    ];
+    const reviewed = await service.reviewBlock(uri, target.source.index);
+    const ai = reviewed.annotations.find((entry) => entry.author === "ai")!;
+    expect(ai.suggestedAnswers).toEqual([
+      "Use a neutral, professional register.",
+      "Match the document brief's tone.",
+    ]);
+
+    const next = await service.saveUserAnnotation(
+      uri,
+      target.source.index,
+      {
+        side: ai.side,
+        message: ai.suggestedAnswers![0],
+        originAnnotationId: ai.id,
+        resolveAnnotationId: ai.id,
+      },
+    );
+    const user = next.find((entry) => entry.author === "user")!;
+    const resolved = next.find((entry) => entry.id === ai.id)!;
+    expect(user.mode).toBe("once");
+    expect(user.status).toBe("pending");
+    expect(user.originAnnotationId).toBe(ai.id);
+    expect(resolved.status).toBe("resolved");
+    expect(resolved.answeredBy).toBe(user.id);
+
+    requests = [];
+    await service.sync(
+      uri,
+      false,
+      undefined,
+      undefined,
+      false,
+      { stableTranslation: true, summaryContext: false },
+    );
+    expect(requests[0].items[0].annotations).toEqual([
+      {
+        author: "user",
+        kind: "request-change",
+        text: "Use a neutral, professional register.",
+      },
+    ]);
+    expect(requests[0].items[0].reference).toEqual({
+      role: "previous-target",
+      text: target.cache!.block.raw,
+    });
   });
 
   it("reviews all machine blocks in chunks and replaces only AI annotations", async () => {
@@ -358,6 +564,7 @@ describe("sync annotations", () => {
     const saved = await service.saveUserAnnotation(uri, target.source.index, {
       side: "source",
       kind: "request-change",
+      mode: "persistent",
       message: "Apply before the first sync.",
     });
     expect(saved[0].blockId.startsWith("src-")).toBe(true);
@@ -375,11 +582,49 @@ describe("sync annotations", () => {
 
     requests = [];
     await service.retranslateBlock(uri, target.source.index);
-    expect(requests[0].annotations).toEqual([
+    expect(requests[0].items[0].annotations).toEqual([
       {
         author: "user",
         kind: "request-change",
         text: "Apply before the first sync.",
+      },
+    ]);
+  });
+
+  it("rebinds a stale annotation when it is edited", async () => {
+    const uri = mocks.FakeUri.file("/project/demo.md") as unknown as Uri;
+    const target = paragraph();
+    const saved = await service.saveUserAnnotation(uri, target.source.index, {
+      side: "target",
+      message: "Old instruction.",
+    });
+    mocks.documentState.text = SOURCE.replace(
+      "First paragraph.",
+      "First paragraph changed.",
+    );
+
+    const updated = await service.updateUserAnnotation(
+      uri,
+      saved[0].id,
+      { message: "Edited instruction." },
+    );
+    expect(updated[0].status).toBe("pending");
+    expect(updated[0].sourceHash).not.toBe(saved[0].sourceHash);
+
+    requests = [];
+    await service.sync(
+      uri,
+      false,
+      undefined,
+      undefined,
+      false,
+      { stableTranslation: true, summaryContext: false },
+    );
+    expect(requests[0].items[0].annotations).toEqual([
+      {
+        author: "user",
+        kind: "request-change",
+        text: "Edited instruction.",
       },
     ]);
   });
@@ -407,7 +652,7 @@ describe("sync annotations", () => {
     );
     requests = [];
     await service.retranslateBlock(uri, target.source.index);
-    expect(requests[0].annotations).toBeUndefined();
+    expect(requests[0].items[0].annotations).toBeUndefined();
   });
 
   it("preserves annotations added during review and blocks clear-all", async () => {

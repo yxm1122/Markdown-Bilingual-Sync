@@ -85,6 +85,18 @@ export interface TranslationAssistOptions {
   brief?: TranslationBrief;
 }
 
+/** 同步时附带的用户批注快照；只挂到对应块并参与该块的翻译。 */
+export interface SyncAnnotationInput {
+  id: string;
+  blockId: string;
+  sourceIndex?: number;
+  sourceHash?: string;
+  kind: "note" | "request-change";
+  text: string;
+  /** 新建/编辑后尚未参与翻译；用于把已翻译块纳入本次同步。 */
+  pending: boolean;
+}
+
 /** `syncDocument` 的输入。 */
 export interface SyncOptions {
   /** 与切块、缓存解析共享的 markdown-it 实例。 */
@@ -102,6 +114,8 @@ export interface SyncOptions {
   glossary?: readonly GlossaryEntry[];
   /** 稳定翻译参考与全文摘要上下文。 */
   assist?: TranslationAssistOptions;
+  /** 当前文件所有生效中的用户批注；由 SyncService 从 sidecar 读取。 */
+  annotations?: readonly SyncAnnotationInput[];
   signal?: AbortSignal;
   onProgress?: SyncProgressReporter;
   /**
@@ -140,6 +154,8 @@ export interface SyncResult {
   failedTaskCount: number;
   /** Provider / 部分写入的失败原因，按发生顺序排列。 */
   failures: string[];
+  /** 本次真正参与翻译的批注结果；changed 表示该块译文是否发生变化。 */
+  annotationOutcomes: Array<{ annotationId: string; changed: boolean }>;
 }
 
 /**
@@ -468,7 +484,59 @@ export async function syncDocument(options: SyncOptions): Promise<SyncResult> {
     finalIds.set(aligned.source.index, id);
   }
 
-  const tasks: Array<{ item: TranslationItem; anchorId: string }> = [];
+  // 把批注按源块归位：已有缓存优先按锚点 id，无缓存批注按 sourceIndex，
+  // 旧数据只有在同哈希唯一时才按哈希匹配。源文已变化（sourceHash 不一致）的批注跳过。
+  const annotationsBySourceIndex = new Map<number, SyncAnnotationInput[]>();
+  if (options.annotations?.length) {
+    const anchorToSourceIndex = new Map<string, number>();
+    for (const aligned of initialAlignment.blocks) {
+      if (aligned.cache) {
+        anchorToSourceIndex.set(
+          aligned.cache.anchor.id,
+          aligned.source.index,
+        );
+      }
+    }
+    for (const annotation of options.annotations) {
+      let index = anchorToSourceIndex.get(annotation.blockId);
+      if (index === undefined && annotation.blockId.startsWith("src-")) {
+        const hash = annotation.blockId.slice(4).trim();
+        const candidates = initialAlignment.blocks.filter(
+          (aligned) => aligned.source.hash === hash,
+        );
+        if (annotation.sourceIndex !== undefined) {
+          index = candidates.find(
+            (aligned) => aligned.source.index === annotation.sourceIndex,
+          )?.source.index;
+        }
+        if (index === undefined && candidates.length === 1) {
+          index = candidates[0].source.index;
+        }
+      }
+      if (index === undefined) {
+        continue;
+      }
+      const aligned = initialAlignment.blocks.find(
+        (item) => item.source.index === index,
+      );
+      if (
+        !aligned ||
+        (annotation.sourceHash !== undefined &&
+          annotation.sourceHash !== aligned.source.hash)
+      ) {
+        continue;
+      }
+      const list = annotationsBySourceIndex.get(index) ?? [];
+      list.push(annotation);
+      annotationsBySourceIndex.set(index, list);
+    }
+  }
+
+  const tasks: Array<{
+    item: TranslationItem;
+    anchorId: string;
+    annotations: SyncAnnotationInput[];
+  }> = [];
 
   for (const aligned of initialAlignment.blocks) {
     const sourceBlock = aligned.source;
@@ -478,14 +546,21 @@ export async function syncDocument(options: SyncOptions): Promise<SyncResult> {
     const cached = aligned.cache;
     const cacheIsCopy = cached?.anchor.mode === "copy";
     const cacheIsDeleted = cached?.anchor.mode === "deleted";
-    // 显式 human / deleted 模式不会被选中；注意 dst 不一致的 auto 块（手工改过缓存）
-    // 在 retranslateAll 下仍会命中最后的 auto 条件。
+    const sourceAnnotations =
+      annotationsBySourceIndex.get(sourceBlock.index) ?? [];
+    const hasPendingAnnotations = sourceAnnotations.some(
+      (annotation) => annotation.pending,
+    );
+    // 显式 human / deleted 模式不会被选中；待生效批注可把已翻译块拉进本次同步。
+    // 注意 dst 不一致的 auto 块（手工改过缓存）在 retranslateAll 下仍会命中最后的 auto 条件。
     const needsTranslation =
       !cacheIsDeleted &&
+      !aligned.human &&
       (!cached ||
         cacheIsCopy ||
         (retranslateAll && cached.anchor.mode === "auto") ||
-        (aligned.status === "stale" && retranslateStale));
+        (aligned.status === "stale" && retranslateStale) ||
+        hasPendingAnnotations);
     if (!needsTranslation) {
       if (aligned.status === "stale") {
         warnings.push(
@@ -498,6 +573,12 @@ export async function syncDocument(options: SyncOptions): Promise<SyncResult> {
     if (!anchorId) {
       throw new Error(tError("sync.missingAnchor", { index: sourceBlock.index + 1 }));
     }
+    const itemAnnotations = sourceAnnotations.map((annotation) => ({
+      author: "user" as const,
+      kind: annotation.kind,
+      text: annotation.text,
+    }));
+    // 批注与旧译文可能冲突时，由 system prompt 明确批注优先；reference 仍按稳定翻译发送。
     const reference =
       options.assist?.stableTranslation === true &&
       cached &&
@@ -511,6 +592,7 @@ export async function syncDocument(options: SyncOptions): Promise<SyncResult> {
         : undefined;
     tasks.push({
       anchorId,
+      annotations: sourceAnnotations,
       item: {
         id: anchorId,
         text: sourceBlock.raw,
@@ -519,6 +601,9 @@ export async function syncDocument(options: SyncOptions): Promise<SyncResult> {
         documentId,
         sectionId: sectionIds.get(sourceBlock.index) ?? "section-0",
         ...(reference ? { reference } : {}),
+        ...(itemAnnotations.length
+          ? { annotations: itemAnnotations }
+          : {}),
       },
     });
   }
@@ -783,6 +868,26 @@ export async function syncDocument(options: SyncOptions): Promise<SyncResult> {
       tError("sync.blocksFailed", { count: failedTaskCount }),
     );
   }
+  const annotationOutcomes: SyncResult["annotationOutcomes"] = [];
+  for (const task of tasks) {
+    if (task.annotations.length === 0 || !outputs.has(task.item.id)) {
+      continue;
+    }
+    const oldTarget = initialAlignment.blocks.find(
+      (aligned) => aligned.cache?.anchor.id === task.item.id,
+    )?.cache?.block.raw;
+    const newTarget = outputs.get(task.item.id) ?? "";
+    const changed =
+      oldTarget === undefined
+        ? normalizeContent(newTarget).length > 0
+        : normalizeContent(newTarget) !== normalizeContent(oldTarget);
+    for (const annotation of task.annotations) {
+      annotationOutcomes.push({
+        annotationId: annotation.id,
+        changed,
+      });
+    }
+  }
 
   return {
     cacheText: built.cacheText,
@@ -806,5 +911,6 @@ export async function syncDocument(options: SyncOptions): Promise<SyncResult> {
     partial: failedTaskCount > 0,
     failedTaskCount,
     failures,
+    annotationOutcomes,
   };
 }

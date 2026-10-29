@@ -34,9 +34,11 @@ import { parseMarkdownDocument } from "../markdown/segmenter";
 import type { SourceStage } from "../source/editSource";
 import { isDeletedMarker } from "../cache/deletedMarker";
 import type { TranslationBrief } from "../translation/types";
-import type {
-  AnnotationRecord,
-  AnnotationView,
+import {
+  isUserAnnotationActive,
+  isUserAnnotationPending,
+  type AnnotationRecord,
+  type AnnotationView,
 } from "../annotations/types";
 
 /** 缓存中「没有对应原文」的译文独占块（视图侧裁剪后的最小字段集）。 */
@@ -127,6 +129,8 @@ export interface PreviewCounts {
   untranslated: number;
   /** 复制类状态（copy / copy-stale / copy-pending）。 */
   copy: number;
+  /** 尚未参与过翻译的用户批注数；同步会把这些块拉进队列。 */
+  pendingAnnotations: number;
 }
 
 /** 预览中的全文摘要视图。 */
@@ -186,6 +190,8 @@ export interface PreviewModel {
   pendingSourceCount: number;
   /** 当前 Provider 是否支持审校。 */
   reviewSupported: boolean;
+  /** 当前 Provider 是否会把用户批注发送给模型。 */
+  annotationsSupported: boolean;
 }
 
 /** `buildPreviewModel` 的输入；除文本外均为展示或暂存信息。 */
@@ -207,6 +213,8 @@ export interface PreviewModelInput {
   annotations?: readonly AnnotationRecord[];
   /** 当前 Provider 是否支持审校。 */
   reviewSupported?: boolean;
+  /** 当前 Provider 是否会把用户批注发送给模型。 */
+  annotationsSupported?: boolean;
 }
 
 /** 块状态到中文文案的映射；文案来自 i18n，避免在渲染层散落字符串。 */
@@ -712,7 +720,10 @@ export function buildPreviewModel(input: PreviewModelInput): PreviewModel {
   }
 
   // 批注按块 id 挂到视图；无缓存批注可按 sourceIndex 定位，sourceHash 不一致时标记过期。
+  let pendingAnnotations = 0;
+  const annotationsSupported = input.annotationsSupported === true;
   if (input.annotations?.length) {
+    const countedPending = new Set<string>();
     const blocksById = new Map<string, PreviewBlockView[]>();
     for (const block of blocks) {
       const id =
@@ -739,19 +750,37 @@ export function buildPreviewModel(input: PreviewModelInput): PreviewModel {
         }
       }
       for (const block of targets) {
+        const stale = Boolean(
+          record.sourceHash &&
+            block.sourceHash &&
+            record.sourceHash !== block.sourceHash,
+        );
+        if (
+          !stale &&
+          isUserAnnotationPending(record) &&
+          !countedPending.has(record.id)
+        ) {
+          countedPending.add(record.id);
+          pendingAnnotations += 1;
+        }
         const view: AnnotationView = {
           ...record,
-          stale: Boolean(
-            record.sourceHash &&
-              block.sourceHash &&
-              record.sourceHash !== block.sourceHash,
-          ),
+          stale,
         };
         const list = block.annotations ?? [];
         list.push(view);
         block.annotations = list;
       }
     }
+  }
+  if (
+    !annotationsSupported &&
+    (input.annotations ?? []).some(
+      (entry) => entry.author === "user" && isUserAnnotationActive(entry),
+    )
+  ) {
+    pendingAnnotations = 0;
+    warnings.add(UI_TEXT.preview.warnings.annotationsUnsupported);
   }
 
   // 译文独占块（targetBlocks）同样是有效缓存内容：删除全部原文后只剩它们时，
@@ -795,9 +824,11 @@ export function buildPreviewModel(input: PreviewModelInput): PreviewModel {
       human,
       untranslated,
       copy,
+      pendingAnnotations,
     },
     warnings: [...warnings],
     pendingSourceCount,
     reviewSupported: input.reviewSupported === true,
+    annotationsSupported,
   };
 }

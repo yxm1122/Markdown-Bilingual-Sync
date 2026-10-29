@@ -762,6 +762,7 @@ async function main(): Promise<void> {
 
       await page.click(".pv-annotation-badge");
       await page.waitFor("document.querySelector('.pv-annotations')");
+      await page.click(".pv-annotation-details summary");
       records.push(await page.shot(theme, "annotations"));
       console.log("  ✓ annotations");
       await page.click(".pv-annotations-head .pv-action");

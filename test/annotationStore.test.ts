@@ -21,10 +21,11 @@ function record(
     blockId: "b1",
     side: "target",
     author: "user",
-    kind: "note",
+    kind: "request-change",
     severity: "info",
     message: "Check this.",
-    status: "open",
+    mode: "once",
+    status: "pending",
     sourceIndex: 2,
     createdAt: "2026-10-28T00:00:00.000Z",
     updatedAt: "2026-10-28T00:00:00.000Z",
@@ -160,6 +161,64 @@ describe("normalizeAnnotationRecord", () => {
     expect(normalizeAnnotationRecord({})).toBeUndefined();
     expect(
       normalizeAnnotationRecord({ ...record(), message: "   " }),
+    ).toBeUndefined();
+  });
+
+  it("migrates legacy user annotations and keeps suggested answers", () => {
+    const legacy = normalizeAnnotationRecord({
+      ...record(),
+      status: "open",
+      kind: "note",
+      mode: undefined,
+    });
+    expect(legacy?.status).toBe("pending");
+    expect(legacy?.mode).toBe("persistent");
+
+    const ai = normalizeAnnotationRecord({
+      ...record({
+        author: "ai",
+        kind: "translation-uncertain",
+        status: "open",
+        mode: undefined,
+      }),
+      question: "Which register?",
+      suggestedAnswers: [
+        "Use a neutral register.",
+        "Match the document tone.",
+        "Use a neutral register.",
+      ],
+    });
+    expect(ai?.suggestedAnswers).toEqual([
+      "Use a neutral register.",
+      "Match the document tone.",
+    ]);
+    expect(ai?.mode).toBeUndefined();
+
+    const legacyAnswer = normalizeAnnotationRecord({
+      ...record({
+        author: "ai",
+        kind: "translation-uncertain",
+        status: "open",
+        mode: undefined,
+      }),
+      question: "Which register?",
+      suggestedAnswer: "Legacy single answer.",
+    });
+    expect(legacyAnswer?.suggestedAnswers).toEqual([
+      "Legacy single answer.",
+    ]);
+  });
+
+  it("rejects user-status values on AI annotations", () => {
+    expect(
+      normalizeAnnotationRecord({
+        ...record({
+          author: "ai",
+          kind: "translation-uncertain",
+          status: "pending",
+          mode: undefined,
+        }),
+      }),
     ).toBeUndefined();
   });
 });

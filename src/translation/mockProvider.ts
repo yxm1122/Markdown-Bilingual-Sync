@@ -279,6 +279,7 @@ export class MockTranslationProvider implements TranslationProvider {
   }
   readonly supportsSummary = true;
   readonly supportsReview = true;
+  readonly supportsAnnotations = false;
 
   /**
    * 生成固定的演示摘要：取前几个非空段落/标题，便于离线验证摘要 UI 与上下文链路。
@@ -351,6 +352,10 @@ export class MockTranslationProvider implements TranslationProvider {
         message:
           "Mock review: verify that this wording matches the document brief.",
         question: "Is the register appropriate for the intended audience?",
+        suggestedAnswers: [
+          "Use a neutral, professional register for the intended audience.",
+          "Match the document brief's tone and keep the wording concise.",
+        ],
       },
     ];
   }

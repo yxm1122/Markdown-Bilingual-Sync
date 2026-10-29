@@ -64,7 +64,7 @@ export function estimateTokenCount(text: string): number {
 }
 
 /**
- * 估算单块成本：固定开销（JSON 字段/引号等）+ 正文 + 标题路径。
+ * 估算单块成本：固定开销（JSON 字段/引号等）+ 正文 + 标题路径 + 该块的批注。
  * 纯函数，结果仅用于分批，不保证与真实分词器一致。
  */
 export function estimateItemTokens(item: TranslationItem): number {
@@ -74,7 +74,8 @@ export function estimateItemTokens(item: TranslationItem): number {
     estimateTokenCount(item.headingPath.join(" > ")) +
     (item.reference
       ? estimateTokenCount(item.reference.text) + 12
-      : 0)
+      : 0) +
+    estimateTranslationAnnotationTokens(item.annotations)
   );
 }
 

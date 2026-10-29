@@ -78,10 +78,20 @@ export type OutboundMessage =
       type: "saveAnnotation";
       blockIndex: number;
       side: "source" | "target";
-      kind: "note" | "request-change";
+      mode?: "once" | "persistent";
       message: string;
+      originAnnotationId?: string;
+      resolveAnnotationId?: string;
       sourceHash?: string;
       cacheId?: string;
+    }
+  | {
+      type: "updateAnnotation";
+      annotationId: string;
+      message?: string;
+      mode?: "once" | "persistent";
+      side?: "source" | "target";
+      reactivate?: boolean;
     }
   | {
       type: "setAnnotationStatus";

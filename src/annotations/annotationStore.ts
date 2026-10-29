@@ -10,11 +10,15 @@ import * as vscode from "vscode";
 import type { CacheStore } from "../cache/cacheStore";
 import { newBlockId } from "../util/hash";
 import {
+  MAX_ANNOTATION_ANSWER,
   MAX_ANNOTATION_EXCERPT,
   MAX_ANNOTATION_MESSAGE,
   MAX_ANNOTATION_SUGGESTION,
+  MAX_SUGGESTED_ANSWERS,
   normalizeAnnotationText,
+  type AnnotationMode,
   type AnnotationRecord,
+  type AnnotationStatus,
 } from "./types";
 
 interface StoredAnnotations {
@@ -39,7 +43,16 @@ const VALID_KINDS = new Set([
   "request-change",
 ]);
 const VALID_SEVERITIES = new Set(["info", "check"]);
-const VALID_STATUSES = new Set(["open", "resolved", "dismissed"]);
+const AI_STATUSES = new Set(["open", "resolved", "dismissed"]);
+const USER_STATUSES = new Set([
+  "open",
+  "pending",
+  "applied",
+  "ineffective",
+  "resolved",
+  "dismissed",
+]);
+const VALID_MODES = new Set(["once", "persistent"]);
 const warnedCorruptFiles = new Set<string>();
 
 /** 兼容真实 FileSystemError 与测试替身的 code。 */
@@ -58,7 +71,33 @@ function readString(value: unknown, max: number): string | undefined {
   return normalizeAnnotationText(value, max);
 }
 
-/** 校验单条批注；字段不合法时返回 undefined。 */
+/** 读取候选回答：兼容旧版单个 suggestedAnswer 字符串。 */
+function readSuggestedAnswers(record: Record<string, unknown>): string[] {
+  const raw = record.suggestedAnswers;
+  const values: unknown[] = [];
+  if (Array.isArray(raw)) {
+    values.push(...raw);
+  } else if (raw !== undefined) {
+    values.push(raw);
+  }
+  if (record.suggestedAnswer !== undefined) {
+    values.push(record.suggestedAnswer);
+  }
+  const answers: string[] = [];
+  for (const value of values) {
+    const text = readString(value, MAX_ANNOTATION_ANSWER);
+    if (
+      text &&
+      !answers.includes(text) &&
+      answers.length < MAX_SUGGESTED_ANSWERS
+    ) {
+      answers.push(text);
+    }
+  }
+  return answers;
+}
+
+/** 校验单条批注；字段不合法时返回 undefined。旧版用户批注会就地迁移到新状态。 */
 export function normalizeAnnotationRecord(
   raw: unknown,
 ): AnnotationRecord | undefined {
@@ -70,10 +109,11 @@ export function normalizeAnnotationRecord(
   const blockId = readString(record.blockId, 160);
   const message = readString(record.message, MAX_ANNOTATION_MESSAGE);
   const side = readString(record.side, 20);
-  const author = readString(record.author, 20);
+  const authorRaw = readString(record.author, 20);
   const kind = readString(record.kind, 40);
   const severity = readString(record.severity, 20);
-  const status = readString(record.status, 20);
+  const statusRaw = readString(record.status, 20);
+  const modeRaw = readString(record.mode, 20);
   const createdAt = readString(record.createdAt, 40);
   const updatedAt = readString(record.updatedAt, 40);
   const sourceIndex =
@@ -87,31 +127,53 @@ export function normalizeAnnotationRecord(
     !blockId ||
     !message ||
     !side ||
-    !author ||
+    !authorRaw ||
     !kind ||
     !severity ||
-    !status ||
+    !statusRaw ||
     !createdAt ||
     !updatedAt ||
     !VALID_SIDES.has(side) ||
-    !VALID_AUTHORS.has(author) ||
+    !VALID_AUTHORS.has(authorRaw) ||
     !VALID_KINDS.has(kind) ||
-    !VALID_SEVERITIES.has(severity) ||
-    !VALID_STATUSES.has(status)
+    !VALID_SEVERITIES.has(severity)
   ) {
     return undefined;
   }
+  const author = authorRaw as AnnotationRecord["author"];
+  const validStatus =
+    author === "ai" ? AI_STATUSES.has(statusRaw) : USER_STATUSES.has(statusRaw);
+  if (!validStatus) {
+    return undefined;
+  }
+  // 旧版用户批注用 open 表示未处理；新版改用 pending。
+  const status: AnnotationStatus =
+    author === "user" && statusRaw === "open"
+      ? "pending"
+      : (statusRaw as AnnotationStatus);
+  const mode: AnnotationMode | undefined =
+    author === "user"
+      ? modeRaw !== undefined && VALID_MODES.has(modeRaw)
+        ? (modeRaw as AnnotationMode)
+        : "persistent"
+      : undefined;
+  const question = readString(record.question, MAX_ANNOTATION_MESSAGE);
+  const suggestedAnswers = question
+    ? readSuggestedAnswers(record)
+    : [];
+  const suggestion = suggestedAnswers.length
+    ? undefined
+    : readString(record.suggestion, MAX_ANNOTATION_SUGGESTION);
   return {
     id,
     blockId,
     side: side as AnnotationRecord["side"],
-    author: author as AnnotationRecord["author"],
+    author,
     kind: kind as AnnotationRecord["kind"],
     severity: severity as AnnotationRecord["severity"],
     message,
-    ...(readString(record.question, MAX_ANNOTATION_MESSAGE)
-      ? { question: readString(record.question, MAX_ANNOTATION_MESSAGE) }
-      : {}),
+    ...(question ? { question } : {}),
+    ...(suggestedAnswers.length ? { suggestedAnswers } : {}),
     ...(readString(record.sourceExcerpt, MAX_ANNOTATION_EXCERPT)
       ? {
           sourceExcerpt: readString(
@@ -128,19 +190,27 @@ export function normalizeAnnotationRecord(
           ),
         }
       : {}),
-    ...(readString(record.suggestion, MAX_ANNOTATION_SUGGESTION)
-      ? {
-          suggestion: readString(
-            record.suggestion,
-            MAX_ANNOTATION_SUGGESTION,
-          ),
-        }
-      : {}),
-    status: status as AnnotationRecord["status"],
+    ...(suggestion ? { suggestion } : {}),
+    ...(mode ? { mode } : {}),
+    status,
     ...(readString(record.sourceHash, 120)
       ? { sourceHash: readString(record.sourceHash, 120) }
       : {}),
     ...(sourceIndex !== undefined ? { sourceIndex } : {}),
+    ...(readString(record.originAnnotationId, 160)
+      ? {
+          originAnnotationId: readString(
+            record.originAnnotationId,
+            160,
+          ),
+        }
+      : {}),
+    ...(readString(record.answeredBy, 160)
+      ? { answeredBy: readString(record.answeredBy, 160) }
+      : {}),
+    ...(readString(record.lastAppliedAt, 40)
+      ? { lastAppliedAt: readString(record.lastAppliedAt, 40) }
+      : {}),
     createdAt,
     updatedAt,
   };

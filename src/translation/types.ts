@@ -61,6 +61,8 @@ export interface TranslationItem {
   sectionId?: string;
   /** 可选：上一版结果，用于重新翻译或回译时减少措辞波动。 */
   reference?: TranslationReference;
+  /** 可选：只作用于该块的用户修改指令；AI 审校批注永远不会进入这里。 */
+  annotations?: TranslationAnnotationInput[];
 }
 
 /** 术语表条目：source 到 target 的纯文本映射，不参与 Markdown 结构解析。 */
@@ -157,18 +159,11 @@ export interface TranslationContext {
   after?: TranslationContextBlock[];
 }
 
-/** 用户批注作为重译指令；AI 审校批注不会进入此字段。 */
+/** 用户批注作为该块的修改指令；AI 审校批注不会进入此字段。 */
 export interface TranslationAnnotationInput {
   author: "user";
   kind: "note" | "request-change";
   text: string;
-}
-
-/** 是否有用户批注指令。 */
-export function hasTranslationAnnotations(
-  annotations: readonly TranslationAnnotationInput[] | undefined,
-): boolean {
-  return Boolean(annotations && annotations.length > 0);
 }
 
 /** 上下文是否有内容。 */
@@ -204,6 +199,8 @@ export interface ReviewAnnotationDraft {
   severity: ReviewSeverity;
   message: string;
   question?: string;
+  /** 对问题的候选回答；与 suggestion 互斥。 */
+  suggestedAnswers?: string[];
   sourceExcerpt?: string;
   targetExcerpt?: string;
   suggestion?: string;
@@ -246,8 +243,6 @@ export interface TranslationRequest {
   brief?: TranslationBrief;
   /** 可选只读邻块上下文；只用于单块请求。 */
   context?: TranslationContext;
-  /** 用户批注指令；只用于按批注重译的单块请求。 */
-  annotations?: TranslationAnnotationInput[];
 }
 
 /** 从相对路径与 frontmatter 白名单提取的只读文档元数据。 */
@@ -344,6 +339,8 @@ export interface TranslationProvider {
   readonly supportsSummary?: boolean;
   /** 是否支持语义审校（只返回批注）。 */
   readonly supportsReview?: boolean;
+  /** 是否会把 item.annotations 发送给模型；Mock/自定义 HTTP 通常不支持。 */
+  readonly supportsAnnotations?: boolean;
   /**
    * 翻译一批块。
    * @param request 待翻译内容与语言/术语信息。

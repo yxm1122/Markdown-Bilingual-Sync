@@ -128,6 +128,11 @@ export class BatchTranslationCoordinator implements TranslationProvider {
     return this.delegate.supportsReview === true;
   }
 
+  /** 批注能力透传；Mock/HTTP 不会使用 item.annotations。 */
+  get supportsAnnotations(): boolean {
+    return this.delegate.supportsAnnotations === true;
+  }
+
   /** 审校请求不参与跨文件合并，直接转发给被包装 Provider。 */
   review(
     request: ReviewRequest,
@@ -242,6 +247,7 @@ export class BatchTranslationCoordinator implements TranslationProvider {
       }
       // 以“源语言\0目标语言\0摘要哈希\0brief 哈希\0context 哈希\0术语表哈希”为键分组：
       // 固定上下文、翻译要求、邻块上下文或合并术语表不同都不能合并，否则会串台。
+      // 批注随 item 走，因此不再参与分组键。
       const groups = new Map<string, PendingCall[]>();
       for (const call of calls) {
         const summaryKey = shortHash(call.request.summary?.trim() ?? "");
@@ -251,11 +257,8 @@ export class BatchTranslationCoordinator implements TranslationProvider {
         const contextKey = shortHash(
           JSON.stringify(call.request.context ?? null),
         );
-        const annotationKey = shortHash(
-          JSON.stringify(call.request.annotations ?? []),
-        );
         const glossaryKey = glossaryGroupKey(call.request.glossary);
-        const key = `${call.request.sourceLanguage}\u0000${call.request.targetLanguage}\u0000${summaryKey}\u0000${briefKey}\u0000${contextKey}\u0000${annotationKey}\u0000${glossaryKey}`;
+        const key = `${call.request.sourceLanguage}\u0000${call.request.targetLanguage}\u0000${summaryKey}\u0000${briefKey}\u0000${contextKey}\u0000${glossaryKey}`;
         const group = groups.get(key) ?? [];
         group.push(call);
         groups.set(key, group);
@@ -439,9 +442,6 @@ export class BatchTranslationCoordinator implements TranslationProvider {
             : {}),
           ...(calls[0].request.context
             ? { context: calls[0].request.context }
-            : {}),
-          ...(calls[0].request.annotations
-            ? { annotations: calls[0].request.annotations }
             : {}),
         },
         controller.signal,

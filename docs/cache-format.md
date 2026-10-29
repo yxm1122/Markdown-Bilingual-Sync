@@ -176,13 +176,18 @@ JSON 载荷：
       "kind": "source-issue|translation-uncertain|term|structure|note|request-change",
       "severity": "info|check",
       "message": "批注正文",
-      "question": "可选",
-      "sourceExcerpt": "可选",
-      "targetExcerpt": "可选",
-      "suggestion": "可选",
-      "status": "open|resolved|dismissed",
+      "question": "AI 可选：待回答问题",
+      "suggestedAnswers": ["AI 可选：最多 3 条候选回答，去重"],
+      "sourceExcerpt": "AI 可选",
+      "targetExcerpt": "AI 可选",
+      "suggestion": "AI 可选：与候选回答互斥的建议",
+      "mode": "once|persistent（仅用户批注）",
+      "status": "AI: open|resolved|dismissed；用户: pending|applied|ineffective（旧数据兼容 open|resolved|dismissed）",
       "sourceHash": "可选：写入时的原文哈希",
       "sourceIndex": "可选：写入时的源块序号；无缓存批注首次翻译后据此迁移",
+      "originAnnotationId": "用户可选：采纳候选回答时关联的 AI 批注 id",
+      "answeredBy": "AI 可选：回答该问题的用户批注 id",
+      "lastAppliedAt": "用户可选：最近一次参与翻译的 ISO 时间",
       "createdAt": "ISO 时间",
       "updatedAt": "ISO 时间"
     }
@@ -193,9 +198,14 @@ JSON 载荷：
 规则：
 
 - 写入使用唯一临时文件 + rename，并在同一文件的锁内完成读改写；损坏 JSON 会先备份为 `<sidecar>.corrupt-<id>.json`，再读取为空白批注并记录告警。
-- 按 `blockId` 关联块；`sourceHash` 与当前块不同标记 stale，缓存重建后找不到则视为 orphan。过期用户批注不会进入重译请求。
+- 用户批注默认 `mode: "once"`，参与一次翻译后失效；`persistent` 持续参与后续翻译。`pending` 表示待生效，`applied`/`ineffective` 表示上次参与翻译后译文有/无变化。一次性批注应用后由状态自然失效，持续批注保持生效但不再强制同步。
+- 旧版用户批注在读取时迁移：`status: "open"` → `pending`，缺少 `mode` → `persistent`；旧 `note`/`request-change` 都视为修改指令。旧 `resolved`/`dismissed` 保留为不参与翻译的归档状态。
+- 按 `blockId` 关联块；`sourceHash` 与当前块不同标记 stale，缓存重建后找不到则视为 orphan。过期用户批注不会进入翻译请求。
+- 同步时待生效批注会让已翻译块进入队列；生效批注随对应 `TranslationItem.annotations` 发送。稳定翻译仍会发送旧译文 `reference`，由 system prompt 声明批注优先于 reference。AI 批注永远不会进入翻译请求。
+- 翻译成功后按块比较新旧译文更新 `status` 与 `lastAppliedAt`；失败、取消或未翻译的块不更新。同块多条批注共享块级判断。
 - 无缓存块的用户批注保存 `sourceIndex`；首次同步生成锚点后，按 sourceIndex + 原文哈希迁移为锚点 id。旧数据仅在同哈希唯一时迁移。
-- AI 批注重跑会替换该块旧的 AI 批注，用户批注保留；审校最终写入前会重新校验原文/译文/锚点，已变化的块结果会被丢弃。
+- AI 批注重跑会替换该块旧的 AI 批注，用户批注保留；审校最终写入前会重新校验原文/译文/锚点，已变化的块结果会被丢弃。候选回答最多 3 条并去重，旧版单个 `suggestedAnswer` 会在读取时迁移为单元素数组。采纳候选回答时，同一把锁内创建用户批注并标记 AI 批注 `resolved` + `answeredBy`。
+- 只有 OpenAI 兼容 Provider 会读取批注；Mock/自定义 HTTP 仍保存 sidecar，但不会应用批注。
 - 删除单个缓存会同时删除 sidecar；清空全部缓存会递归删除缓存根目录（含 sidecar），审校进行中会拒绝清空。
 
 ## 5. 删除墓碑

@@ -302,6 +302,10 @@ async function main(): Promise<void> {
         severity: "check",
         message: "这句里的 “bite” 可能指业务影响，请确认。",
         question: "这里是指字面“咬”，还是指标对业务的实际影响？",
+        suggestedAnswers: [
+          "这里指业务影响，建议译为“业务影响”并保持一致。",
+          "按“实际影响”理解，并同步更新同段落的术语。",
+        ],
         status: "open",
         sourceHash: annotatedBlock.sourceHash,
         createdAt: "2026-10-28T08:00:00.000Z",
@@ -316,13 +320,20 @@ async function main(): Promise<void> {
         kind: "request-change",
         severity: "info",
         message: "按“业务影响”理解，并保持这里的术语一致。",
-        status: "open",
+        mode: "once",
+        status: "pending",
         sourceHash: annotatedBlock.sourceHash,
         createdAt: "2026-10-28T08:02:00.000Z",
         updatedAt: "2026-10-28T08:02:00.000Z",
         stale: false,
       },
     ];
+    matrixModel.counts.pendingAnnotations =
+      annotatedBlock.annotations.filter(
+        (annotation) =>
+          annotation.author === "user" &&
+          (annotation.status === "pending" || annotation.status === "open"),
+      ).length;
   }
   const emptyModel = buildPreviewModel({
     sourceText: "",

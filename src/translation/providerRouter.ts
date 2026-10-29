@@ -72,6 +72,11 @@ export class TranslationProviderRouter implements TranslationProvider {
     return this.current().supportsReview === true;
   }
 
+  /** 当前 Provider 是否会把批注发送给模型（HTTP 模板通常不支持）。 */
+  get supportsAnnotations(): boolean {
+    return this.current().supportsAnnotations === true;
+  }
+
   /** 转发整篇摘要请求；目标 Provider 未实现时给出可操作的本地化提示。 */
   async summarize(
     request: SummaryRequest,

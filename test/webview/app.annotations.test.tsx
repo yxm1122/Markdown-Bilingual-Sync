@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-/** 测试：块级批注标记、popover、批注操作与按批注重译入口。 */
+/** 测试：块级批注标记、popover、生效状态、编辑与建议回答。 */
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import {
   cleanup,
@@ -104,7 +104,7 @@ describe("block annotations", () => {
       annotation({
         id: "u1",
         author: "user",
-        kind: "note",
+        kind: "request-change",
         message: "My note",
       }),
     ]);
@@ -194,7 +194,6 @@ describe("block annotations", () => {
     fireEvent.input(compose, {
       target: { value: "Use the business sense." },
     });
-    fireEvent.click(within(dialog).getByText(text.requestChange));
     fireEvent.click(
       within(dialog).getByRole("button", { name: text.save }),
     );
@@ -202,7 +201,7 @@ describe("block annotations", () => {
       type: "saveAnnotation",
       blockIndex: 0,
       side: "target",
-      kind: "request-change",
+      mode: "once",
       message: "Use the business sense.",
       sourceHash: "source-hash-0",
       cacheId: "cache-0",
@@ -220,6 +219,8 @@ describe("block annotations", () => {
                   id: "u1",
                   author: "user",
                   kind: "request-change",
+                  mode: "once",
+                  status: "pending",
                   message: "Use the business sense.",
                 }),
               ],
@@ -277,10 +278,141 @@ describe("block annotations", () => {
     });
   });
 
-  it("offers retranslation when a user annotation is open", () => {
+  it("shows user annotation state and retries ineffective annotations", () => {
     const text = harness.text.preview.annotations;
     const { container } = renderWithAnnotation([
-      annotation({ author: "user", kind: "request-change" }),
+      annotation({
+        id: "u1",
+        author: "user",
+        kind: "request-change",
+        mode: "once",
+        status: "ineffective",
+        message: "Apply this change.",
+      }),
+    ]);
+    fireEvent.click(
+      within(container).getByLabelText(
+        fmt(text.openCount, { count: 1 }),
+      ) as HTMLElement,
+    );
+    const dialog = screen.getByRole("dialog", { name: text.title });
+    expect(within(dialog).getByText(text.statusIneffective)).toBeTruthy();
+    expect(
+      within(dialog).queryByRole("button", { name: text.resolve }),
+    ).toBeNull();
+    fireEvent.click(
+      within(dialog).getByRole("button", { name: text.retry }),
+    );
+    expect(actions(harness)).toContainEqual({
+      type: "updateAnnotation",
+      annotationId: "u1",
+      reactivate: true,
+    });
+  });
+
+  it("adopts a suggested AI answer as a one-shot user annotation", () => {
+    const text = harness.text.preview.annotations;
+    const { container } = renderWithAnnotation([
+      annotation({
+        suggestedAnswers: [
+          "Use the business sense.",
+          "Use a formal register.",
+        ],
+        question: "Which sense is intended?",
+      }),
+    ]);
+    fireEvent.click(
+      within(container).getByLabelText(
+        fmt(text.openCount, { count: 1 }),
+      ) as HTMLElement,
+    );
+    const dialog = screen.getByRole("dialog", { name: text.title });
+    fireEvent.click(within(dialog).getByText(text.details));
+    expect(
+      within(dialog).getByText("Use the business sense."),
+    ).toBeTruthy();
+    expect(
+      within(dialog).getByText("Use a formal register."),
+    ).toBeTruthy();
+    fireEvent.click(
+      within(dialog).getByRole("button", {
+        name: `${text.adoptAnswer} 2`,
+      }),
+    );
+    expect(actions(harness)).toContainEqual({
+      type: "saveAnnotation",
+      blockIndex: 0,
+      side: "target",
+      mode: "once",
+      message: "Use a formal register.",
+      originAnnotationId: "a1",
+      resolveAnnotationId: "a1",
+      sourceHash: "source-hash-0",
+      cacheId: "cache-0",
+    });
+  });
+
+  it("prepares an edited answer in the composer", () => {
+    const text = harness.text.preview.annotations;
+    const { container } = renderWithAnnotation([
+      annotation({
+        suggestedAnswers: [
+          "Use the business sense.",
+          "Use a formal register.",
+        ],
+        question: "Which sense is intended?",
+      }),
+    ]);
+    fireEvent.click(
+      within(container).getByLabelText(
+        fmt(text.openCount, { count: 1 }),
+      ) as HTMLElement,
+    );
+    const dialog = screen.getByRole("dialog", { name: text.title });
+    fireEvent.click(within(dialog).getByText(text.details));
+    fireEvent.click(
+      within(dialog).getByRole("button", {
+        name: `${text.editAnswer} 1`,
+      }),
+    );
+    const compose = within(dialog).getByLabelText(
+      text.add,
+    ) as HTMLTextAreaElement;
+    expect(compose.value).toBe("Use the business sense.");
+    expect(
+      dialog.querySelector(".pv-annotation-compose .pv-summary-note")
+        ?.textContent,
+    ).toContain(text.answeringQuestion);
+    fireEvent.input(compose, {
+      target: { value: "Use a formal register." },
+    });
+    fireEvent.click(
+      within(dialog).getByRole("button", { name: text.save }),
+    );
+    expect(actions(harness)).toContainEqual({
+      type: "saveAnnotation",
+      blockIndex: 0,
+      side: "target",
+      mode: "once",
+      message: "Use a formal register.",
+      originAnnotationId: "a1",
+      resolveAnnotationId: "a1",
+      sourceHash: "source-hash-0",
+      cacheId: "cache-0",
+    });
+  });
+
+  it("edits a user annotation and its mode", () => {
+    const text = harness.text.preview.annotations;
+    const { container } = renderWithAnnotation([
+      annotation({
+        id: "u1",
+        author: "user",
+        kind: "request-change",
+        mode: "once",
+        status: "pending",
+        message: "Old instruction.",
+      }),
     ]);
     fireEvent.click(
       within(container).getByLabelText(
@@ -289,11 +421,24 @@ describe("block annotations", () => {
     );
     const dialog = screen.getByRole("dialog", { name: text.title });
     fireEvent.click(
-      within(dialog).getByRole("button", { name: text.retranslate }),
+      within(dialog).getByRole("button", { name: text.edit }),
+    );
+    const editor = within(dialog).getByRole("textbox", {
+      name: text.edit,
+    }) as HTMLTextAreaElement;
+    fireEvent.input(editor, { target: { value: "New instruction." } });
+    fireEvent.click(
+      within(dialog).getAllByRole("checkbox")[0] as HTMLElement,
+    );
+    fireEvent.click(
+      within(dialog).getByRole("button", { name: text.saveEdit }),
     );
     expect(actions(harness)).toContainEqual({
-      type: "retranslateBlock",
-      blockIndex: 0,
+      type: "updateAnnotation",
+      annotationId: "u1",
+      message: "New instruction.",
+      mode: "persistent",
+      side: "target",
     });
   });
 });

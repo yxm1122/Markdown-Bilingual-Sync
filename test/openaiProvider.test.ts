@@ -422,6 +422,95 @@ describe("OpenAITranslationProvider", () => {
     );
   });
 
+  it("keeps suggestedAnswers only with a question and never with suggestion", async () => {
+    const { provider } = configuredProvider(async () =>
+      completion(
+        JSON.stringify({
+          annotations: [
+            {
+              id: "b1",
+              side: "target",
+              type: "translation-uncertain",
+              severity: "check",
+              message: "Both fields.",
+              question: "Which sense?",
+              suggestion: "Use the business sense.",
+              suggestedAnswers: [
+                "Use the business sense here.",
+                "Use a more formal alternative.",
+                "Use the business sense here.",
+                "Third distinct candidate.",
+                "Fourth candidate is dropped.",
+              ],
+            },
+            {
+              id: "b1",
+              side: "target",
+              type: "term",
+              severity: "info",
+              message: "Answer without a question.",
+              suggestedAnswers: ["Ignored."],
+            },
+            {
+              id: "b1",
+              side: "target",
+              type: "term",
+              severity: "info",
+              message: "Suggestion only.",
+              suggestion: "Use the glossary term.",
+            },
+          ],
+        }),
+      ),
+    );
+
+    const annotations = await provider.review({
+      sourceLanguage: "en",
+      targetLanguage: "zh-CN",
+      glossary: [],
+      items: [
+        {
+          id: "b1",
+          kind: "paragraph",
+          headingPath: [],
+          sourceText: "Text that bites.",
+          targetText: "会咬人的文本。",
+        },
+      ],
+    });
+
+    expect(annotations).toEqual([
+      {
+        id: "b1",
+        side: "target",
+        type: "translation-uncertain",
+        severity: "check",
+        message: "Both fields.",
+        question: "Which sense?",
+        suggestedAnswers: [
+          "Use the business sense here.",
+          "Use a more formal alternative.",
+          "Third distinct candidate.",
+        ],
+      },
+      {
+        id: "b1",
+        side: "target",
+        type: "term",
+        severity: "info",
+        message: "Answer without a question.",
+      },
+      {
+        id: "b1",
+        side: "target",
+        type: "term",
+        severity: "info",
+        message: "Suggestion only.",
+        suggestion: "Use the glossary term.",
+      },
+    ]);
+  });
+
   it("retries a malformed review response once", async () => {
     let attempt = 0;
     const { provider, calls } = configuredProvider(async () => {
@@ -1205,6 +1294,19 @@ describe("prompt structure", () => {
     expect(prompt).toContain("Source language: en. Target language: zh-CN.");
   });
 
+  it("makes user annotations override the reference baseline", () => {
+    const prompt = buildTranslationSystemPrompt("en", "zh-CN");
+    expect(prompt).toContain(
+      "A user annotation that requests a change overrides this baseline.",
+    );
+    expect(prompt).toContain(
+      "follow the requested information or change, even when it conflicts with the reference",
+    );
+    expect(prompt).toContain(
+      "Annotations never override glossary entries or the output contract.",
+    );
+  });
+
   it("writes the summary and review in the configured output language", () => {
     const summary = buildSummarySystemPrompt("en", "zh-CN");
     expect(summary).toContain(
@@ -1226,7 +1328,7 @@ describe("prompt structure", () => {
 
     const review = buildReviewSystemPrompt("en", "zh-CN", "ja-JP");
     expect(review).toContain(
-      "Write annotation messages, questions, and suggestions in ja-JP",
+      "Write annotation messages, questions, suggestions, and suggested answers in ja-JP",
     );
     expect(review).toContain("keep sourceExcerpt and targetExcerpt verbatim");
     expect(review).toContain(

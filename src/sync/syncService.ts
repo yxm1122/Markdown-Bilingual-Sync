@@ -42,11 +42,16 @@ import { buildHeadingPaths } from "../markdown/headings";
 import { buildBlockContext } from "./blockContext";
 import { AnnotationStore } from "../annotations/annotationStore";
 import {
+  isUserAnnotationActive,
+  isUserAnnotationPending,
+  MAX_ANNOTATION_ANSWER,
   MAX_ANNOTATION_EXCERPT,
   MAX_ANNOTATION_MESSAGE,
   MAX_ANNOTATION_SUGGESTION,
   MAX_ANNOTATIONS_PER_BLOCK,
+  MAX_SUGGESTED_ANSWERS,
   normalizeAnnotationText,
+  type AnnotationMode,
   type AnnotationRecord,
   type AnnotationView,
 } from "../annotations/types";
@@ -424,6 +429,11 @@ export class SyncService {
     );
   }
 
+  /** 当前 Provider 是否会把用户批注发送给模型。 */
+  get annotationsSupported(): boolean {
+    return this.provider.supportsAnnotations === true;
+  }
+
   /**
    * 把无缓存块上的 `src-<hash>` 批注迁移到新生成的缓存锚点。
    * 优先用保存批注时的 sourceIndex 区分同内容块；旧数据仅在同哈希唯一时迁移。
@@ -500,6 +510,47 @@ export class SyncService {
     return result.annotations.filter((entry) => entry.blockId === blockId);
   }
 
+  /**
+   * 翻译成功后更新批注结果：译文有变化记 applied，没有变化记 ineffective；
+   * 一次性批注依赖状态自然失效，持续批注保持 active。翻译期间被编辑/删除的批注跳过。
+   */
+  private async applyAnnotationOutcomes(
+    sourceUri: vscode.Uri,
+    targetLanguage: string,
+    sent: readonly AnnotationRecord[],
+    outcomes: ReadonlyMap<string, boolean>,
+  ): Promise<void> {
+    if (outcomes.size === 0) {
+      return;
+    }
+    const existing = await this.annotationStore.read(sourceUri, targetLanguage);
+    const originals = new Map(sent.map((entry) => [entry.id, entry]));
+    const now = new Date().toISOString();
+    let touched = false;
+    const next = existing.annotations.map((entry) => {
+      const original = originals.get(entry.id);
+      const changed = outcomes.get(entry.id);
+      if (
+        !original ||
+        changed === undefined ||
+        entry.author !== "user" ||
+        entry.updatedAt !== original.updatedAt
+      ) {
+        return entry;
+      }
+      touched = true;
+      return {
+        ...entry,
+        status: changed ? ("applied" as const) : ("ineffective" as const),
+        lastAppliedAt: now,
+        updatedAt: now,
+      };
+    });
+    if (touched) {
+      await this.annotationStore.write(sourceUri, targetLanguage, next);
+    }
+  }
+
   /** 把模型返回的批注草稿转成可落库记录；未知块 id 直接丢弃。 */
   private annotationRecordsFromDrafts(
     drafts: readonly ReviewAnnotationDraft[],
@@ -537,10 +588,29 @@ export class SyncService {
         draft.targetExcerpt,
         MAX_ANNOTATION_EXCERPT,
       );
-      const suggestion = normalizeAnnotationText(
-        draft.suggestion,
-        MAX_ANNOTATION_SUGGESTION,
-      );
+      const suggestedAnswers: string[] = [];
+      for (const answer of draft.suggestedAnswers ?? []) {
+        const text = normalizeAnnotationText(
+          answer,
+          MAX_ANNOTATION_ANSWER,
+        );
+        if (
+          text &&
+          !suggestedAnswers.includes(text) &&
+          suggestedAnswers.length < MAX_SUGGESTED_ANSWERS
+        ) {
+          suggestedAnswers.push(text);
+        }
+      }
+      if (!question) {
+        suggestedAnswers.length = 0;
+      }
+      const suggestion = suggestedAnswers.length
+        ? undefined
+        : normalizeAnnotationText(
+            draft.suggestion,
+            MAX_ANNOTATION_SUGGESTION,
+          );
       records.push({
         id: `ai-${newBlockId()}`,
         blockId: draft.id,
@@ -550,6 +620,7 @@ export class SyncService {
         severity: draft.severity,
         message,
         ...(question ? { question } : {}),
+        ...(suggestedAnswers.length ? { suggestedAnswers } : {}),
         ...(sourceExcerpt ? { sourceExcerpt } : {}),
         ...(targetExcerpt ? { targetExcerpt } : {}),
         ...(suggestion ? { suggestion } : {}),
@@ -928,14 +999,26 @@ export class SyncService {
     });
   }
 
-  /** 添加用户批注（note 或 request-change）。 */
+  /**
+   * 添加用户批注；所有用户批注都是翻译修改指令。
+   *
+   * `resolveAnnotationId` 用于采纳 AI 候选回答：同一把锁里创建用户批注并把对应
+   * AI 提问标为已核对，避免两次写 sidecar。
+   */
   async saveUserAnnotation(
     sourceUri: vscode.Uri,
     blockIndex: number,
     input: {
       side: "source" | "target";
-      kind: "note" | "request-change";
       message: string;
+      /** 生效方式；缺省仅一次。 */
+      mode?: AnnotationMode;
+      /** 关联的 AI 提问；采纳候选回答时使用。 */
+      originAnnotationId?: string;
+      /** 采纳回答时一并标记已核对的 AI 批注。 */
+      resolveAnnotationId?: string;
+      /** 旧调用兼容；新调用不需要。 */
+      kind?: "note" | "request-change";
       expected?: { sourceHash?: string; cacheId?: string };
     },
   ): Promise<AnnotationRecord[]> {
@@ -974,25 +1057,58 @@ export class SyncService {
       const blockId =
         aligned.cache?.anchor.id ?? `src-${aligned.source.hash}`;
       const now = new Date().toISOString();
+      const existing = await this.annotationStore.read(
+        sourceUri,
+        state.targetLanguage,
+      );
+      if (input.resolveAnnotationId) {
+        const target = existing.annotations.find(
+          (entry) => entry.id === input.resolveAnnotationId,
+        );
+        if (
+          !target ||
+          target.author !== "ai" ||
+          target.status !== "open" ||
+          target.blockId !== blockId
+        ) {
+          throw new Error(tError("sync.annotationNotFound"));
+        }
+      }
       const record: AnnotationRecord = {
         id: `user-${newBlockId()}`,
         blockId,
         side: input.side,
         author: "user",
-        kind: input.kind,
+        kind: "request-change",
         severity: "info",
         message,
-        status: "open",
+        mode: input.mode ?? "once",
+        status: "pending",
         sourceHash: aligned.source.hash,
         sourceIndex: aligned.source.index,
+        ...(input.originAnnotationId ?? input.resolveAnnotationId
+          ? {
+              originAnnotationId:
+                input.originAnnotationId ?? input.resolveAnnotationId,
+            }
+          : {}),
         createdAt: now,
         updatedAt: now,
       };
-      const existing = await this.annotationStore.read(
-        sourceUri,
-        state.targetLanguage,
-      );
-      const next = [...existing.annotations, record];
+      const next = input.resolveAnnotationId
+        ? existing.annotations
+            .map((entry) =>
+              entry.id === input.resolveAnnotationId
+                ? {
+                    ...entry,
+                    status: "resolved" as const,
+                    answeredBy: record.id,
+                    updatedAt: now,
+                  }
+                : entry,
+            )
+            .concat(record)
+        : [...existing.annotations, record];
       await this.annotationStore.write(
         sourceUri,
         state.targetLanguage,
@@ -1000,6 +1116,93 @@ export class SyncService {
       );
       this.log(
         `save annotation on block ${blockIndex} of ${path.basename(sourceUri.fsPath)}`,
+      );
+      return next;
+    });
+  }
+
+  /** 编辑用户批注正文/生效方式/本地分类；编辑后重新进入待生效。 */
+  async updateUserAnnotation(
+    sourceUri: vscode.Uri,
+    annotationId: string,
+    input: {
+      message?: string;
+      mode?: AnnotationMode;
+      side?: "source" | "target";
+      /** 重试已失效的一次性批注。 */
+      reactivate?: boolean;
+    },
+  ): Promise<AnnotationRecord[]> {
+    return this.withLock(sourceUri, async () => {
+      const state = await this.loadState(sourceUri, false);
+      const existing = await this.annotationStore.read(
+        sourceUri,
+        state.targetLanguage,
+      );
+      const target = existing.annotations.find(
+        (entry) => entry.id === annotationId,
+      );
+      if (!target || target.author !== "user") {
+        throw new Error(tError("sync.annotationNotFound"));
+      }
+      // 编辑时尝试重新绑定当前源块，避免 stale 批注编辑后仍然无法生效。
+      const source = parseMarkdownDocument(state.sourceText, this.md);
+      const cache = parseCacheDocument(state.cacheText ?? "", this.md);
+      const alignment = alignDocument(source.blocks, cache);
+      const legacyHash = target.blockId.startsWith("src-")
+        ? target.blockId.slice(4).trim()
+        : undefined;
+      const aligned = alignment.blocks.find(
+        (item) =>
+          item.cache?.anchor.id === target.blockId ||
+          (target.sourceIndex !== undefined &&
+            item.source.index === target.sourceIndex) ||
+          (legacyHash !== undefined && item.source.hash === legacyHash),
+      );
+      const currentHash = aligned?.source.hash;
+      const currentIndex = aligned?.source.index;
+      const currentBlockId = aligned?.cache?.anchor.id;
+      const rebound =
+        currentHash !== undefined && currentHash !== target.sourceHash;
+      const message =
+        input.message !== undefined
+          ? normalizeAnnotationText(input.message, MAX_ANNOTATION_MESSAGE)
+          : undefined;
+      if (input.message !== undefined && !message) {
+        throw new Error(tError("sync.annotationEmpty"));
+      }
+      const mode = input.mode ?? target.mode ?? "once";
+      const textChanged =
+        message !== undefined && message !== target.message;
+      const modeChanged =
+        input.mode !== undefined && input.mode !== target.mode;
+      const rearm =
+        textChanged || modeChanged || rebound || input.reactivate === true;
+      const now = new Date().toISOString();
+      const next = existing.annotations.map((entry) =>
+        entry.id === annotationId
+          ? {
+              ...entry,
+              ...(message !== undefined ? { message } : {}),
+              ...(input.side !== undefined ? { side: input.side } : {}),
+              ...(currentHash ? { sourceHash: currentHash } : {}),
+              ...(currentIndex !== undefined
+                ? { sourceIndex: currentIndex }
+                : {}),
+              ...(currentBlockId ? { blockId: currentBlockId } : {}),
+              mode,
+              ...(rearm ? { status: "pending" as const } : {}),
+              updatedAt: now,
+            }
+          : entry,
+      );
+      await this.annotationStore.write(
+        sourceUri,
+        state.targetLanguage,
+        next,
+      );
+      this.log(
+        `update annotation ${annotationId} of ${path.basename(sourceUri.fsPath)}`,
       );
       return next;
     });
@@ -1249,10 +1452,32 @@ export class SyncService {
         };
       }
 
+      const previousTarget = aligned.cache.block.raw;
       const headingPaths = buildHeadingPaths(source.blocks);
       const assistSettings = this.resolveAssist(assist);
       const summary = this.summaryForCache(cache, assistSettings);
       const brief = this.briefForCache(cache, assistSettings);
+      const glossary = await this.loadGlossary(sourceUri);
+      const annotationRecords = this.annotationsSupported
+        ? (
+            await this.readAnnotationsForBlock(
+              sourceUri,
+              state.targetLanguage,
+              aligned.cache.anchor.id,
+            )
+          ).filter(
+            (entry) =>
+              isUserAnnotationActive(entry) &&
+              (!entry.sourceHash ||
+                entry.sourceHash === aligned.source.hash),
+          )
+        : [];
+      const annotations = annotationRecords.map((entry) => ({
+        author: "user" as const,
+        kind: entry.kind as "note" | "request-change",
+        text: entry.message,
+      }));
+      // 批注与旧译文可能冲突时，由 system prompt 明确批注优先；reference 仍按稳定翻译发送。
       const reference =
         assistSettings.stableTranslation &&
         aligned.cache.anchor.mode !== "deleted" &&
@@ -1269,6 +1494,7 @@ export class SyncService {
         kind: aligned.source.kind,
         headingPath: headingPaths.get(aligned.source.index) ?? [],
         ...(reference ? { reference } : {}),
+        ...(annotations.length ? { annotations } : {}),
       };
       const context = buildBlockContext({
         blocks: source.blocks,
@@ -1277,29 +1503,8 @@ export class SyncService {
         textOf: (block) => block.raw,
       });
       this.log(
-        `retranslate block ${blockIndex} of ${path.basename(sourceUri.fsPath)} (${aligned.source.kind})`,
+        `retranslate block ${blockIndex} of ${path.basename(sourceUri.fsPath)} (${aligned.source.kind}, ${annotations.length} annotation(s))`,
       );
-      const glossary = await this.loadGlossary(sourceUri);
-      const annotations = (
-        await this.readAnnotationsForBlock(
-          sourceUri,
-          state.targetLanguage,
-          item.id,
-        )
-      )
-        .filter(
-          (entry) =>
-            entry.author === "user" &&
-            entry.status === "open" &&
-            (!entry.sourceHash ||
-              entry.sourceHash === aligned.source.hash) &&
-            (entry.kind === "note" || entry.kind === "request-change"),
-        )
-        .map((entry) => ({
-          author: "user" as const,
-          kind: entry.kind as "note" | "request-change",
-          text: entry.message,
-        }));
       const rawResult = await this.provider.translate(
         {
           sourceLanguage: state.sourceLanguage,
@@ -1309,7 +1514,6 @@ export class SyncService {
           ...(summary ? { summary } : {}),
           ...(brief ? { brief } : {}),
           ...(context ? { context } : {}),
-          ...(annotations.length ? { annotations } : {}),
         },
         signal,
       );
@@ -1333,6 +1537,27 @@ export class SyncService {
         md: this.md,
       });
       await this.cacheStore.write(state.cacheUri, edited.text);
+      if (annotationRecords.length > 0) {
+        try {
+          await this.applyAnnotationOutcomes(
+            sourceUri,
+            state.targetLanguage,
+            annotationRecords,
+            new Map(
+              annotationRecords.map((entry) => [
+                entry.id,
+                content !== previousTarget,
+              ]),
+            ),
+          );
+        } catch (error) {
+          this.log(
+            `update annotation outcome failed: ${
+              error instanceof Error ? error.message : String(error)
+            }`,
+          );
+        }
+      }
       return { mode: "block" };
     });
   }
@@ -2964,6 +3189,36 @@ export class SyncService {
       : undefined;
     const summary = this.summaryForCache(cache, assistSettings);
     const brief = this.briefForCache(cache, assistSettings);
+    const annotationsSupported = this.annotationsSupported;
+    const annotationRead: {
+      annotations: AnnotationRecord[];
+      warning?: string;
+    } = annotationsSupported
+      ? await this.annotationStore.read(
+          state.sourceUri,
+          state.targetLanguage,
+        )
+      : { annotations: [] };
+    if (annotationRead.warning) {
+      this.log(annotationRead.warning);
+    }
+    const activeAnnotations = annotationRead.annotations.filter(
+      (entry) => entry.author === "user" && isUserAnnotationActive(entry),
+    );
+    const syncAnnotations = activeAnnotations.map((entry) => ({
+      id: entry.id,
+      blockId: entry.blockId,
+      ...(entry.sourceIndex !== undefined
+        ? { sourceIndex: entry.sourceIndex }
+        : {}),
+      ...(entry.sourceHash ? { sourceHash: entry.sourceHash } : {}),
+      kind:
+        entry.kind === "note" || entry.kind === "request-change"
+          ? entry.kind
+          : ("request-change" as const),
+      text: entry.message,
+      pending: isUserAnnotationPending(entry),
+    }));
     const result = await syncDocument({
       md: this.md,
       sourceText: state.sourceText,
@@ -2974,6 +3229,7 @@ export class SyncService {
       retranslateStale,
       retranslateAll,
       glossary: this.requestGlossary(glossary.entries, cache),
+      annotations: syncAnnotations,
       assist: {
         stableTranslation: assistSettings.stableTranslation,
         ...(summary ? { summary } : {}),
@@ -3005,8 +3261,35 @@ export class SyncService {
         }`,
       );
     }
+    if (result.annotationOutcomes.length > 0 && activeAnnotations.length > 0) {
+      const records = new Map(
+        activeAnnotations.map((entry) => [entry.id, entry]),
+      );
+      const outcomes = new Map<string, boolean>();
+      for (const outcome of result.annotationOutcomes) {
+        if (records.has(outcome.annotationId)) {
+          outcomes.set(outcome.annotationId, outcome.changed);
+        }
+      }
+      if (outcomes.size > 0) {
+        try {
+          await this.applyAnnotationOutcomes(
+            state.sourceUri,
+            state.targetLanguage,
+            activeAnnotations.filter((entry) => outcomes.has(entry.id)),
+            outcomes,
+          );
+        } catch (error) {
+          this.log(
+            `update annotation outcomes failed for ${path.basename(state.sourceUri.fsPath)}: ${
+              error instanceof Error ? error.message : String(error)
+            }`,
+          );
+        }
+      }
+    }
     this.log(
-      `sync done: translated=${result.translatedCount}, failed=${result.failedTaskCount}, partial=${result.partial}, copied=${result.copiedCount}, human=${result.humanLockedCount}, warnings=${result.warnings.length}`,
+      `sync done: translated=${result.translatedCount}, failed=${result.failedTaskCount}, partial=${result.partial}, copied=${result.copiedCount}, human=${result.humanLockedCount}, annotations=${result.annotationOutcomes.length}, warnings=${result.warnings.length}`,
     );
     return {
       result,
