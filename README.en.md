@@ -7,7 +7,7 @@
 
 Translate Markdown inside VS Code and read it as a bilingual preview. The source text stays the single source of truth, and translations you edit by hand are locked so they are never silently overwritten.
 
-Current version **0.14.1** adds the document brief (summary, translation guidance, and document glossary), neighboring-block context for single-block retranslation/back-translation, AI review and user annotations (shared configurable output language and a draggable, grouped panel), annotation-guided retranslation, and a 17-case translation-quality evaluation set. Glossary terms use content-sized cards with per-side hover reveal and inline editing. Annotations stay in a local sidecar, review results are revalidated before saving, and stale annotations are never sent as retranslation instructions. The 0.12.0 localization work (English by default, zh-cn built in) is included.
+Current version **0.14.2** adds the document brief (summary, translation guidance, and document glossary), neighboring-block context for single-block retranslation/back-translation, AI review and user annotations (shared configurable output language and a draggable, grouped panel), annotation-guided retranslation, and a 17-case translation-quality evaluation set. Glossary terms use content-sized cards with per-side hover reveal and inline editing. Annotations stay in a local sidecar, review results are revalidated before saving, and stale annotations are never sent as retranslation instructions. The 0.12.0 localization work (English by default, zh-cn built in) is included.
 
 ## Features
 
