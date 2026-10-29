@@ -36,6 +36,11 @@ const mocks = vi.hoisted(() => {
 
   const documentState = { text: "" };
   const settings = { assistantLanguage: "target" };
+  const workspaceFolder = {
+    uri: FakeUri.file("/project"),
+    name: "project",
+    index: 0,
+  };
   const document = {
     uri: FakeUri.file("/project/demo.md"),
     getText: () => documentState.text,
@@ -47,6 +52,16 @@ const mocks = vi.hoisted(() => {
 
   const vscode = {
     workspace: {
+      workspaceFolders: [workspaceFolder],
+      getWorkspaceFolder(uri: FakeUri) {
+        return uri.fsPath === workspaceFolder.uri.fsPath ||
+          uri.fsPath.startsWith(`${workspaceFolder.uri.fsPath}/`)
+          ? workspaceFolder
+          : undefined;
+      },
+      asRelativePath(uri: FakeUri) {
+        return uri.fsPath.replace(`${workspaceFolder.uri.fsPath}/`, "");
+      },
       getConfiguration() {
         return {
           get(key: string, fallback: unknown) {
@@ -786,6 +801,34 @@ describe("SyncService block editing and back-translation", () => {
     expect(requests[0].summary).toContain("摘要：");
     expect(requests[0].brief).toEqual(generated?.brief);
     expect(cacheStore.text).toContain("mbs-summary:");
+  });
+
+  it("passes whitelisted frontmatter and the relative path to the summary", async () => {
+    const uri = mocks.FakeUri.file("/project/demo.md") as unknown as Uri;
+    mocks.documentState.text = [
+      "---",
+      "title: Auth Guide",
+      "name: auth-api",
+      "description: How keys work.",
+      "tags: [api, security]",
+      "private: do not send",
+      "---",
+      "",
+      SOURCE,
+    ].join("\n");
+
+    await service.generateSummary(uri);
+    expect(summaryRequests[0].documentMetadata).toEqual({
+      relativePath: "demo.md",
+      title: "Auth Guide",
+      name: "auth-api",
+      description: "How keys work.",
+      tags: ["api", "security"],
+    });
+    expect(summaryRequests[0].title).toBe("Auth Guide");
+    expect(summaryRequests[0].text).not.toContain("title: Auth Guide");
+    expect(summaryRequests[0].text).not.toContain("private: do not send");
+    expect(summaryRequests[0].text.startsWith("# Heading")).toBe(true);
   });
 
   it("uses the configured assistant language for the summary", async () => {

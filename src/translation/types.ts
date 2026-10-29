@@ -251,6 +251,25 @@ export interface TranslationRequest {
 }
 
 /** 手动生成全文摘要的输入；sourceText 是整篇原文，不是单个块。 */
+/** 从相对路径与 frontmatter 白名单提取的只读文档元数据。 */
+export interface DocumentMetadata {
+  relativePath?: string;
+  title?: string;
+  name?: string;
+  description?: string;
+  tags?: string[];
+  keywords?: string[];
+  categories?: string[];
+  audience?: string;
+  product?: string;
+  project?: string;
+  version?: string;
+  locale?: string;
+  lang?: string;
+  type?: string;
+  docType?: string;
+}
+
 export interface SummaryRequest {
   text: string;
   sourceLanguage: string;
@@ -259,6 +278,8 @@ export interface SummaryRequest {
   outputLanguage?: string;
   /** 文件名，仅用于提示模型文档标题；不是可信指令。 */
   title?: string;
+  /** 只读文档事实；作为 user JSON 数据发送，不进入 system prompt。 */
+  documentMetadata?: DocumentMetadata;
   /** 用户全局/工作区术语表；生成文档术语表时应优先沿用这些目标词。 */
   glossary?: GlossaryEntry[];
 }

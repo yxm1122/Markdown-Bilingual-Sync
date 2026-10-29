@@ -19,6 +19,8 @@ import {
   ConcurrencyLimiter,
   type RequestLimiter,
 } from "../src/translation/concurrency";
+import { MAX_ANNOTATIONS_PER_BLOCK } from "../src/annotations/types";
+import { MAX_DOCUMENT_GLOSSARY_ENTRIES } from "../src/glossary/glossary";
 
 const BASE_CONFIG: OpenAIProviderConfig = {
   baseUrl: "https://api.example.com/v1",
@@ -280,6 +282,12 @@ describe("OpenAITranslationProvider", () => {
       sourceLanguage: "en",
       targetLanguage: "zh-CN",
       title: "demo.md",
+      documentMetadata: {
+        relativePath: "docs/auth.md",
+        title: "Auth Guide",
+        name: "auth-api",
+        tags: ["api"],
+      },
     });
 
     expect(summary).toEqual({
@@ -294,9 +302,17 @@ describe("OpenAITranslationProvider", () => {
     expect(body.messages[0].content).toContain(
       "Source language: en. Target language: zh-CN.",
     );
-    expect(JSON.parse(body.messages[1].content).text).toBe(
-      "# Workflow\n\nSteps.",
-    );
+    expect(body.messages[0].content).toContain("read-only facts");
+    expect(body.messages[0].content).not.toContain("Auth Guide");
+    expect(JSON.parse(body.messages[1].content)).toMatchObject({
+      text: "# Workflow\n\nSteps.",
+      documentMetadata: {
+        relativePath: "docs/auth.md",
+        title: "Auth Guide",
+        name: "auth-api",
+        tags: ["api"],
+      },
+    });
   });
 
   it("parses a summary JSON and a document glossary", async () => {
@@ -1203,12 +1219,19 @@ describe("prompt structure", () => {
       "Output language for the summary and translation guidance: ja-JP.",
     );
     expect(summary).toContain("Only include terms that actually appear");
+    expect(summary).toContain(
+      `up to ${MAX_DOCUMENT_GLOSSARY_ENTRIES} entries`,
+    );
+    expect(summary).toContain("do not invent or pad entries");
 
     const review = buildReviewSystemPrompt("en", "zh-CN", "ja-JP");
     expect(review).toContain(
       "Write annotation messages, questions, and suggestions in ja-JP",
     );
     expect(review).toContain("keep sourceExcerpt and targetExcerpt verbatim");
+    expect(review).toContain(
+      `at most ${MAX_ANNOTATIONS_PER_BLOCK} annotations per id`,
+    );
   });
 });
 

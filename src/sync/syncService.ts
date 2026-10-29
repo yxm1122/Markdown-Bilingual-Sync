@@ -34,6 +34,10 @@ import {
 } from "../cache/editCache";
 import { alignDocument } from "../markdown/align";
 import { parseCacheDocument } from "../markdown/anchors";
+import {
+  buildDocumentMetadata,
+  stripFrontmatterText,
+} from "../markdown/documentMetadata";
 import { buildHeadingPaths } from "../markdown/headings";
 import { buildBlockContext } from "./blockContext";
 import { AnnotationStore } from "../annotations/annotationStore";
@@ -276,6 +280,23 @@ export class SyncService {
       sourceLanguage,
       targetLanguage,
     );
+  }
+
+  /**
+   * 取用于摘要上下文的相对路径；不在工作区时只给 basename，避免绝对路径。
+   */
+  private relativeDocumentPath(sourceUri: vscode.Uri): string | undefined {
+    const folder = vscode.workspace.getWorkspaceFolder(sourceUri);
+    if (!folder) {
+      return sourceUri.path.split("/").filter(Boolean).pop();
+    }
+    const relative = vscode.workspace
+      .asRelativePath(sourceUri, false)
+      .replace(/\\/g, "/");
+    const folders = vscode.workspace.workspaceFolders;
+    return folders && folders.length > 1
+      ? `${folder.name}/${relative}`
+      : relative;
   }
 
   /** 当前 Provider 是否支持自动生成全文摘要。 */
@@ -1767,7 +1788,25 @@ export class SyncService {
     if (!state.sourceText.trim()) {
       throw new Error(tError("sync.sourceEmptySummary"));
     }
-    if (estimateTokenCount(state.sourceText) > SUMMARY_MAX_INPUT_TOKENS) {
+    const sourceDocument = parseMarkdownDocument(state.sourceText, this.md);
+    const documentMetadata = buildDocumentMetadata(
+      sourceDocument.frontmatter?.raw,
+      this.relativeDocumentPath(sourceUri),
+    );
+    const summaryText = stripFrontmatterText(
+      state.sourceText,
+      sourceDocument.frontmatter?.raw,
+    );
+    if (!summaryText.trim()) {
+      throw new Error(tError("sync.sourceEmptySummary"));
+    }
+    const metadataTokens = documentMetadata
+      ? estimateTokenCount(JSON.stringify(documentMetadata))
+      : 0;
+    if (
+      estimateTokenCount(summaryText) + metadataTokens >
+      SUMMARY_MAX_INPUT_TOKENS
+    ) {
       throw new Error(
         tError("sync.summaryTooLongInput", { tokens: SUMMARY_MAX_INPUT_TOKENS }),
       );
@@ -1779,14 +1818,18 @@ export class SyncService {
     const existingGlossary = existingCache.summary?.glossary ?? [];
     const result = await this.provider.summarize(
       {
-        text: state.sourceText,
+        text: summaryText,
         sourceLanguage: state.sourceLanguage,
         targetLanguage: state.targetLanguage,
         outputLanguage: this.assistantLanguageFor(
           state.sourceLanguage,
           state.targetLanguage,
         ),
-        title: path.basename(sourceUri.fsPath),
+        title:
+          documentMetadata?.title ??
+          documentMetadata?.name ??
+          path.basename(sourceUri.fsPath),
+        ...(documentMetadata ? { documentMetadata } : {}),
         glossary: mergeGlossaryEntries([
           scopedGlossary.entries,
           existingGlossary,

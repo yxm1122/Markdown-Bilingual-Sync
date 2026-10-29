@@ -55,6 +55,7 @@ CI 会依次执行 `npm ci`、`typecheck`、`test`、`package`。本地提交前
 | `previewModel.test.ts` | 块状态、统计、分栏/只读/占位、摘要面板、HTML 转义、悬停提示 |
 | `taskMonitor.test.ts` | 任务状态机、取消、历史快照 |
 | `language.test.ts` | markdown/skill 支持、manifest 激活与菜单条件、assistantLanguage 解析与设置声明 |
+| `documentMetadata.test.ts` | frontmatter 白名单（含 name）、列表/块值、截断、相对路径与 frontmatter 剥离 |
 | `evaluationMetrics.test.ts` | 遗漏/回显、受保护片段、术语、结构、frontmatter、参考相似度等评估指标 |
 | `evaluationDataset.test.ts` | 17 个评估用例的结构/术语/参考译文自洽性 |
 | `consistency.test.ts` | 译后术语/受保护 Markdown 检查、人工锁定块跳过、无缓存处理 |

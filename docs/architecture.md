@@ -204,7 +204,7 @@ batchTranslateFolder
 ### 3.8 术语表与译后一致性
 
 - 用户术语表按 全局 `glossary.json` → 工作区根目录 `.mbs-glossary.json` 合并；同名 source 后加载的作用域为准。
-- 全文摘要生成会同时产出摘要、brief 和文档术语表（目标语言），一起写入缓存 `mbs-summary` 元数据；摘要与 brief 的输出语言由 `assistantLanguage` 控制（默认跟随译文），都可在预览“文档简报”面板中编辑，清空简报会一起清空。
+- 全文摘要生成会同时产出摘要、brief 和文档术语表（目标语言），一起写入缓存 `mbs-summary` 元数据；摘要与 brief 的输出语言由 `assistantLanguage` 控制（默认跟随译文），都可在预览“文档简报”面板中编辑，清空简报会一起清空。生成请求额外携带从相对路径和白名单 frontmatter 提取的只读 `documentMetadata`；system prompt 只声明其为数据，原始 frontmatter 从摘要正文中剥离。
 - 翻译请求使用“全局/工作区 → 文档”的合并术语表，文档术语表优先；生成文档术语表时会把用户术语表发给 AI 作为约束。
 - 术语匹配与一致性检查共用 `util/glossaryMatch` 与 `util/protectedMarkdown`，避免评估与运行时口径不一致。
 - 预览的“检查”动作通过 `SyncService.checkConsistency` 读取原文/缓存，只检查机器译文；人工锁定块跳过。问题按块汇总，选择后调用现有单块重译并刷新预览。
