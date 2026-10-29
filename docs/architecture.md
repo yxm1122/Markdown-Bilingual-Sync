@@ -81,7 +81,7 @@
 
 `CacheSummary`：`text`、`sourceHash`、`updatedAt`、可选 `model`、`glossary`、`brief`（`audience` / `toneAndStyle` / `ambiguities` / `doNotTranslate`）。摘要属于缓存元数据，不参与对齐与导出；源文变化后只标记过期，仍可作为上下文使用。brief 每个字段最多 400 字符，旧缓存缺失时按空处理。
 
-批注不在缓存 Markdown 中，而存放在缓存同目录的 `<cache>.annotations.json` sidecar；`SyncService.loadPreviewState` 读取后在 `buildPreviewModel` 中按块 id 挂到视图。批注记录包含作者（AI/用户）、类型、严重度、状态、sourceHash 与可选 sourceIndex；源文变化标记 stale，过期用户批注不再作为重译指令。无缓存块的批注带 `src-<hash>` id 和 sourceIndex，首次同步生成锚点后迁移为锚点 id。所有批注读改写走同一文件锁；审校模型调用不占锁，但写入前重新读取并对齐校验原文、译文与锚点，用户批注在审校期间新增也会保留。
+批注不在缓存 Markdown 中，而存放在缓存同目录的 `<cache>.annotations.json` sidecar；`SyncService.loadPreviewState` 读取后在 `buildPreviewModel` 中按块 id 挂到视图。批注记录包含作者（AI/用户）、类型、严重度、状态、sourceHash 与可选 sourceIndex；源文变化标记 stale，过期用户批注不再作为重译指令。无缓存块的批注带 `src-<hash>` id 和 sourceIndex，首次同步生成锚点后迁移为锚点 id。所有批注读改写走同一文件锁；审校模型调用不占锁，但写入前重新读取并对齐校验原文、译文与锚点，用户批注在审校期间新增也会保留。摘要、brief 与批注文本共享 `assistantLanguage` 输出语言（默认跟随译文），术语表 source/target 不受影响。
 
 ## 3. 主要流程
 
@@ -198,13 +198,13 @@ batchTranslateFolder
 - 简报过期（源文哈希变化）仍作为上下文使用，只提示用户。
 - 同步/重译/全部重译/回译可以携带摘要与 brief；二者 token 从每批预算中扣除；不同摘要、brief、context 或 annotations 的请求不会被合并。
 - 单块重译/回译由 `sync/blockContext` 从同一 section 取 1 个前块/后块（标题优先取后一块正文），作为只读 `context` 发送；大块或超过 600 token 时不加。回译的 adjacent context 来自目标语言缓存。
-- 审校可手动按块或按文件触发；文件级审校跳过 human/deleted/copy/未翻译块，按块数（最多 6）和 token 预算分批调用 reviewer，只替换仍通过原文/译文校验的块的 AI 批注，用户批注保留。
+- 审校可手动按块或按文件触发；文件级审校跳过 human/deleted/copy/未翻译块，按块数（最多 6）和 token 预算分批并发调用 reviewer（共享 `translationConcurrency` 全局限流），只替换仍通过原文/译文校验的块的 AI 批注，用户批注保留。完成提示报告已审校块数和新增批注数。
 - 稳定翻译仍由 `stableTranslation` 控制：重译参考旧译文，回译参考当前原文；单块上下文不会替代 reference。
 
 ### 3.8 术语表与译后一致性
 
 - 用户术语表按 全局 `glossary.json` → 工作区根目录 `.mbs-glossary.json` 合并；同名 source 后加载的作用域为准。
-- 全文摘要生成会同时产出原文摘要、brief 和文档术语表（目标语言），一起写入缓存 `mbs-summary` 元数据；都可在预览“文档简报”面板中编辑，清空简报会一起清空。
+- 全文摘要生成会同时产出摘要、brief 和文档术语表（目标语言），一起写入缓存 `mbs-summary` 元数据；摘要与 brief 的输出语言由 `assistantLanguage` 控制（默认跟随译文），都可在预览“文档简报”面板中编辑，清空简报会一起清空。
 - 翻译请求使用“全局/工作区 → 文档”的合并术语表，文档术语表优先；生成文档术语表时会把用户术语表发给 AI 作为约束。
 - 术语匹配与一致性检查共用 `util/glossaryMatch` 与 `util/protectedMarkdown`，避免评估与运行时口径不一致。
 - 预览的“检查”动作通过 `SyncService.checkConsistency` 读取原文/缓存，只检查机器译文；人工锁定块跳过。问题按块汇总，选择后调用现有单块重译并刷新预览。
@@ -242,8 +242,8 @@ Provider 必须：
 
 能力：
 
-- `supportsSummary` + `summarize`：支持整篇摘要、术语表与 brief 生成。
-- `supportsReview` + `review`：支持语义审校；只返回 `ReviewAnnotationDraft[]`（批注），不返回译文。
+- `supportsSummary` + `summarize`：支持整篇摘要、术语表与 brief 生成；`outputLanguage` 控制摘要与 brief 文本语言，术语表 source/target 仍使用翻译语言对。
+- `supportsReview` + `review`：支持语义审校；只返回 `ReviewAnnotationDraft[]`（批注），不返回译文；`outputLanguage` 控制批注消息、问题与建议的语言，excerpt 保持原文/译文原样。
 - `testConnection`：支持连接测试。
 
 实现：

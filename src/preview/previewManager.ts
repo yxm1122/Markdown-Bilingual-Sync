@@ -2192,7 +2192,7 @@ class PreviewPanelSession implements vscode.Disposable {
 
   /** 审校全部机器译文；只写本机 sidecar。 */
   private async reviewMachineBlocks(): Promise<void> {
-    this.setBusy(true, UI_TEXT.notifications.reviewingBlock);
+    this.setBusy(true, UI_TEXT.notifications.reviewingAll);
     const controller = new AbortController();
     let cancelled = false;
     try {
@@ -2208,7 +2208,7 @@ class PreviewPanelSession implements vscode.Disposable {
             controller.abort();
           });
           progress.report({
-            message: UI_TEXT.notifications.reviewingBlock,
+            message: UI_TEXT.notifications.reviewingAll,
           });
           return this.syncService.reviewBlocks(
             this.sourceUri,
@@ -2218,11 +2218,16 @@ class PreviewPanelSession implements vscode.Disposable {
       );
       await this.update({
         text:
-          result.added > 0
-            ? formatText(UI_TEXT.notifications.reviewDone, {
-                count: result.added,
-              })
-            : UI_TEXT.notifications.reviewNoIssues,
+          result.reviewed === 0
+            ? UI_TEXT.notifications.reviewNothing
+            : result.added > 0
+              ? formatText(UI_TEXT.notifications.reviewDoneAll, {
+                  reviewed: result.reviewed,
+                  count: result.added,
+                })
+              : formatText(UI_TEXT.notifications.reviewNoIssuesAll, {
+                  reviewed: result.reviewed,
+                }),
         kind: result.added > 0 ? "info" : "success",
       });
     } catch (error) {

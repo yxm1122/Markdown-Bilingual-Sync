@@ -223,6 +223,8 @@ export interface ReviewItem {
 export interface ReviewRequest {
   sourceLanguage: string;
   targetLanguage: string;
+  /** 批注消息、问题与建议的输出语言；缺省跟随译文。 */
+  outputLanguage?: string;
   summary?: string;
   brief?: TranslationBrief;
   glossary: GlossaryEntry[];
@@ -253,6 +255,8 @@ export interface SummaryRequest {
   text: string;
   sourceLanguage: string;
   targetLanguage: string;
+  /** 摘要与 brief 的输出语言；缺省跟随译文。 */
+  outputLanguage?: string;
   /** 文件名，仅用于提示模型文档标题；不是可信指令。 */
   title?: string;
   /** 用户全局/工作区术语表；生成文档术语表时应优先沿用这些目标词。 */

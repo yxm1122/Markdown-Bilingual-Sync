@@ -94,7 +94,7 @@ describe("package manifest localization", () => {
     const view = manifest.contributes.views["markdownBilingualSyncTasks"][0];
     expect(view.name).toBe("%view.tasks.name%");
     const properties = Object.values(manifest.contributes.configuration.properties);
-    expect(properties).toHaveLength(20);
+    expect(properties).toHaveLength(21);
     for (const property of properties) {
       expect(property.description).toMatch(/^%configuration\.[\w]+\.description%$/);
     }

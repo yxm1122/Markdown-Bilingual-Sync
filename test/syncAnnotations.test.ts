@@ -225,6 +225,7 @@ describe("sync annotations", () => {
     const first = await service.reviewBlock(uri, target.source.index);
     expect(first.added).toBe(1);
     expect(first.annotations).toHaveLength(2);
+    expect(reviewRequests[0].outputLanguage).toBe("zh-CN");
     expect(reviewRequests[0].items[0]).toMatchObject({
       id: blockId,
       sourceText: target.source.raw,
@@ -448,6 +449,51 @@ describe("sync annotations", () => {
     await expect(
       service.reviewBlock(uri, target.source.index),
     ).rejects.toThrow(/译文/);
+  });
+
+  it("runs review chunks concurrently", async () => {
+    const paragraphs = Array.from(
+      { length: 8 },
+      (_, index) => `Paragraph ${index + 1} for concurrent review.`,
+    );
+    const sourceText = paragraphs.join("\n\n");
+    mocks.documentState.text = sourceText;
+    cacheStore.text = (await translate(sourceText)).cacheText;
+    const uri = mocks.FakeUri.file("/project/demo.md") as unknown as Uri;
+
+    let started = 0;
+    let release!: () => void;
+    reviewGate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let allStarted!: () => void;
+    const bothStarted = new Promise<void>((resolve) => {
+      allStarted = resolve;
+    });
+    reviewCalled = () => {
+      started += 1;
+      if (started === 2) {
+        allStarted();
+      }
+    };
+    reviewDrafts = [];
+    const reviewing = service.reviewBlocks(uri);
+    try {
+      await Promise.race([
+        bothStarted,
+        new Promise<never>((_, reject) => {
+          setTimeout(
+            () => reject(new Error("review chunks were not concurrent")),
+            800,
+          );
+        }),
+      ]);
+      expect(reviewRequests).toHaveLength(2);
+    } finally {
+      release();
+    }
+    const result = await reviewing;
+    expect(result.reviewed).toBe(8);
   });
 
   it("splits review requests by token budget", () => {

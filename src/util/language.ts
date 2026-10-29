@@ -53,6 +53,32 @@ export function normalizeSupportedLanguages(value: unknown): string[] {
 }
 
 /**
+ * 解析文档简报与审校批注的输出语言。
+ *
+ * `target`/空值跟随译文，`source` 跟随原文；其他值必须是合法 BCP-47 标签。
+ * 术语表仍使用原文/译文语言对，不受该设置影响。
+ */
+export function resolveAssistantLanguage(
+  value: unknown,
+  sourceLanguage: string,
+  targetLanguage: string,
+): string {
+  const raw = typeof value === "string" ? value.trim() : "";
+  if (!raw || raw.toLowerCase() === "target") {
+    return targetLanguage;
+  }
+  if (raw.toLowerCase() === "source") {
+    return sourceLanguage;
+  }
+  if (!LANGUAGE_TAG.test(raw)) {
+    throw new Error(
+      tError("sync.invalidAssistantLanguage", { language: raw }),
+    );
+  }
+  return raw;
+}
+
+/**
  * 扩展支持的编辑器语言 ID。
  *
  * `skill` 是 Qoder 等环境为部分 Markdown 文件提供的语言 ID；文件内容仍是 Markdown，

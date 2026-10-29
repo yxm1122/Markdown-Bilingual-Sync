@@ -54,7 +54,7 @@ CI 会依次执行 `npm ci`、`typecheck`、`test`、`package`。本地提交前
 | `presets.test.ts` | Provider 预设唯一性与合法值 |
 | `previewModel.test.ts` | 块状态、统计、分栏/只读/占位、摘要面板、HTML 转义、悬停提示 |
 | `taskMonitor.test.ts` | 任务状态机、取消、历史快照 |
-| `language.test.ts` | markdown/skill 支持、manifest 激活与菜单条件 |
+| `language.test.ts` | markdown/skill 支持、manifest 激活与菜单条件、assistantLanguage 解析与设置声明 |
 | `evaluationMetrics.test.ts` | 遗漏/回显、受保护片段、术语、结构、frontmatter、参考相似度等评估指标 |
 | `evaluationDataset.test.ts` | 17 个评估用例的结构/术语/参考译文自洽性 |
 | `consistency.test.ts` | 译后术语/受保护 Markdown 检查、人工锁定块跳过、无缓存处理 |
@@ -71,10 +71,10 @@ CI 会依次执行 `npm ci`、`typecheck`、`test`、`package`。本地提交前
 | `webview/app.scroll.test.tsx` | 虚拟块几何下的分栏双向同步、仅原文/仅译文切换位置还原、顶部/底部对齐 |
 | `webview/app.editing.test.tsx` | 译文/原文编辑、待插入/独立译文、插入、删除/撤销、链接、菜单键盘导航、滚动关闭菜单、选择文本不误触编辑 |
 | `webview/app.summary.test.tsx` | 文档简报/brief/术语卡内容自适应与分侧揭示、内联编辑/焦点恢复、assist 开关、提示条/toast、宿主刷新时草稿保持、忙碌、脚注 |
-| `webview/app.annotations.test.tsx` | 批注标记、popover 焦点与草稿回显、保存/核对/删除/按批注重译 |
+| `webview/app.annotations.test.tsx` | 批注标记、popover 拖动/滚动保持、AI/我的分组折叠、焦点与草稿回显、保存/核对/删除/按批注重译 |
 | `webview/glossaryModel.test.ts` | 术语表文本解析/序列化/校验/规范化 |
 | `annotationStore.test.ts` | 本机批注 sidecar 往返/sourceIndex、损坏备份、字段裁剪、删除 |
-| `syncAnnotations.test.ts` | 审校批注替换、用户批注保留、未翻译批注迁移、并发写、stale 过滤、token 分批、删除块拒绝、状态/删除 |
+| `syncAnnotations.test.ts` | 审校批注替换、用户批注保留、未翻译批注迁移、并发写、并发分批请求、stale 过滤、token 分批、删除块拒绝、状态/删除 |
 | `webview/app.dialogs.test.tsx` | 导出/原文 diff、写入态竞态、错误恢复、关闭与焦点 |
 | `webview/bridge.test.ts` | 首屏 JSON、格式化、VS Code API 与静态预览 localStorage 回退 |
 

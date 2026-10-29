@@ -82,7 +82,10 @@ import {
   type ConsistencyReport,
 } from "../quality/consistency";
 import { blockHash, newBlockId } from "../util/hash";
-import { LANGUAGE_TAG } from "../util/language";
+import {
+  LANGUAGE_TAG,
+  resolveAssistantLanguage,
+} from "../util/language";
 import { restoreProtectedSyntax } from "../util/protectedSyntax";
 import { tError } from "../i18n/errors";
 
@@ -260,6 +263,19 @@ export class SyncService {
       stableTranslation: config.get<boolean>("stableTranslation", true),
       summaryContext: config.get<boolean>("summaryContext", true),
     };
+  }
+
+  /** 解析文档简报与审校批注的输出语言；不合法时抛本地化错误。 */
+  private assistantLanguageFor(
+    sourceLanguage: string,
+    targetLanguage: string,
+  ): string {
+    const config = vscode.workspace.getConfiguration("markdownBilingualSync");
+    return resolveAssistantLanguage(
+      config.get<string>("assistantLanguage", "target"),
+      sourceLanguage,
+      targetLanguage,
+    );
   }
 
   /** 当前 Provider 是否支持自动生成全文摘要。 */
@@ -591,10 +607,15 @@ export class SyncService {
     });
     const glossary = await this.loadGlossary(sourceUri);
     const blockId = aligned.cache.anchor.id;
+    const outputLanguage = this.assistantLanguageFor(
+      state.sourceLanguage,
+      state.targetLanguage,
+    );
     const drafts = await this.provider.review!(
       {
         sourceLanguage: state.sourceLanguage,
         targetLanguage: state.targetLanguage,
+        outputLanguage,
         ...(summary ? { summary } : {}),
         ...(brief ? { brief } : {}),
         glossary: this.requestGlossary(glossary.entries, cache),
@@ -733,6 +754,10 @@ export class SyncService {
     const summary = this.summaryForCache(cache, assistSettings);
     const brief = this.briefForCache(cache, assistSettings);
     const glossary = await this.loadGlossary(sourceUri);
+    const outputLanguage = this.assistantLanguageFor(
+      state.sourceLanguage,
+      state.targetLanguage,
+    );
     const sourceHashById = new Map(
       candidates.map((aligned) => [
         aligned.cache!.anchor.id,
@@ -768,27 +793,42 @@ export class SyncService {
       REVIEW_BATCH_SIZE,
       REVIEW_TOKEN_BUDGET,
     );
-    for (const chunk of chunks) {
-      if (signal?.aborted) {
-        throw new CancelledError();
+    if (signal?.aborted) {
+      throw new CancelledError();
+    }
+    const settled = await Promise.allSettled(
+      chunks.map(async (chunk) => {
+        const drafts = await this.provider.review!(
+          {
+            sourceLanguage: state.sourceLanguage,
+            targetLanguage: state.targetLanguage,
+            outputLanguage,
+            ...(summary ? { summary } : {}),
+            ...(brief ? { brief } : {}),
+            glossary: this.requestGlossary(glossary.entries, cache),
+            items: chunk,
+          },
+          signal,
+        );
+        const chunkHashes = new Map(
+          chunk.map((item) => [item.id, sourceHashById.get(item.id) ?? ""]),
+        );
+        return this.annotationRecordsFromDrafts(drafts, chunkHashes, now);
+      }),
+    );
+    if (signal?.aborted) {
+      throw new CancelledError();
+    }
+    const failure = settled.find(
+      (entry): entry is PromiseRejectedResult => entry.status === "rejected",
+    );
+    if (failure) {
+      throw failure.reason;
+    }
+    for (const entry of settled) {
+      if (entry.status === "fulfilled") {
+        records.push(...entry.value);
       }
-      const drafts = await this.provider.review!(
-        {
-          sourceLanguage: state.sourceLanguage,
-          targetLanguage: state.targetLanguage,
-          ...(summary ? { summary } : {}),
-          ...(brief ? { brief } : {}),
-          glossary: this.requestGlossary(glossary.entries, cache),
-          items: chunk,
-        },
-        signal,
-      );
-      const chunkHashes = new Map(
-        chunk.map((item) => [item.id, sourceHashById.get(item.id) ?? ""]),
-      );
-      records.push(
-        ...this.annotationRecordsFromDrafts(drafts, chunkHashes, now),
-      );
     }
     const reviewedIds = new Set(sourceHashById.keys());
     return this.withLock(sourceUri, async () => {
@@ -1742,6 +1782,10 @@ export class SyncService {
         text: state.sourceText,
         sourceLanguage: state.sourceLanguage,
         targetLanguage: state.targetLanguage,
+        outputLanguage: this.assistantLanguageFor(
+          state.sourceLanguage,
+          state.targetLanguage,
+        ),
         title: path.basename(sourceUri.fsPath),
         glossary: mergeGlossaryEntries([
           scopedGlossary.entries,

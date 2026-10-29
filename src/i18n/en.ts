@@ -302,6 +302,7 @@ export const UI_TEXT = {
       retranslate: "Retranslate with annotations",
       ai: "AI review",
       user: "My annotation",
+      details: "Details",
       stale: "The source changed after this annotation was written.",
       reviewHint:
         "AI review only adds notes; it does not rewrite the translation.",
@@ -371,7 +372,8 @@ export const UI_TEXT = {
       checkConsistency: "Check",
       checkConsistencyTitle:
         "Check glossary terms and protected Markdown in machine translations",
-      reviewMachine: "Review machine translations",
+      reviewMachine: "Review entire document",
+      reviewUnsupportedTitle: "The current provider does not support review",
       export: "Export",
       exportDisabledTitle: "Generate a translation cache first",
       openCacheFolder: "Open cache folder",
@@ -531,9 +533,15 @@ export const UI_TEXT = {
     summaryGenerating: "Generating full-document summary…",
     summaryGenerated: "Full-document summary generated.",
     reviewingBlock: "Reviewing this block…",
+    reviewingAll: "Reviewing all machine translations…",
     reviewCancelled: "Review cancelled.",
     reviewDone: "Review complete: {count} annotation(s).",
     reviewNoIssues: "Review complete: no issues flagged.",
+    reviewDoneAll:
+      "Review complete: {reviewed} block(s) checked, {count} annotation(s) added.",
+    reviewNoIssuesAll:
+      "Review complete: {reviewed} block(s) checked, no issues flagged.",
+    reviewNothing: "No machine translations to review.",
     annotationSaving: "Saving annotation…",
     annotationSaved: "Annotation saved.",
     annotationUpdated: "Annotation updated.",

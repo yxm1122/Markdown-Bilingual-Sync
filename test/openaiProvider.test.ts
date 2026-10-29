@@ -2,6 +2,7 @@
 import { describe, expect, it } from "vitest";
 import {
   OpenAITranslationProvider,
+  buildReviewSystemPrompt,
   buildSummarySystemPrompt,
   buildTranslationSystemPrompt,
   resolveChatCompletionsUrl,
@@ -1188,12 +1189,26 @@ describe("prompt structure", () => {
     expect(prompt).toContain("Source language: en. Target language: zh-CN.");
   });
 
-  it("keeps the summary prompt language-aware", () => {
-    const prompt = buildSummarySystemPrompt("en", "zh-CN");
-    expect(prompt).toContain(
+  it("writes the summary and review in the configured output language", () => {
+    const summary = buildSummarySystemPrompt("en", "zh-CN");
+    expect(summary).toContain(
       "Source language: en. Target language: zh-CN.",
     );
-    expect(prompt).toContain("Only include terms that actually appear");
+    expect(summary).toContain(
+      "Output language for the summary and translation guidance: zh-CN.",
+    );
+    expect(
+      buildSummarySystemPrompt("en", "zh-CN", "ja-JP"),
+    ).toContain(
+      "Output language for the summary and translation guidance: ja-JP.",
+    );
+    expect(summary).toContain("Only include terms that actually appear");
+
+    const review = buildReviewSystemPrompt("en", "zh-CN", "ja-JP");
+    expect(review).toContain(
+      "Write annotation messages, questions, and suggestions in ja-JP",
+    );
+    expect(review).toContain("keep sourceExcerpt and targetExcerpt verbatim");
   });
 });
 

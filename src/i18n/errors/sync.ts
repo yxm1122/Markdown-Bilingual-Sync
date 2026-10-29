@@ -45,6 +45,11 @@ export const SYNC_ERRORS = [
     zh: "译文语言设置“{language}”不是有效的 BCP-47 标签（如 zh-CN、ja-JP）。",
   },
   {
+    key: "sync.invalidAssistantLanguage",
+    en: "Document brief/review language “{language}” is not valid. Use target, source, or a BCP-47 tag such as zh-CN.",
+    zh: "文档简报/审校语言“{language}”无效。请使用 target、source 或 zh-CN 这类 BCP-47 标签。",
+  },
+  {
     key: "sync.sameLanguage",
     en: "Source and target languages are the same. Update the targetLanguage setting.",
     zh: "原文语言与译文语言相同，请修改 targetLanguage 设置。",

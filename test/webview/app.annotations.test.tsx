@@ -97,6 +97,53 @@ describe("block annotations", () => {
     });
   });
 
+  it("groups AI and user annotations and keeps the popover open on scroll", () => {
+    const text = harness.text.preview.annotations;
+    const { container } = renderWithAnnotation([
+      annotation(),
+      annotation({
+        id: "u1",
+        author: "user",
+        kind: "note",
+        message: "My note",
+      }),
+    ]);
+    fireEvent.click(
+      within(container).getByLabelText(
+        fmt(text.openCount, { count: 2 }),
+      ) as HTMLElement,
+    );
+    const dialog = screen.getByRole("dialog", { name: text.title });
+    const meta = dialog.querySelector(".pv-annotation-meta") as HTMLElement;
+    expect(meta.querySelector(".pv-annotation-tags")).toBeTruthy();
+    expect(
+      meta.querySelector(".pv-annotation-side-label")?.textContent,
+    ).toContain("译文");
+    expect(
+      dialog.querySelector(".pv-annotation-meta .pv-annotation-side"),
+    ).toBeNull();
+    const aiHead = within(dialog).getByText(text.ai).closest(
+      "button",
+    ) as HTMLButtonElement;
+    const userHead = within(dialog).getByText(text.user).closest(
+      "button",
+    ) as HTMLButtonElement;
+    expect(aiHead.getAttribute("aria-expanded")).toBe("true");
+    expect(userHead.getAttribute("aria-expanded")).toBe("true");
+
+    fireEvent.click(aiHead);
+    expect(aiHead.getAttribute("aria-expanded")).toBe("false");
+    expect(
+      within(dialog).queryByText(
+        "Verify whether “bite” means business impact.",
+      ),
+    ).toBeNull();
+    expect(within(dialog).getByText("My note")).toBeTruthy();
+
+    fireEvent.scroll(window);
+    expect(screen.getByRole("dialog", { name: text.title })).toBeTruthy();
+  });
+
   it("focuses the composer and returns focus to the badge on close", async () => {
     const text = harness.text.preview.annotations;
     const { container } = renderWithAnnotation();
@@ -217,23 +264,14 @@ describe("block annotations", () => {
     });
   });
 
-  it("triggers a file-level review from the toolbar menu", () => {
+  it("triggers a file-level review from the toolbar", () => {
     const { container } = renderWithAnnotation([]);
     const toolbar = container.querySelector(".pv-toolbar") as HTMLElement;
     fireEvent.click(
-      within(toolbar).getByLabelText(
-        harness.text.preview.toolbar.moreActions,
-      ) as HTMLElement,
+      within(toolbar).getByRole("button", {
+        name: harness.text.preview.toolbar.reviewMachine,
+      }),
     );
-    const item = screen
-      .getAllByRole("menuitem")
-      .find((node) =>
-        node.textContent?.includes(
-          harness.text.preview.toolbar.reviewMachine,
-        ),
-      );
-    expect(item).toBeTruthy();
-    fireEvent.click(item!);
     expect(actions(harness)).toContainEqual({
       type: "reviewMachineBlocks",
     });

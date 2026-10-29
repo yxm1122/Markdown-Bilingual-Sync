@@ -158,6 +158,7 @@ function Icon({ name, size }: { name: string; size?: number }) {
 function Button(props: {
   children?: ComponentChildren;
   primary?: boolean;
+  className?: string;
   disabled?: boolean;
   title?: string;
   onClick?: (event: MouseEvent) => void;
@@ -165,7 +166,9 @@ function Button(props: {
   return (
     <button
       type="button"
-      class={`pv-button${props.primary ? " is-primary" : ""}`}
+      class={`pv-button${props.primary ? " is-primary" : ""}${
+        props.className ? ` ${props.className}` : ""
+      }`}
       disabled={props.disabled}
       title={props.title}
       onClick={props.onClick}
@@ -398,6 +401,163 @@ function annotationKindLabel(
   }
 }
 
+function AnnotationItem(props: {
+  annotation: AnnotationView;
+  text: UiCatalog;
+  busy: boolean;
+  onStatus: (
+    annotationId: string,
+    status: "open" | "resolved" | "dismissed",
+  ) => void;
+  onDelete: (annotationId: string) => void;
+}) {
+  const { annotation, text } = props;
+  const actions = (
+    <span class="pv-annotation-actions">
+      {annotation.status === "open" ? (
+        <>
+          <button
+            type="button"
+            class="pv-link"
+            disabled={props.busy}
+            onClick={() => props.onStatus(annotation.id, "resolved")}
+          >
+            {text.preview.annotations.resolve}
+          </button>
+          <button
+            type="button"
+            class="pv-link"
+            disabled={props.busy}
+            onClick={() => props.onStatus(annotation.id, "dismissed")}
+          >
+            {text.preview.annotations.dismiss}
+          </button>
+        </>
+      ) : (
+        <button
+          type="button"
+          class="pv-link"
+          disabled={props.busy}
+          onClick={() => props.onStatus(annotation.id, "open")}
+        >
+          {text.preview.annotations.reopen}
+        </button>
+      )}
+      <button
+        type="button"
+        class="pv-link is-danger"
+        disabled={props.busy}
+        onClick={() => props.onDelete(annotation.id)}
+      >
+        {text.preview.annotations.delete}
+      </button>
+    </span>
+  );
+  return (
+    <article
+      class={`pv-annotation${
+        annotation.status !== "open" ? " is-closed" : ""
+      }`}
+    >
+      <div class="pv-annotation-meta">
+        <span class="pv-annotation-tags">
+          <span class="pv-annotation-kind">
+            {annotationKindLabel(annotation, text)}
+          </span>
+          <span class="pv-annotation-separator" aria-hidden="true">
+            ·
+          </span>
+          <span class="pv-annotation-side-label">
+            {annotation.side === "source"
+              ? text.preview.panes.source
+              : text.preview.panes.target}
+          </span>
+          {annotation.author === "ai" ? (
+            <span
+              class={`pv-annotation-severity is-${annotation.severity}`}
+            >
+              {annotation.severity === "check"
+                ? text.preview.annotations.severityCheck
+                : text.preview.annotations.severityInfo}
+            </span>
+          ) : null}
+          {annotation.stale ? (
+            <span
+              class="pv-annotation-stale"
+              title={text.preview.annotations.stale}
+            >
+              !
+            </span>
+          ) : null}
+        </span>
+        {actions}
+      </div>
+      <p class="pv-annotation-message">{annotation.message}</p>
+      {annotation.question || annotation.suggestion ? (
+        <details class="pv-annotation-details">
+          <summary>{text.preview.annotations.details}</summary>
+          {annotation.question ? (
+            <p class="pv-annotation-question">{annotation.question}</p>
+          ) : null}
+          {annotation.suggestion ? (
+            <p class="pv-annotation-suggestion">
+              {annotation.suggestion}
+            </p>
+          ) : null}
+        </details>
+      ) : null}
+    </article>
+  );
+}
+
+function AnnotationGroup(props: {
+  title: string;
+  annotations: readonly AnnotationView[];
+  open: boolean;
+  onToggle: () => void;
+  text: UiCatalog;
+  busy: boolean;
+  onStatus: (
+    annotationId: string,
+    status: "open" | "resolved" | "dismissed",
+  ) => void;
+  onDelete: (annotationId: string) => void;
+}) {
+  if (props.annotations.length === 0) {
+    return null;
+  }
+  return (
+    <section class={`pv-annotation-group${props.open ? " is-open" : ""}`}>
+      <button
+        type="button"
+        class="pv-annotation-group-head"
+        aria-expanded={props.open}
+        onClick={props.onToggle}
+      >
+        <Icon name="chevron-down" />
+        <span class="pv-annotation-group-title">{props.title}</span>
+        <span class="pv-annotation-group-count">
+          {props.annotations.length}
+        </span>
+      </button>
+      {props.open ? (
+        <div class="pv-annotation-group-body">
+          {props.annotations.map((annotation) => (
+            <AnnotationItem
+              key={annotation.id}
+              annotation={annotation}
+              text={props.text}
+              busy={props.busy}
+              onStatus={props.onStatus}
+              onDelete={props.onDelete}
+            />
+          ))}
+        </div>
+      ) : null}
+    </section>
+  );
+}
+
 function AnnotationPopover(props: {
   target: AnnotationTarget;
   block: PreviewBlockView;
@@ -425,12 +585,23 @@ function AnnotationPopover(props: {
     left: props.target.x,
     top: props.target.y,
   });
+  const positionRef = useRef(position);
+  positionRef.current = position;
+  const customPositionRef = useRef(false);
+  const dragRef = useRef<{
+    startX: number;
+    startY: number;
+    left: number;
+    top: number;
+  } | null>(null);
+  const [dragging, setDragging] = useState(false);
   const [draft, setDraft] = useState("");
   const [pendingMessage, setPendingMessage] = useState<string | null>(null);
   const [requestChange, setRequestChange] = useState(false);
   const [side, setSide] = useState<"source" | "target">(
     props.block.targetRaw.trim() ? "target" : "source",
   );
+  const [openGroups, setOpenGroups] = useState({ ai: true, user: true });
 
   useLayoutEffect(() => {
     const node = ref.current;
@@ -439,6 +610,20 @@ function AnnotationPopover(props: {
     }
     const place = () => {
       const rect = node.getBoundingClientRect();
+      if (customPositionRef.current) {
+        const current = positionRef.current;
+        setPosition({
+          left: Math.min(
+            Math.max(4, window.innerWidth - rect.width - 4),
+            Math.max(4, current.left),
+          ),
+          top: Math.min(
+            Math.max(4, window.innerHeight - rect.height - 4),
+            Math.max(4, current.top),
+          ),
+        });
+        return;
+      }
       let left = props.target.x - rect.width;
       let top = props.target.y;
       if (left < 4) {
@@ -519,26 +704,83 @@ function AnnotationPopover(props: {
         props.onClose();
       }
     };
-    const onScroll = (event: Event) => {
-      if (event.target instanceof Node && ref.current?.contains(event.target)) {
-        return;
-      }
-      props.onClose();
-    };
     document.addEventListener("mousedown", onPointerDown);
     document.addEventListener("keydown", onKeyDown);
-    window.addEventListener("scroll", onScroll, true);
     return () => {
       document.removeEventListener("mousedown", onPointerDown);
       document.removeEventListener("keydown", onKeyDown);
-      window.removeEventListener("scroll", onScroll, true);
     };
   }, [props.onClose]);
+
+  const startDrag = (event: JSX.TargetedPointerEvent<HTMLElement>) => {
+    if (event.button !== 0) {
+      return;
+    }
+    const target = event.target as HTMLElement | null;
+    if (target?.closest("button, input, select, textarea, a")) {
+      return;
+    }
+    const node = ref.current;
+    if (!node) {
+      return;
+    }
+    const rect = node.getBoundingClientRect();
+    dragRef.current = {
+      startX: event.clientX,
+      startY: event.clientY,
+      left: rect.left,
+      top: rect.top,
+    };
+    customPositionRef.current = true;
+    setDragging(true);
+    try {
+      event.currentTarget.setPointerCapture(event.pointerId);
+    } catch {
+      // 合成事件或指针已释放时允许继续拖动。
+    }
+    event.preventDefault();
+  };
+  const moveDrag = (event: JSX.TargetedPointerEvent<HTMLElement>) => {
+    const drag = dragRef.current;
+    const node = ref.current;
+    if (!drag || !node) {
+      return;
+    }
+    const rect = node.getBoundingClientRect();
+    setPosition({
+      left: Math.min(
+        Math.max(4, window.innerWidth - rect.width - 4),
+        Math.max(4, drag.left + event.clientX - drag.startX),
+      ),
+      top: Math.min(
+        Math.max(4, window.innerHeight - rect.height - 4),
+        Math.max(4, drag.top + event.clientY - drag.startY),
+      ),
+    });
+  };
+  const endDrag = (event: JSX.TargetedPointerEvent<HTMLElement>) => {
+    if (!dragRef.current) {
+      return;
+    }
+    dragRef.current = null;
+    setDragging(false);
+    try {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    } catch {
+      // 指针已释放时忽略。
+    }
+  };
 
   const annotations = [...(props.block.annotations ?? [])].sort(
     (left, right) =>
       (left.status === "open" ? 0 : 1) -
       (right.status === "open" ? 0 : 1),
+  );
+  const aiAnnotations = annotations.filter(
+    (annotation) => annotation.author === "ai",
+  );
+  const userAnnotations = annotations.filter(
+    (annotation) => annotation.author === "user",
   );
   const openUserAnnotations = annotations.some(
     (annotation) =>
@@ -556,13 +798,22 @@ function AnnotationPopover(props: {
   return (
     <div
       ref={ref}
-      class="pv-annotations"
+      class={`pv-annotations${dragging ? " is-dragging" : ""}`}
       role="dialog"
       aria-label={text.preview.annotations.title}
       style={{ left: `${position.left}px`, top: `${position.top}px` }}
       onMouseDown={(event) => event.stopPropagation()}
     >
-      <header class="pv-annotations-head">
+      <header
+        class="pv-annotations-head"
+        onPointerDown={startDrag}
+        onPointerMove={moveDrag}
+        onPointerUp={endDrag}
+        onPointerCancel={endDrag}
+      >
+        <span class="pv-annotations-grip" aria-hidden="true">
+          <Icon name="grabber" />
+        </span>
         <Icon name="comment-discussion" />
         <span class="pv-annotations-title">{text.preview.annotations.title}</span>
         <span class="pv-annotations-block">
@@ -584,92 +835,36 @@ function AnnotationPopover(props: {
           <p class="pv-annotations-empty">{text.preview.annotations.empty}</p>
         ) : (
           <div class="pv-annotation-list">
-            {annotations.map((annotation) => (
-              <article
-                class={`pv-annotation${annotation.status !== "open" ? " is-closed" : ""}`}
-                key={annotation.id}
-              >
-                <div class="pv-annotation-meta">
-                  <span
-                    class={`pv-annotation-author is-${annotation.author}`}
-                  >
-                    {annotation.author === "ai" ? text.preview.annotations.ai : text.preview.annotations.user}
-                  </span>
-                  <span>{annotationKindLabel(annotation, props.text)}</span>
-                  <span class="pv-annotation-side">
-                    {annotation.side === "source"
-                      ? props.text.preview.panes.source
-                      : props.text.preview.panes.target}
-                  </span>
-                  {annotation.author === "ai" ? (
-                    <span
-                      class={`pv-annotation-severity is-${annotation.severity}`}
-                    >
-                      {annotation.severity === "check"
-                        ? text.preview.annotations.severityCheck
-                        : text.preview.annotations.severityInfo}
-                    </span>
-                  ) : null}
-                  {annotation.stale ? (
-                    <span class="pv-annotation-stale" title={text.preview.annotations.stale}>
-                      !
-                    </span>
-                  ) : null}
-                </div>
-                <p class="pv-annotation-message">{annotation.message}</p>
-                {annotation.question ? (
-                  <p class="pv-annotation-question">{annotation.question}</p>
-                ) : null}
-                {annotation.suggestion ? (
-                  <p class="pv-annotation-suggestion">
-                    {annotation.suggestion}
-                  </p>
-                ) : null}
-                <div class="pv-annotation-actions">
-                  {annotation.status === "open" ? (
-                    <>
-                      <button
-                        type="button"
-                        class="pv-link"
-                        disabled={props.busy}
-                        onClick={() =>
-                          props.onStatus(annotation.id, "resolved")
-                        }
-                      >
-                        {text.preview.annotations.resolve}
-                      </button>
-                      <button
-                        type="button"
-                        class="pv-link"
-                        disabled={props.busy}
-                        onClick={() =>
-                          props.onStatus(annotation.id, "dismissed")
-                        }
-                      >
-                        {text.preview.annotations.dismiss}
-                      </button>
-                    </>
-                  ) : (
-                    <button
-                      type="button"
-                      class="pv-link"
-                      disabled={props.busy}
-                      onClick={() => props.onStatus(annotation.id, "open")}
-                    >
-                      {text.preview.annotations.reopen}
-                    </button>
-                  )}
-                  <button
-                    type="button"
-                    class="pv-link is-danger"
-                    disabled={props.busy}
-                    onClick={() => props.onDelete(annotation.id)}
-                  >
-                    {text.preview.annotations.delete}
-                  </button>
-                </div>
-              </article>
-            ))}
+            <AnnotationGroup
+              title={text.preview.annotations.ai}
+              annotations={aiAnnotations}
+              open={openGroups.ai}
+              onToggle={() =>
+                setOpenGroups((current) => ({
+                  ...current,
+                  ai: !current.ai,
+                }))
+              }
+              text={text}
+              busy={props.busy}
+              onStatus={props.onStatus}
+              onDelete={props.onDelete}
+            />
+            <AnnotationGroup
+              title={text.preview.annotations.user}
+              annotations={userAnnotations}
+              open={openGroups.user}
+              onToggle={() =>
+                setOpenGroups((current) => ({
+                  ...current,
+                  user: !current.user,
+                }))
+              }
+              text={text}
+              busy={props.busy}
+              onStatus={props.onStatus}
+              onDelete={props.onDelete}
+            />
           </div>
         )}
         <div class="pv-annotation-compose">
@@ -701,7 +896,7 @@ function AnnotationPopover(props: {
               {text.preview.annotations.requestChange}
             </label>
             <select
-              class="pv-input pv-annotation-side"
+              class="pv-input pv-annotation-side-select"
               aria-label={text.preview.annotations.side}
               value={side}
               disabled={props.busy}
@@ -756,6 +951,7 @@ function Toolbar(props: {
   text: UiCatalog;
   busy: boolean;
   onSync: () => void;
+  onReview: () => void;
   onExport: () => void;
   onRefresh: () => void;
   toolbarMenu: (event: MouseEvent) => void;
@@ -776,6 +972,21 @@ function Toolbar(props: {
         <Button primary disabled={busy} onClick={props.onSync}>
           <Icon name="sync" size={14} />
           {text.preview.toolbar.sync}
+        </Button>
+        <Button
+          className="pv-review-action"
+          disabled={busy || !model.cacheExists || !model.reviewSupported}
+          title={
+            !model.cacheExists
+              ? text.preview.toolbar.exportDisabledTitle
+              : !model.reviewSupported
+                ? text.preview.toolbar.reviewUnsupportedTitle
+                : undefined
+          }
+          onClick={props.onReview}
+        >
+          <Icon name="comment-discussion" size={14} />
+          {text.preview.toolbar.reviewMachine}
         </Button>
         <Button
           disabled={busy || !model.cacheExists}
@@ -3624,15 +3835,6 @@ export function App(props: { boot: BootData; text: UiCatalog }) {
         onSelect: () => sendMessage({ type: "checkConsistency" }),
       },
       {
-        label: text.preview.toolbar.reviewMachine,
-        icon: "comment-discussion",
-        disabled:
-          !host.model.cacheExists ||
-          busy ||
-          !host.model.reviewSupported,
-        onSelect: () => sendMessage({ type: "reviewMachineBlocks" }),
-      },
-      {
         label: text.preview.toolbar.refresh,
         icon: "refresh",
         disabled: busy,
@@ -3772,6 +3974,7 @@ export function App(props: { boot: BootData; text: UiCatalog }) {
         text={text}
         busy={busy}
         onSync={() => sendMessage({ type: "sync" })}
+        onReview={() => sendMessage({ type: "reviewMachineBlocks" })}
         onExport={() => sendMessage({ type: "export" })}
         onRefresh={() => sendMessage({ type: "refresh" })}
         toolbarMenu={toolbarMenu}

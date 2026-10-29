@@ -2,7 +2,7 @@
   "name": "markdown-bilingual-sync",
   "displayName": "%displayName%",
   "description": "%description%",
-  "version": "0.14.0",
+  "version": "0.14.1",
   "publisher": "yxm1122",
   "license": "MIT",
   "repository": {
@@ -576,6 +576,13 @@
           ],
           "description": "%configuration.supportedLanguages.description%",
           "order": 32
+        },
+        "markdownBilingualSync.assistantLanguage": {
+          "type": "string",
+          "scope": "application",
+          "default": "target",
+          "description": "%configuration.assistantLanguage.description%",
+          "order": 33
         },
         "markdownBilingualSync.stableTranslation": {
           "type": "boolean",

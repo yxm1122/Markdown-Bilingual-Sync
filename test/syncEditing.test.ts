@@ -7,6 +7,7 @@ import { parseMarkdownDocument } from "../src/markdown/segmenter";
 import type { CacheStore } from "../src/cache/cacheStore";
 import type { GlossaryStore } from "../src/glossary/glossaryStore";
 import type {
+  SummaryRequest,
   TranslationBrief,
   TranslationProvider,
   TranslationRequest,
@@ -34,6 +35,7 @@ const mocks = vi.hoisted(() => {
   }
 
   const documentState = { text: "" };
+  const settings = { assistantLanguage: "target" };
   const document = {
     uri: FakeUri.file("/project/demo.md"),
     getText: () => documentState.text,
@@ -53,6 +55,9 @@ const mocks = vi.hoisted(() => {
             }
             if (key === "targetLanguage") {
               return "zh-CN";
+            }
+            if (key === "assistantLanguage") {
+              return settings.assistantLanguage;
             }
             return fallback;
           },
@@ -79,7 +84,7 @@ const mocks = vi.hoisted(() => {
     Uri: FakeUri,
   };
 
-  return { vscode, FakeUri, documentState };
+  return { vscode, FakeUri, documentState, settings };
 });
 
 // 展开全局 stub 保留 l10n/env；FakeUri 等本文件所需 API 覆盖 stub 实现。
@@ -116,14 +121,17 @@ describe("SyncService block editing and back-translation", () => {
   let service: SyncService;
   let cacheStore: FakeCacheStore;
   let requests: TranslationRequest[];
+  let summaryRequests: SummaryRequest[];
   let summaryBrief: TranslationBrief | undefined;
 
   beforeEach(async () => {
     mocks.documentState.text = SOURCE;
+    mocks.settings.assistantLanguage = "target";
     const result = await translate();
     cacheStore = new FakeCacheStore();
     cacheStore.text = result.cacheText;
     requests = [];
+    summaryRequests = [];
     summaryBrief = {
       audience: "Developers",
       toneAndStyle: "Concise technical prose",
@@ -143,6 +151,7 @@ describe("SyncService block editing and back-translation", () => {
         }));
       },
       async summarize(summaryRequest) {
+        summaryRequests.push(summaryRequest);
         return {
           summary: `摘要：${summaryRequest.text.split("\n")[0]}`,
           glossary: [{ source: "summary", target: "摘要" }],
@@ -768,6 +777,7 @@ describe("SyncService block editing and back-translation", () => {
       audience: "Developers",
       toneAndStyle: "Concise technical prose",
     });
+    expect(summaryRequests[0].outputLanguage).toBe("zh-CN");
     // 缓存持久化稳定 provider id，而不是随界面语言变化的显示名。
     expect(generated?.model).toBe("test");
 
@@ -776,6 +786,13 @@ describe("SyncService block editing and back-translation", () => {
     expect(requests[0].summary).toContain("摘要：");
     expect(requests[0].brief).toEqual(generated?.brief);
     expect(cacheStore.text).toContain("mbs-summary:");
+  });
+
+  it("uses the configured assistant language for the summary", async () => {
+    const uri = mocks.FakeUri.file("/project/demo.md") as unknown as Uri;
+    mocks.settings.assistantLanguage = "ja-JP";
+    await service.generateSummary(uri);
+    expect(summaryRequests[0].outputLanguage).toBe("ja-JP");
   });
 
   it("saves a document brief and sends it with later requests", async () => {

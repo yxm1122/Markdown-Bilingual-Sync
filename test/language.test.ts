@@ -2,7 +2,10 @@
 import { readFileSync } from "node:fs";
 import * as path from "node:path";
 import { describe, expect, it } from "vitest";
-import { isSupportedLanguageId } from "../src/util/language";
+import {
+  isSupportedLanguageId,
+  resolveAssistantLanguage,
+} from "../src/util/language";
 
 describe("supported editor languages", () => {
   it("accepts Markdown and skill language IDs", () => {
@@ -31,6 +34,42 @@ describe("supported editor languages", () => {
       expect(when).toContain("editorLangId == markdown");
       expect(when).toContain("editorLangId == skill");
     }
+  });
+
+  it("resolves the shared brief/review output language", () => {
+    expect(resolveAssistantLanguage("target", "en", "zh-CN")).toBe("zh-CN");
+    expect(resolveAssistantLanguage("source", "en", "zh-CN")).toBe("en");
+    expect(resolveAssistantLanguage("ja-JP", "en", "zh-CN")).toBe("ja-JP");
+    expect(resolveAssistantLanguage("", "en", "zh-CN")).toBe("zh-CN");
+    expect(resolveAssistantLanguage(undefined, "en", "zh-CN")).toBe("zh-CN");
+    expect(() =>
+      resolveAssistantLanguage("zh_CN", "en", "zh-CN"),
+    ).toThrow(/文档简报/);
+  });
+
+  it("declares the assistant language setting", () => {
+    const manifest = JSON.parse(
+      readFileSync(path.join(process.cwd(), "package.json"), "utf8"),
+    ) as {
+      contributes: {
+        configuration: {
+          properties: Record<
+            string,
+            { type: string; default?: unknown; order?: number; scope?: string }
+          >;
+        };
+      };
+    };
+    expect(
+      manifest.contributes.configuration.properties[
+        "markdownBilingualSync.assistantLanguage"
+      ],
+    ).toMatchObject({
+      type: "string",
+      default: "target",
+      order: 33,
+      scope: "application",
+    });
   });
 
   it("declares the task panel supported languages setting", () => {
