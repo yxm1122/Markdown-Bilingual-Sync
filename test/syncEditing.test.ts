@@ -7,6 +7,7 @@ import { parseMarkdownDocument } from "../src/markdown/segmenter";
 import type { CacheStore } from "../src/cache/cacheStore";
 import type { GlossaryStore } from "../src/glossary/glossaryStore";
 import type {
+  GlossaryEntry,
   SummaryRequest,
   TranslationBrief,
   TranslationProvider,
@@ -138,6 +139,7 @@ describe("SyncService block editing and back-translation", () => {
   let requests: TranslationRequest[];
   let summaryRequests: SummaryRequest[];
   let summaryBrief: TranslationBrief | undefined;
+  let summaryGlossary: GlossaryEntry[] | undefined;
 
   beforeEach(async () => {
     mocks.documentState.text = SOURCE;
@@ -151,6 +153,7 @@ describe("SyncService block editing and back-translation", () => {
       audience: "Developers",
       toneAndStyle: "Concise technical prose",
     };
+    summaryGlossary = [{ source: "summary", target: "摘要" }];
     const provider: TranslationProvider = {
       id: "batch:test",
       label: "Test",
@@ -169,7 +172,7 @@ describe("SyncService block editing and back-translation", () => {
         summaryRequests.push(summaryRequest);
         return {
           summary: `摘要：${summaryRequest.text.split("\n")[0]}`,
-          glossary: [{ source: "summary", target: "摘要" }],
+          glossary: summaryGlossary ?? [],
           ...(summaryBrief ? { brief: summaryBrief } : {}),
         };
       },
@@ -803,6 +806,53 @@ describe("SyncService block editing and back-translation", () => {
     expect(cacheStore.text).toContain("mbs-summary:");
   });
 
+  it("keeps existing glossary entries when generation fills the cap", async () => {
+    const uri = mocks.FakeUri.file("/project/demo.md") as unknown as Uri;
+    const existing = Array.from({ length: 3 }, (_, index) => ({
+      source: `keep-${index}`,
+      target: `保留-${index}`,
+    }));
+    await service.saveBrief(uri, {
+      text: "旧摘要",
+      glossary: existing,
+    });
+    summaryGlossary = [
+      ...existing.map((entry, index) => ({
+        source: entry.source,
+        target: `生成覆盖-${index}`,
+      })),
+      ...Array.from({ length: 200 }, (_, index) => ({
+        source: `new-${index}`,
+        target: `新-${index}`,
+      })),
+    ];
+
+    const text = await service.generateSummary(uri);
+    const glossary =
+      parseCacheDocument(text, makeMd()).summary?.glossary ?? [];
+    expect(glossary).toHaveLength(200);
+    expect(glossary.slice(0, 3)).toEqual(existing);
+    expect(glossary.some((entry) => entry.source === "new-196")).toBe(true);
+    expect(glossary.some((entry) => entry.source === "new-197")).toBe(false);
+  });
+
+  it("prefixes the workspace folder name in multi-root workspaces", async () => {
+    const uri = mocks.FakeUri.file("/project/demo.md") as unknown as Uri;
+    mocks.vscode.workspace.workspaceFolders.push({
+      uri: mocks.FakeUri.file("/other"),
+      name: "other",
+      index: 1,
+    });
+    try {
+      await service.generateSummary(uri);
+      expect(
+        summaryRequests[0].documentMetadata?.relativePath,
+      ).toBe("project/demo.md");
+    } finally {
+      mocks.vscode.workspace.workspaceFolders.pop();
+    }
+  });
+
   it("passes whitelisted frontmatter and the relative path to the summary", async () => {
     const uri = mocks.FakeUri.file("/project/demo.md") as unknown as Uri;
     mocks.documentState.text = [
@@ -971,8 +1021,8 @@ describe("SyncService block editing and back-translation", () => {
     const regenerated = await service.generateSummary(uri);
     const summary = parseCacheDocument(regenerated, makeMd()).summary;
     expect(summary?.glossary).toEqual([
-      { source: "summary", target: "摘要" },
       { source: "custom", target: "自定义" },
+      { source: "summary", target: "摘要" },
     ]);
   });
 

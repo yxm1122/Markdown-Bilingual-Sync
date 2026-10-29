@@ -53,6 +53,35 @@ describe("document metadata", () => {
     });
   });
 
+  it("preserves literal blocks, apostrophes, and ignores YAML forms", () => {
+    const raw = [
+      "---",
+      "description: |",
+      "  How API keys",
+      "  work.",
+      "  # literal line",
+      "name: |2",
+      "  Literal name",
+      "tags: [don't, api]",
+      "audience: &anchor backend developers",
+      "product: *alias",
+      "project: null",
+      "version: {}",
+      "---",
+    ].join("\n");
+
+    expect(parseFrontmatterMetadata(raw)).toEqual({
+      description: "How API keys\nwork.\n# literal line",
+      name: "Literal name",
+      tags: ["don't", "api"],
+    });
+    expect(
+      parseFrontmatterMetadata(
+        "---\ndescription: Developer's guide # internal\n---",
+      ),
+    ).toEqual({ description: "Developer's guide" });
+  });
+
   it("caps values, drops unsupported nested data, and normalizes paths", () => {
     const raw = [
       "---",
@@ -69,6 +98,13 @@ describe("document metadata", () => {
     expect(metadata.tags).toHaveLength(10);
     expect(metadata.relativePath).toBe("docs/guide/auth.md");
     expect(metadata).not.toHaveProperty("nested");
+
+    const deepPath = buildDocumentMetadata(
+      undefined,
+      "a/b/c/d/e/f/g/h/i/file.md",
+    )!;
+    expect(deepPath.relativePath).toMatch(/^\.\.\.\//);
+    expect(deepPath.relativePath).toContain("file.md");
   });
 
   it("returns path-only metadata and strips frontmatter from summary text", () => {

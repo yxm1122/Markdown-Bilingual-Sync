@@ -1851,11 +1851,32 @@ export class SyncService {
     return this.writeSummary(state, {
       text,
       model: this.provider.id.replace(/^batch:/, ""),
-      glossary: mergeGlossaryEntries([result.glossary, existingGlossary]),
+      glossary: this.mergeGeneratedGlossary(
+        existingGlossary,
+        result.glossary,
+      ),
       brief: hasTranslationBrief(generatedBrief)
         ? generatedBrief
         : existingCache.summary?.brief,
     });
+  }
+
+  /** 合并生成术语：已有条目优先保留，生成条目只填剩余槽位。 */
+  private mergeGeneratedGlossary(
+    existing: readonly GlossaryEntry[],
+    generated: readonly GlossaryEntry[],
+  ): GlossaryEntry[] {
+    const existingSources = new Set(
+      existing.map((entry) => entry.source.toLowerCase()),
+    );
+    const capacity = Math.max(
+      0,
+      MAX_DOCUMENT_GLOSSARY_ENTRIES - existing.length,
+    );
+    const additions = generated
+      .filter((entry) => !existingSources.has(entry.source.toLowerCase()))
+      .slice(0, capacity);
+    return [...existing, ...additions];
   }
 
   /** 保存用户在预览中编辑的摘要；保留随摘要生成的文档术语表。 */

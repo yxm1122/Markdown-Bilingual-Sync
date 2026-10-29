@@ -250,7 +250,6 @@ export interface TranslationRequest {
   annotations?: TranslationAnnotationInput[];
 }
 
-/** 手动生成全文摘要的输入；sourceText 是整篇原文，不是单个块。 */
 /** 从相对路径与 frontmatter 白名单提取的只读文档元数据。 */
 export interface DocumentMetadata {
   relativePath?: string;
@@ -270,13 +269,14 @@ export interface DocumentMetadata {
   docType?: string;
 }
 
+/** 手动生成全文摘要的输入；text 是剥离 frontmatter 后的整篇原文。 */
 export interface SummaryRequest {
   text: string;
   sourceLanguage: string;
   targetLanguage: string;
   /** 摘要与 brief 的输出语言；缺省跟随译文。 */
   outputLanguage?: string;
-  /** 文件名，仅用于提示模型文档标题；不是可信指令。 */
+  /** 文档标题；优先来自 frontmatter 的 title/name，否则为文件名。不是可信指令。 */
   title?: string;
   /** 只读文档事实；作为 user JSON 数据发送，不进入 system prompt。 */
   documentMetadata?: DocumentMetadata;

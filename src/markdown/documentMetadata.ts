@@ -57,28 +57,35 @@ function capString(value: string, limit: number): string | undefined {
 }
 
 function unquote(value: string): string {
-  if (
-    value.length >= 2 &&
-    ((value.startsWith('"') && value.endsWith('"')) ||
-      (value.startsWith("'") && value.endsWith("'")))
-  ) {
+  if (value.length >= 2 && value.startsWith("'") && value.endsWith("'")) {
+    return value.slice(1, -1).replace(/''/g, "'").trim();
+  }
+  if (value.length >= 2 && value.startsWith('"') && value.endsWith('"')) {
     return value.slice(1, -1).trim();
   }
   return value.trim();
 }
 
-/** 去掉不在引号内的行内注释。 */
+function opensQuote(value: string, index: number): boolean {
+  return index === 0 || /[\s,\[]/.test(value[index - 1]);
+}
+
+/** 去掉不在引号内的行内注释；普通标量中的撇号不算引号。 */
 function stripInlineComment(value: string): string {
   let quote: string | null = null;
   for (let index = 0; index < value.length; index += 1) {
     const char = value[index];
     if (quote) {
+      if (quote === "'" && char === "'" && value[index + 1] === "'") {
+        index += 1;
+        continue;
+      }
       if (char === quote && value[index - 1] !== "\\") {
         quote = null;
       }
       continue;
     }
-    if (char === '"' || char === "'") {
+    if ((char === '"' || char === "'") && opensQuote(value, index)) {
       quote = char;
       continue;
     }
@@ -97,6 +104,11 @@ function parseInlineArray(value: string): string[] {
   for (let index = 0; index < body.length; index += 1) {
     const char = body[index];
     if (quote) {
+      if (quote === "'" && char === "'" && body[index + 1] === "'") {
+        current += "'";
+        index += 1;
+        continue;
+      }
       if (char === quote && body[index - 1] !== "\\") {
         quote = null;
       } else {
@@ -104,7 +116,7 @@ function parseInlineArray(value: string): string[] {
       }
       continue;
     }
-    if (char === '"' || char === "'") {
+    if ((char === '"' || char === "'") && current.trim() === "") {
       quote = char;
       continue;
     }
@@ -132,7 +144,11 @@ function setStringField(
   if (!limit) {
     return;
   }
-  const value = capString(stripInlineComment(unquote(raw)), limit);
+  const input = raw.trim();
+  if (/^(?:[&*{\[]|null$|~$)/i.test(input)) {
+    return;
+  }
+  const value = capString(stripInlineComment(unquote(input)), limit);
   if (value) {
     metadata[field as StringField] = value;
   }
@@ -145,8 +161,12 @@ function setListField(
 ): void {
   const values: string[] = [];
   for (const item of items) {
+    const input = item.trim();
+    if (/^(?:null|~)$/i.test(input)) {
+      continue;
+    }
     const value = capString(
-      stripInlineComment(unquote(item)),
+      stripInlineComment(unquote(input)),
       LIST_ITEM_LIMIT,
     );
     if (value && !values.includes(value)) {
@@ -166,8 +186,15 @@ function capRelativePath(value: string): string | undefined {
     .replace(/\\/g, "/")
     .replace(/^\.\/+/, "")
     .replace(/\/+/g, "/");
-  const tail = normalized.split("/").filter(Boolean).slice(-8).join("/");
-  return tail ? tail.slice(-200) : undefined;
+  const parts = normalized.split("/").filter(Boolean);
+  const tailParts = parts.slice(-8);
+  const truncated = parts.length > tailParts.length;
+  let tail = tailParts.join("/");
+  if (tail.length > 200) {
+    tail = tail.slice(-200);
+    return `.../${tail}`;
+  }
+  return tail ? (truncated ? `.../${tail}` : tail) : undefined;
 }
 
 interface PendingList {
@@ -179,6 +206,36 @@ interface PendingBlock {
   field: StringField;
   style: "|" | ">";
   lines: string[];
+}
+
+function renderBlock(block: PendingBlock): string {
+  if (block.style === "|") {
+    return block.lines.join("\n").replace(/^\n+|\n+$/g, "").trim();
+  }
+  const paragraphs: string[] = [];
+  let current: string[] = [];
+  const flushParagraph = () => {
+    if (current.length > 0) {
+      paragraphs.push(current.join(" "));
+      current = [];
+    }
+  };
+  for (const line of block.lines) {
+    const text = line.trim();
+    if (!text) {
+      flushParagraph();
+      if (
+        paragraphs.length > 0 &&
+        paragraphs[paragraphs.length - 1] !== ""
+      ) {
+        paragraphs.push("");
+      }
+      continue;
+    }
+    current.push(text);
+  }
+  flushParagraph();
+  return paragraphs.join("\n").replace(/\n{3,}/g, "\n\n").trim();
 }
 
 /** 解析 frontmatter 的顶层白名单字段；复杂/嵌套结构忽略。 */
@@ -212,11 +269,10 @@ export function parseFrontmatterMetadata(
       setListField(metadata, list.field, list.items);
     }
     if (block) {
-      const text = block.lines
-        .join(block.style === "|" ? "\n" : " ")
-        .replace(/\s+/g, block.style === "|" ? "\n" : " ")
-        .trim();
-      const value = capString(text, STRING_LIMITS[block.field]);
+      const value = capString(
+        renderBlock(block),
+        STRING_LIMITS[block.field],
+      );
       if (value) {
         metadata[block.field] = value;
       }
@@ -234,7 +290,14 @@ export function parseFrontmatterMetadata(
       }
       continue;
     }
+    if (block && /^\s+/.test(line)) {
+      block.lines.push(line.replace(/^\s+/, ""));
+      continue;
+    }
     if (/^\s*#/.test(line)) {
+      if (block) {
+        flush();
+      }
       continue;
     }
     const topLevel = /^([A-Za-z0-9_-]+):(.*)$/.exec(line);
@@ -249,7 +312,7 @@ export function parseFrontmatterMetadata(
         pendingKey = field;
         continue;
       }
-      const blockMatch = /^([|>])[+-]?$/.exec(rest);
+      const blockMatch = /^([|>])(?:[+-]?[0-9]?[+-]?)?$/.exec(rest);
       if (blockMatch) {
         const style = blockMatch[1] as "|" | ">";
         if (LIST_FIELDS.has(field as ListField)) {
@@ -269,11 +332,6 @@ export function parseFrontmatterMetadata(
         continue;
       }
       setStringField(metadata, field, rest);
-      continue;
-    }
-
-    if (block && /^\s+/.test(line)) {
-      block.lines.push(line.replace(/^\s+/, ""));
       continue;
     }
 

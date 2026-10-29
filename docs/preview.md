@@ -215,7 +215,7 @@ Webview 只通过 `vscode.postMessage` 与宿主通信。宿主在 `PreviewManag
 - 摘要 `textarea` 常驻；“翻译要求”和“文档术语表”是两个折叠区，初始都收起，且同一时间只展开一个。
 - “翻译要求”包含受众、语气与风格、歧义与决策、禁译项。
 - 摘要、brief 和审校批注共享 `assistantLanguage` 输出语言：`target`（默认，跟随译文）、`source`（跟随原文）或 BCP-47；文档术语表的 source/target 仍使用翻译语言对。
-- 生成摘要时读取白名单 frontmatter（`title`、`name`、`description`、`tags`、`keywords`、`categories`、`audience`、`product`、`project`、`version`、`locale`、`lang`、`type`、`docType`）和工作区相对路径，作为只读 `documentMetadata` 放在 user JSON；system prompt 只声明它是数据。原始 frontmatter 从摘要 `text` 中剥离，避免重复和注入。
+- 生成摘要时读取白名单 frontmatter（`title`、`name`、`description`、`tags`、`keywords`、`categories`、`audience`、`product`、`project`、`version`、`locale`、`lang`、`type`、`docType`）和工作区相对路径，作为只读 `documentMetadata` 放在 user JSON；system prompt 只声明它是数据，注入防护由该静态规则承担。原始 frontmatter 从摘要 `text` 中剥离，避免重复发送未列入白名单的字段。
 - 一个“保存简报”动作在一次锁内写摘要、brief 和术语表；术语表有格式错误或正在编辑术语时禁用保存。
 - 两个会话级开关：
   - `稳定翻译：参考上一版译文`：提示说明重译参考旧译文、回译参考当前原文，并明确与简报生成无关。
