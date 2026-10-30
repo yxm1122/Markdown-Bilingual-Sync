@@ -317,6 +317,10 @@ export const UI_TEXT = {
         "Effect is inferred from whether the target text changed.",
       unsupported:
         "The current provider does not read annotations; saving will not affect translation.",
+      cannotAnnotate:
+        "This block is not translated, so applicable annotations cannot be saved here.",
+      humanPendingHint:
+        "Locked translation: new annotations apply only after manually retranslating this block.",
       suggestedAnswerLabel: "Candidate answer",
       suggestionLabel: "Suggestion",
       adoptAnswer: "Use",

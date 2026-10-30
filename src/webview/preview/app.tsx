@@ -470,6 +470,7 @@ function AnnotationItem(props: {
   onUpdate: (annotationId: string, input: AnnotationUpdateInput) => void;
   onAdoptAnswer: (annotation: AnnotationView, answer: string) => void;
   onPrepareAnswer: (annotation: AnnotationView, text: string) => void;
+  canAnnotate: boolean;
 }) {
   const { annotation, text } = props;
   const [editing, setEditing] = useState(false);
@@ -735,7 +736,8 @@ function AnnotationItem(props: {
                     </span>
                     <p class="pv-annotation-answer-text">{answer}</p>
                     {annotation.author === "ai" &&
-                    annotation.status === "open" ? (
+                    annotation.status === "open" &&
+                    props.canAnnotate ? (
                       <div class="pv-annotation-answer-actions">
                         <button
                           type="button"
@@ -743,7 +745,7 @@ function AnnotationItem(props: {
                           disabled={props.busy}
                           aria-label={`${text.preview.annotations.adoptAnswer} ${
                             index + 1
-                          }`}
+                          }: ${answer.slice(0, 40)}`}
                           onClick={() =>
                             props.onAdoptAnswer(annotation, answer)
                           }
@@ -756,7 +758,7 @@ function AnnotationItem(props: {
                           disabled={props.busy}
                           aria-label={`${text.preview.annotations.editAnswer} ${
                             index + 1
-                          }`}
+                          }: ${answer.slice(0, 40)}`}
                           onClick={() =>
                             props.onPrepareAnswer(annotation, answer)
                           }
@@ -769,7 +771,8 @@ function AnnotationItem(props: {
                 ))}
               </div>
               {annotation.author === "ai" &&
-              annotation.status === "open" ? (
+              annotation.status === "open" &&
+              props.canAnnotate ? (
                 <button
                   type="button"
                   class="pv-link pv-annotation-answer-write"
@@ -783,7 +786,8 @@ function AnnotationItem(props: {
             </section>
           ) : annotation.author === "ai" &&
             annotation.question &&
-            annotation.status === "open" ? (
+            annotation.status === "open" &&
+            props.canAnnotate ? (
             <button
               type="button"
               class="pv-link pv-annotation-answer-write"
@@ -823,6 +827,7 @@ function AnnotationGroup(props: {
   onUpdate: (annotationId: string, input: AnnotationUpdateInput) => void;
   onAdoptAnswer: (annotation: AnnotationView, answer: string) => void;
   onPrepareAnswer: (annotation: AnnotationView, text: string) => void;
+  canAnnotate: boolean;
 }) {
   if (props.annotations.length === 0) {
     return null;
@@ -854,6 +859,7 @@ function AnnotationGroup(props: {
               onUpdate={props.onUpdate}
               onAdoptAnswer={props.onAdoptAnswer}
               onPrepareAnswer={props.onPrepareAnswer}
+              canAnnotate={props.canAnnotate}
             />
           ))}
         </div>
@@ -1112,8 +1118,16 @@ function AnnotationPopover(props: {
     Boolean(props.block.targetRaw.trim()) &&
     !props.block.standaloneTargetId &&
     !props.block.pendingInsertId;
+  const canAnnotate =
+    props.block.status !== "deleted" &&
+    !props.block.status.startsWith("copy");
+  const humanLocked =
+    props.block.human && props.block.status !== "deleted";
 
   const adoptAnswer = (annotation: AnnotationView, answer: string) => {
+    if (!canAnnotate) {
+      return;
+    }
     props.onSave({
       side: annotation.side,
       mode: "once",
@@ -1123,6 +1137,9 @@ function AnnotationPopover(props: {
     });
   };
   const prepareAnswer = (annotation: AnnotationView, text: string) => {
+    if (!canAnnotate) {
+      return;
+    }
     setAnswerOrigin(annotation);
     setDraft(text);
     setOnce(true);
@@ -1186,6 +1203,7 @@ function AnnotationPopover(props: {
               onUpdate={props.onUpdate}
               onAdoptAnswer={adoptAnswer}
               onPrepareAnswer={prepareAnswer}
+              canAnnotate={canAnnotate}
             />
             <AnnotationGroup
               title={text.preview.annotations.user}
@@ -1204,12 +1222,22 @@ function AnnotationPopover(props: {
               onUpdate={props.onUpdate}
               onAdoptAnswer={adoptAnswer}
               onPrepareAnswer={prepareAnswer}
+              canAnnotate={canAnnotate}
             />
           </div>
         )}
         {!props.annotationsSupported ? (
           <p class="pv-summary-note is-warning">
             {text.preview.annotations.unsupported}
+          </p>
+        ) : null}
+        {!canAnnotate ? (
+          <p class="pv-summary-note is-warning">
+            {text.preview.annotations.cannotAnnotate}
+          </p>
+        ) : humanLocked ? (
+          <p class="pv-summary-note">
+            {text.preview.annotations.humanPendingHint}
           </p>
         ) : null}
         <div class="pv-annotation-compose">
@@ -1236,7 +1264,7 @@ function AnnotationPopover(props: {
             spellcheck={false}
             aria-label={text.preview.annotations.add}
             placeholder={text.preview.annotations.placeholder}
-            disabled={props.busy}
+            disabled={props.busy || !canAnnotate}
             onInput={(event) => {
               setDraft(event.currentTarget.value);
               setPendingMessage(null);
@@ -1249,8 +1277,10 @@ function AnnotationPopover(props: {
             >
               <input
                 type="checkbox"
-                checked={once}
-                disabled={props.busy}
+                checked={answerOrigin ? true : once}
+                disabled={
+                  props.busy || !canAnnotate || Boolean(answerOrigin)
+                }
                 onChange={(event) => setOnce(event.currentTarget.checked)}
               />
               {text.preview.annotations.modeOnce}
@@ -1260,7 +1290,9 @@ function AnnotationPopover(props: {
               aria-label={text.preview.annotations.side}
               title={text.preview.annotations.sideHint}
               value={answerOrigin?.side ?? side}
-              disabled={props.busy || Boolean(answerOrigin)}
+              disabled={
+                props.busy || !canAnnotate || Boolean(answerOrigin)
+              }
               onChange={(event) =>
                 setSide(event.currentTarget.value as "source" | "target")
               }
@@ -1269,16 +1301,20 @@ function AnnotationPopover(props: {
               <option value="target">{props.text.preview.panes.target}</option>
             </select>
             <Button
-              disabled={props.busy || !draft.trim()}
+              disabled={props.busy || !draft.trim() || !canAnnotate}
               onClick={() => {
                 const message = draft.trim();
-                if (!message) {
+                if (!message || !canAnnotate) {
                   return;
                 }
                 setPendingMessage(message);
                 props.onSave({
                   side: answerOrigin?.side ?? side,
-                  mode: once ? "once" : "persistent",
+                  mode: answerOrigin
+                    ? "once"
+                    : once
+                      ? "once"
+                      : "persistent",
                   message,
                   ...(answerOrigin
                     ? {

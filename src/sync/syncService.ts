@@ -1035,6 +1035,9 @@ export class SyncService {
           tError("common.missingSourceBlock", { index: blockIndex + 1 }),
         );
       }
+      if (!aligned.source.translatable || aligned.status === "deleted") {
+        throw new Error(tError("sync.blockNotTranslatable"));
+      }
       if (
         input.expected?.sourceHash &&
         aligned.source.hash !== input.expected.sourceHash
@@ -1152,16 +1155,34 @@ export class SyncService {
       const legacyHash = target.blockId.startsWith("src-")
         ? target.blockId.slice(4).trim()
         : undefined;
-      const aligned = alignment.blocks.find(
-        (item) =>
-          item.cache?.anchor.id === target.blockId ||
-          (target.sourceIndex !== undefined &&
-            item.source.index === target.sourceIndex) ||
-          (legacyHash !== undefined && item.source.hash === legacyHash),
+      // 先按缓存锚点精确匹配；只有找不到锚点时，才用 sourceIndex + 原文哈希回退，
+      // 避免源文前插/删除后旧 sourceIndex 先命中另一块。
+      let aligned = alignment.blocks.find(
+        (item) => item.cache?.anchor.id === target.blockId,
       );
+      if (!aligned) {
+        const expectedHash = target.sourceHash ?? legacyHash;
+        if (target.sourceIndex !== undefined) {
+          aligned = alignment.blocks.find(
+            (item) =>
+              item.source.index === target.sourceIndex &&
+              (expectedHash === undefined ||
+                item.source.hash === expectedHash),
+          );
+        } else if (expectedHash !== undefined) {
+          const candidates = alignment.blocks.filter(
+            (item) => item.source.hash === expectedHash,
+          );
+          if (candidates.length === 1) {
+            aligned = candidates[0];
+          }
+        }
+      }
       const currentHash = aligned?.source.hash;
       const currentIndex = aligned?.source.index;
-      const currentBlockId = aligned?.cache?.anchor.id;
+      const currentBlockId =
+        aligned?.cache?.anchor.id ??
+        (aligned ? `src-${aligned.source.hash}` : undefined);
       const rebound =
         currentHash !== undefined && currentHash !== target.sourceHash;
       const message =
@@ -1221,16 +1242,21 @@ export class SyncService {
         state.targetLanguage,
       );
       let found = false;
+      const now = new Date().toISOString();
       const next = existing.annotations.map((entry) => {
         if (entry.id !== annotationId) {
           return entry;
         }
         found = true;
-        return {
+        const updated = {
           ...entry,
           status,
-          updatedAt: new Date().toISOString(),
+          updatedAt: now,
         };
+        if (status === "open") {
+          delete updated.answeredBy;
+        }
+        return updated;
       });
       if (!found) {
         throw new Error(tError("sync.annotationNotFound"));

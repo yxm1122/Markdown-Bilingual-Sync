@@ -551,16 +551,15 @@ export async function syncDocument(options: SyncOptions): Promise<SyncResult> {
     const hasPendingAnnotations = sourceAnnotations.some(
       (annotation) => annotation.pending,
     );
-    // 显式 human / deleted 模式不会被选中；待生效批注可把已翻译块拉进本次同步。
-    // 注意 dst 不一致的 auto 块（手工改过缓存）在 retranslateAll 下仍会命中最后的 auto 条件。
+    // 显式 human / deleted 模式不会被选中；待生效批注只能拉起非 human 的已翻译块。
+    // 注意 dst 不一致的 auto 块（手工改过缓存）在 retranslateAll 下仍会命中 auto 条件。
     const needsTranslation =
       !cacheIsDeleted &&
-      !aligned.human &&
       (!cached ||
         cacheIsCopy ||
         (retranslateAll && cached.anchor.mode === "auto") ||
         (aligned.status === "stale" && retranslateStale) ||
-        hasPendingAnnotations);
+        (hasPendingAnnotations && !aligned.human));
     if (!needsTranslation) {
       if (aligned.status === "stale") {
         warnings.push(
@@ -905,7 +904,8 @@ export async function syncDocument(options: SyncOptions): Promise<SyncResult> {
           block.status === "stale" &&
           !retranslateStale &&
           !retranslateAll &&
-          block.translatable,
+          block.translatable &&
+          !outputs.has(finalIds.get(block.source.index) ?? ""),
       ).length,
     providerLabel: provider.label,
     partial: failedTaskCount > 0,

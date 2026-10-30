@@ -98,6 +98,11 @@ function userPayload(call: FetchCall): {
     text: string;
     headingPath: string[];
     reference?: { role: string; text: string };
+    annotations?: Array<{
+      author: string;
+      kind: string;
+      text: string;
+    }>;
   }>;
 } {
   const body = JSON.parse(String(call.init.body)) as {
@@ -1215,6 +1220,44 @@ describe("OpenAITranslationProvider", () => {
       ),
     ).rejects.toThrow(/已取消/);
     expect(calls).toHaveLength(0);
+  });
+
+  it("sends user annotations on the item, not at the request root", async () => {
+    const { provider, calls } = configuredProvider(async (call) => {
+      const payload = userPayload(call);
+      return completion(
+        JSON.stringify({
+          items: payload.items.map((entry) => ({
+            id: entry.id,
+            text: "你好。",
+          })),
+        }),
+      );
+    });
+    const annotated: TranslationItem = {
+      ...item("b1", "Hello."),
+      annotations: [
+        {
+          author: "user",
+          kind: "request-change",
+          text: "Use a formal tone.",
+        },
+      ],
+    };
+
+    await provider.translate(request([annotated]));
+
+    const payload = userPayload(calls[0]);
+    expect(payload.items[0].annotations).toEqual([
+      {
+        author: "user",
+        kind: "request-change",
+        text: "Use a formal tone.",
+      },
+    ]);
+    expect(
+      Object.prototype.hasOwnProperty.call(payload, "annotations"),
+    ).toBe(false);
   });
 });
 

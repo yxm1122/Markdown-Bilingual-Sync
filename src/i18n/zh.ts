@@ -298,6 +298,9 @@ export const UI_TEXT = {
       statusArchived: "已归档",
       statusHint: "按译文是否发生变化判断是否生效。",
       unsupported: "当前 Provider 不会读取批注，保存后不会影响翻译。",
+      cannotAnnotate: "此块不参与翻译，无法保存可应用的批注。",
+      humanPendingHint:
+        "译文锁定块：新批注需要手动重新翻译该块后才会应用。",
       suggestedAnswerLabel: "候选回答",
       suggestionLabel: "建议",
       adoptAnswer: "采用",

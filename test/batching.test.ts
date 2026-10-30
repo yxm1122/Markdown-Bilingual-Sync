@@ -254,6 +254,19 @@ describe("dynamic translation batching", () => {
       }),
     ).toBeGreaterThan(0);
     expect(estimateTranslationContextTokens(undefined)).toBe(0);
+    const annotated: TranslationItem = {
+      ...item("annotated", "Hello"),
+      annotations: [
+        {
+          author: "user",
+          kind: "request-change",
+          text: "Use a formal tone.",
+        },
+      ],
+    };
+    expect(estimateItemTokens(annotated)).toBeGreaterThan(
+      estimateItemTokens(item("plain", "Hello")),
+    );
     expect(
       estimateTranslationContextTokens({
         after: [{ kind: "paragraph", text: "The numbers that matter." }],

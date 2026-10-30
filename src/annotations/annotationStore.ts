@@ -151,11 +151,16 @@ export function normalizeAnnotationRecord(
     author === "user" && statusRaw === "open"
       ? "pending"
       : (statusRaw as AnnotationStatus);
+  if (
+    author === "user" &&
+    modeRaw !== undefined &&
+    !VALID_MODES.has(modeRaw)
+  ) {
+    return undefined;
+  }
   const mode: AnnotationMode | undefined =
     author === "user"
-      ? modeRaw !== undefined && VALID_MODES.has(modeRaw)
-        ? (modeRaw as AnnotationMode)
-        : "persistent"
+      ? ((modeRaw as AnnotationMode | undefined) ?? "persistent")
       : undefined;
   const question = readString(record.question, MAX_ANNOTATION_MESSAGE);
   const suggestedAnswers = question

@@ -81,7 +81,7 @@
 
 `CacheSummary`：`text`、`sourceHash`、`updatedAt`、可选 `model`、`glossary`、`brief`（`audience` / `toneAndStyle` / `ambiguities` / `doNotTranslate`）。摘要属于缓存元数据，不参与对齐与导出；源文变化后只标记过期，仍可作为上下文使用。brief 每个字段最多 400 字符，旧缓存缺失时按空处理。
 
-批注不在缓存 Markdown 中，而存放在缓存同目录的 `<cache>.annotations.json` sidecar；`SyncService.loadPreviewState` 读取后在 `buildPreviewModel` 中按块 id 挂到视图，并统计未过期的待生效批注数。用户批注有 `once`/`persistent` 两种生效方式和 `pending`/`applied`/`ineffective` 状态；一次性批注参与一次翻译后失效，持续批注保持生效但不强制同步。源文变化标记 stale，过期用户批注不进入请求。无缓存块的批注带 `src-<hash>` id 和 sourceIndex，首次同步生成锚点后迁移为锚点 id。同步时待生效批注让已翻译块进入队列；批注随对应 `TranslationItem.annotations` 发送。稳定翻译仍发送旧译文 `reference`，由 system prompt 声明批注优先于 reference。翻译成功后按块比较新旧译文更新状态与 `lastAppliedAt`；失败/取消/未翻译块不更新。AI 候选回答放在 AI 批注的 `suggestedAnswers`（最多 3 条，去重），采纳某一条时同一把锁内创建一次性用户批注、标记 AI 提问 `resolved` 并记录 `answeredBy`。所有批注读改写走同一文件锁；审校模型调用不占锁，但写入前重新读取并对齐校验原文、译文与锚点，用户批注在审校期间新增也会保留。摘要、brief 与批注文本共享 `assistantLanguage` 输出语言（默认跟随译文），术语表 source/target 不受影响。只有 OpenAI 兼容 Provider 会读取批注；Mock/HTTP 不应用。
+批注不在缓存 Markdown 中，而存放在缓存同目录的 `<cache>.annotations.json` sidecar；`SyncService.loadPreviewState` 读取后在 `buildPreviewModel` 中按块 id 挂到视图，并统计未过期的待生效批注数。用户批注有 `once`/`persistent` 两种生效方式和 `pending`/`applied`/`ineffective` 状态；一次性批注参与一次翻译后失效，持续批注保持生效但不强制同步。源文变化标记 stale，过期用户批注不进入请求。无缓存块的批注带 `src-<hash>` id 和 sourceIndex，首次同步生成锚点后迁移为锚点 id。同步时待生效批注让非 human 的已翻译块进入队列，human 块需手动单块重译；不可翻译/已删除块不允许保存可应用批注。批注随对应 `TranslationItem.annotations` 发送。稳定翻译仍发送旧译文 `reference`，由 system prompt 声明批注优先于 reference。翻译成功后按块比较新旧译文更新状态与 `lastAppliedAt`；失败/取消/未翻译块不更新。AI 候选回答放在 AI 批注的 `suggestedAnswers`（最多 3 条，去重），采纳某一条时同一把锁内创建一次性用户批注、标记 AI 提问 `resolved` 并记录 `answeredBy`。所有批注读改写走同一文件锁；审校模型调用不占锁，但写入前重新读取并对齐校验原文、译文与锚点，用户批注在审校期间新增也会保留。摘要、brief 与批注文本共享 `assistantLanguage` 输出语言（默认跟随译文），术语表 source/target 不受影响。只有 OpenAI 兼容 Provider 会读取批注；Mock/HTTP 不应用。
 
 ## 3. 主要流程
 
@@ -200,6 +200,7 @@ batchTranslateFolder
 - 单块重译/回译由 `sync/blockContext` 从同一 section 取 1 个前块/后块（标题优先取后一块正文），作为只读 `context` 发送；大块或超过 600 token 时不加。回译的 adjacent context 来自目标语言缓存。
 - 审校可手动按块或按文件触发；文件级审校跳过 human/deleted/copy/未翻译块，按块数（最多 6）和 token 预算分批并发调用 reviewer（共享 `translationConcurrency` 全局限流），只替换仍通过原文/译文校验的块的 AI 批注，用户批注保留。完成提示报告已审校块数和新增批注数。审校可为带 `question` 的批注返回最多 3 条 `suggestedAnswers`（去重、不填充）；`suggestion` 与候选回答互斥，且不强制每个问题都有回答。
 - 稳定翻译仍由 `stableTranslation` 控制：重译参考旧译文，回译参考当前原文；单块上下文不会替代 reference。带生效批注时 reference 仍按稳定翻译发送，system prompt 声明批注优先于 reference，避免旧译文压过批注。
+- `retranslateAll` 仍会重译“手工改过缓存但锚点 mode=auto”的块；human 限制只作用于待生效批注拉起的分支，避免改变原有全部重译语义。
 
 ### 3.8 术语表与译后一致性
 

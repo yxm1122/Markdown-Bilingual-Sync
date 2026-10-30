@@ -162,6 +162,9 @@ describe("normalizeAnnotationRecord", () => {
     expect(
       normalizeAnnotationRecord({ ...record(), message: "   " }),
     ).toBeUndefined();
+    expect(
+      normalizeAnnotationRecord({ ...record(), mode: "sometimes" }),
+    ).toBeUndefined();
   });
 
   it("migrates legacy user annotations and keeps suggested answers", () => {

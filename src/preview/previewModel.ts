@@ -755,8 +755,13 @@ export function buildPreviewModel(input: PreviewModelInput): PreviewModel {
             block.sourceHash &&
             record.sourceHash !== block.sourceHash,
         );
+        const autoApplicable =
+          !block.human &&
+          block.status !== "deleted" &&
+          !block.status.startsWith("copy");
         if (
           !stale &&
+          autoApplicable &&
           isUserAnnotationPending(record) &&
           !countedPending.has(record.id)
         ) {

@@ -481,6 +481,11 @@ describe("sync annotations", () => {
       role: "previous-target",
       text: target.cache!.block.raw,
     });
+
+    const reopened = await service.setAnnotationStatus(uri, ai.id, "open");
+    const reopenedAi = reopened.find((entry) => entry.id === ai.id)!;
+    expect(reopenedAi.status).toBe("open");
+    expect(reopenedAi.answeredBy).toBeUndefined();
   });
 
   it("reviews all machine blocks in chunks and replaces only AI annotations", async () => {
@@ -627,6 +632,98 @@ describe("sync annotations", () => {
         text: "Edited instruction.",
       },
     ]);
+  });
+
+  it("rebinds by cached anchor when earlier source blocks shift indices", async () => {
+    const uri = mocks.FakeUri.file("/project/demo.md") as unknown as Uri;
+    const target = paragraph();
+    const anchorId = target.cache!.anchor.id;
+    const saved = await service.saveUserAnnotation(uri, target.source.index, {
+      side: "target",
+      message: "Old instruction.",
+    });
+
+    mocks.documentState.text = `Inserted paragraph.\n\n${SOURCE}`;
+    const updated = await service.updateUserAnnotation(
+      uri,
+      saved[0].id,
+      { message: "Edited instruction." },
+    );
+    const current = inspect(
+      mocks.documentState.text,
+      cacheStore.text!,
+    ).alignment.blocks.find(
+      (block) => block.cache?.anchor.id === anchorId,
+    )!;
+    expect(updated[0].blockId).toBe(anchorId);
+    expect(updated[0].sourceIndex).toBe(current.source.index);
+    expect(updated[0].sourceHash).toBe(current.source.hash);
+  });
+
+  it("rejects annotations on untranslatable blocks", async () => {
+    const uri = mocks.FakeUri.file("/project/demo.md") as unknown as Uri;
+    const copy = inspect(SOURCE, cacheStore.text!).alignment.blocks.find(
+      (block) => !block.source.translatable,
+    )!;
+    await expect(
+      service.saveUserAnnotation(uri, copy.source.index, {
+        side: "target",
+        message: "Not applicable.",
+      }),
+    ).rejects.toThrow(/不参与翻译/);
+  });
+
+  it("rejects annotations on deleted translations", async () => {
+    const uri = mocks.FakeUri.file("/project/demo.md") as unknown as Uri;
+    const target = paragraph();
+    await service.deleteTargetBlock(uri, target.source.index);
+    await expect(
+      service.saveUserAnnotation(uri, target.source.index, {
+        side: "target",
+        message: "Not applicable.",
+      }),
+    ).rejects.toThrow(/不参与翻译/);
+  });
+
+  it("retranslates hand-edited auto blocks during retranslateAll", async () => {
+    const uri = mocks.FakeUri.file("/project/demo.md") as unknown as Uri;
+    const target = paragraph();
+    const anchorId = target.cache!.anchor.id;
+    cacheStore.text = cacheStore.text!.replace(
+      target.cache!.block.raw,
+      `${target.cache!.block.raw} changed`,
+    );
+    requests = [];
+    await service.retranslateAll(uri);
+    expect(
+      requests.some((request) =>
+        request.items.some((item) => item.id === anchorId),
+      ),
+    ).toBe(true);
+  });
+
+  it("does not count a stale block retranslated by a pending annotation", async () => {
+    const uri = mocks.FakeUri.file("/project/demo.md") as unknown as Uri;
+    const target = paragraph();
+    mocks.documentState.text = SOURCE.replace(
+      "First paragraph.",
+      "First paragraph changed.",
+    );
+    await service.saveUserAnnotation(uri, target.source.index, {
+      side: "target",
+      message: "Apply to the changed source.",
+    });
+    requests = [];
+    const outcome = await service.sync(
+      uri,
+      false,
+      undefined,
+      undefined,
+      false,
+      { stableTranslation: true, summaryContext: false },
+    );
+    expect(outcome.result.translatedCount).toBe(1);
+    expect(outcome.result.keptMachineStaleCount).toBe(0);
   });
 
   it("rejects a stale annotation save and drops stale instructions", async () => {

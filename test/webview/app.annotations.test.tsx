@@ -56,11 +56,13 @@ function annotation(overrides: Partial<AnnotationView> = {}): AnnotationView {
 
 function renderWithAnnotation(
   annotations = [annotation()],
+  blockOverrides: Parameters<typeof makeBlock>[0] = {},
 ) {
   const model = makeModel({
     blocks: [
       makeBlock({
         annotations,
+        ...blockOverrides,
       }),
     ],
   });
@@ -336,7 +338,7 @@ describe("block annotations", () => {
     ).toBeTruthy();
     fireEvent.click(
       within(dialog).getByRole("button", {
-        name: `${text.adoptAnswer} 2`,
+        name: new RegExp(`^${text.adoptAnswer} 2`),
       }),
     );
     expect(actions(harness)).toContainEqual({
@@ -372,7 +374,7 @@ describe("block annotations", () => {
     fireEvent.click(within(dialog).getByText(text.details));
     fireEvent.click(
       within(dialog).getByRole("button", {
-        name: `${text.editAnswer} 1`,
+        name: new RegExp(`^${text.editAnswer} 1`),
       }),
     );
     const compose = within(dialog).getByLabelText(
@@ -383,6 +385,11 @@ describe("block annotations", () => {
       dialog.querySelector(".pv-annotation-compose .pv-summary-note")
         ?.textContent,
     ).toContain(text.answeringQuestion);
+    const onceBox = within(dialog).getByRole(
+      "checkbox",
+    ) as HTMLInputElement;
+    expect(onceBox.checked).toBe(true);
+    expect(onceBox.disabled).toBe(true);
     fireEvent.input(compose, {
       target: { value: "Use a formal register." },
     });
@@ -440,5 +447,57 @@ describe("block annotations", () => {
       mode: "persistent",
       side: "target",
     });
+  });
+
+  it("disables annotation saving on untranslatable blocks", () => {
+    const text = harness.text.preview.annotations;
+    const { container } = renderWithAnnotation(
+      [
+        annotation({
+          suggestedAnswers: ["Use this wording."],
+          question: "Which wording?",
+        }),
+      ],
+      { status: "copy" },
+    );
+    fireEvent.click(
+      within(container).getByLabelText(
+        fmt(text.openCount, { count: 1 }),
+      ) as HTMLElement,
+    );
+    const dialog = screen.getByRole("dialog", { name: text.title });
+    expect(within(dialog).getByText(text.cannotAnnotate)).toBeTruthy();
+    const compose = within(dialog).getByLabelText(
+      text.add,
+    ) as HTMLTextAreaElement;
+    expect(compose.disabled).toBe(true);
+    expect(
+      within(dialog).queryByRole("button", {
+        name: new RegExp(`^${text.adoptAnswer} 1`),
+      }),
+    ).toBeNull();
+    const save = within(dialog).getByRole("button", {
+      name: text.save,
+    }) as HTMLButtonElement;
+    expect(save.disabled).toBe(true);
+  });
+
+  it("shows the manual retranslation hint for locked blocks", () => {
+    const text = harness.text.preview.annotations;
+    const { container } = renderWithAnnotation([annotation()], {
+      status: "human",
+      human: true,
+    });
+    fireEvent.click(
+      within(container).getByLabelText(
+        fmt(text.openCount, { count: 1 }),
+      ) as HTMLElement,
+    );
+    const dialog = screen.getByRole("dialog", { name: text.title });
+    expect(within(dialog).getByText(text.humanPendingHint)).toBeTruthy();
+    const compose = within(dialog).getByLabelText(
+      text.add,
+    ) as HTMLTextAreaElement;
+    expect(compose.disabled).toBe(false);
   });
 });
