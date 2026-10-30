@@ -312,13 +312,21 @@ describe("block annotations", () => {
     });
   });
 
-  it("adopts a suggested AI answer as a one-shot user annotation", () => {
+  it("adopts an AI handling option with its proposed mode", () => {
     const text = harness.text.preview.annotations;
     const { container } = renderWithAnnotation([
       annotation({
-        suggestedAnswers: [
-          "Use the business sense.",
-          "Use a formal register.",
+        options: [
+          {
+            kind: "instruction",
+            text: "Use the business sense.",
+            mode: "once",
+          },
+          {
+            kind: "instruction",
+            text: "Use a formal register.",
+            mode: "persistent",
+          },
         ],
         question: "Which sense is intended?",
       }),
@@ -345,7 +353,7 @@ describe("block annotations", () => {
       type: "saveAnnotation",
       blockIndex: 0,
       side: "target",
-      mode: "once",
+      mode: "persistent",
       message: "Use a formal register.",
       originAnnotationId: "a1",
       resolveAnnotationId: "a1",
@@ -354,13 +362,64 @@ describe("block annotations", () => {
     });
   });
 
-  it("prepares an edited answer in the composer", () => {
+  it("renders advice as a non-adoptable note", () => {
     const text = harness.text.preview.annotations;
     const { container } = renderWithAnnotation([
       annotation({
-        suggestedAnswers: [
-          "Use the business sense.",
-          "Use a formal register.",
+        options: [
+          {
+            kind: "instruction",
+            text: "将“bite”改为“业务影响”。",
+            mode: "once",
+          },
+          {
+            kind: "advice",
+            text: "请确认“bite”在这里的实际含义。",
+          },
+        ],
+        question: "Which sense is intended?",
+      }),
+    ]);
+    fireEvent.click(
+      within(container).getByLabelText(
+        fmt(text.openCount, { count: 1 }),
+      ) as HTMLElement,
+    );
+    const dialog = screen.getByRole("dialog", { name: text.title });
+    fireEvent.click(within(dialog).getByText(text.details));
+    expect(within(dialog).getByText(text.optionsLabel)).toBeTruthy();
+    expect(within(dialog).getByText(text.adviceLabel)).toBeTruthy();
+    expect(
+      within(dialog).getByText("请确认“bite”在这里的实际含义。"),
+    ).toBeTruthy();
+    expect(within(dialog).getByText(text.modeOnceBadge)).toBeTruthy();
+    expect(
+      within(dialog).queryByRole("button", {
+        name: new RegExp(`^${text.adoptAnswer} 2`),
+      }),
+    ).toBeNull();
+    expect(
+      within(dialog).getByRole("button", {
+        name: new RegExp(`^${text.adoptAnswer} 1`),
+      }),
+    ).toBeTruthy();
+  });
+
+  it("prepares an edited instruction in the composer", () => {
+    const text = harness.text.preview.annotations;
+    const { container } = renderWithAnnotation([
+      annotation({
+        options: [
+          {
+            kind: "instruction",
+            text: "Use the business sense.",
+            mode: "once",
+          },
+          {
+            kind: "instruction",
+            text: "Use a formal register.",
+            mode: "once",
+          },
         ],
         question: "Which sense is intended?",
       }),
@@ -389,7 +448,7 @@ describe("block annotations", () => {
       "checkbox",
     ) as HTMLInputElement;
     expect(onceBox.checked).toBe(true);
-    expect(onceBox.disabled).toBe(true);
+    expect(onceBox.disabled).toBe(false);
     fireEvent.input(compose, {
       target: { value: "Use a formal register." },
     });
@@ -454,7 +513,13 @@ describe("block annotations", () => {
     const { container } = renderWithAnnotation(
       [
         annotation({
-          suggestedAnswers: ["Use this wording."],
+          options: [
+            {
+              kind: "instruction",
+              text: "Use this wording.",
+              mode: "once",
+            },
+          ],
           question: "Which wording?",
         }),
       ],

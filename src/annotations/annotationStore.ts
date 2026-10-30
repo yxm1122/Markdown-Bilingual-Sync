@@ -10,16 +10,17 @@ import * as vscode from "vscode";
 import type { CacheStore } from "../cache/cacheStore";
 import { newBlockId } from "../util/hash";
 import {
-  MAX_ANNOTATION_ANSWER,
   MAX_ANNOTATION_EXCERPT,
   MAX_ANNOTATION_MESSAGE,
-  MAX_ANNOTATION_SUGGESTION,
-  MAX_SUGGESTED_ANSWERS,
+  MAX_ANNOTATION_OPTION,
+  MAX_REVIEW_OPTIONS,
   normalizeAnnotationText,
+  normalizeReviewOptions,
   type AnnotationMode,
   type AnnotationRecord,
   type AnnotationStatus,
 } from "./types";
+import type { ReviewOption } from "../translation/types";
 
 interface StoredAnnotations {
   version: 1;
@@ -71,30 +72,41 @@ function readString(value: unknown, max: number): string | undefined {
   return normalizeAnnotationText(value, max);
 }
 
-/** 读取候选回答：兼容旧版单个 suggestedAnswer 字符串。 */
-function readSuggestedAnswers(record: Record<string, unknown>): string[] {
-  const raw = record.suggestedAnswers;
-  const values: unknown[] = [];
-  if (Array.isArray(raw)) {
-    values.push(...raw);
-  } else if (raw !== undefined) {
-    values.push(raw);
+/**
+ * 读取 AI 批注的处理项。
+ * 旧 sidecar 里的 suggestion/suggestedAnswers 在读取时迁移为 advice/instruction；
+ * 旧候选回答没有 mode，按一次性处理。
+ */
+function readReviewOptions(record: Record<string, unknown>): ReviewOption[] {
+  const current = normalizeReviewOptions(record.options);
+  if (current.length > 0) {
+    return current;
+  }
+  const answers: unknown[] = [];
+  if (Array.isArray(record.suggestedAnswers)) {
+    answers.push(...record.suggestedAnswers);
+  } else if (record.suggestedAnswers !== undefined) {
+    answers.push(record.suggestedAnswers);
   }
   if (record.suggestedAnswer !== undefined) {
-    values.push(record.suggestedAnswer);
+    answers.push(record.suggestedAnswer);
   }
-  const answers: string[] = [];
-  for (const value of values) {
-    const text = readString(value, MAX_ANNOTATION_ANSWER);
+  const instructions: ReviewOption[] = [];
+  for (const value of answers) {
+    const text = readString(value, MAX_ANNOTATION_OPTION);
     if (
       text &&
-      !answers.includes(text) &&
-      answers.length < MAX_SUGGESTED_ANSWERS
+      !instructions.some((option) => option.text === text) &&
+      instructions.length < MAX_REVIEW_OPTIONS
     ) {
-      answers.push(text);
+      instructions.push({ kind: "instruction", text, mode: "once" });
     }
   }
-  return answers;
+  if (instructions.length > 0) {
+    return instructions;
+  }
+  const suggestion = readString(record.suggestion, MAX_ANNOTATION_OPTION);
+  return suggestion ? [{ kind: "advice", text: suggestion }] : [];
 }
 
 /** 校验单条批注；字段不合法时返回 undefined。旧版用户批注会就地迁移到新状态。 */
@@ -163,12 +175,7 @@ export function normalizeAnnotationRecord(
       ? ((modeRaw as AnnotationMode | undefined) ?? "persistent")
       : undefined;
   const question = readString(record.question, MAX_ANNOTATION_MESSAGE);
-  const suggestedAnswers = question
-    ? readSuggestedAnswers(record)
-    : [];
-  const suggestion = suggestedAnswers.length
-    ? undefined
-    : readString(record.suggestion, MAX_ANNOTATION_SUGGESTION);
+  const options = author === "ai" ? readReviewOptions(record) : [];
   return {
     id,
     blockId,
@@ -178,7 +185,7 @@ export function normalizeAnnotationRecord(
     severity: severity as AnnotationRecord["severity"],
     message,
     ...(question ? { question } : {}),
-    ...(suggestedAnswers.length ? { suggestedAnswers } : {}),
+    ...(options.length ? { options } : {}),
     ...(readString(record.sourceExcerpt, MAX_ANNOTATION_EXCERPT)
       ? {
           sourceExcerpt: readString(
@@ -195,7 +202,6 @@ export function normalizeAnnotationRecord(
           ),
         }
       : {}),
-    ...(suggestion ? { suggestion } : {}),
     ...(mode ? { mode } : {}),
     status,
     ...(readString(record.sourceHash, 120)

@@ -418,7 +418,7 @@ describe("sync annotations", () => {
     expect(result?.lastAppliedAt).toBeTruthy();
   });
 
-  it("adopts a suggested answer and resolves the AI question atomically", async () => {
+  it("adopts a handling option and resolves the AI question atomically", async () => {
     const uri = mocks.FakeUri.file("/project/demo.md") as unknown as Uri;
     const target = paragraph();
     const blockId = target.cache!.anchor.id;
@@ -430,17 +430,33 @@ describe("sync annotations", () => {
         severity: "check",
         message: "Check the register.",
         question: "Which register should this use?",
-        suggestedAnswers: [
-          "Use a neutral, professional register.",
-          "Match the document brief's tone.",
+        options: [
+          {
+            kind: "instruction",
+            text: "Use a neutral, professional register.",
+            mode: "once",
+          },
+          {
+            kind: "instruction",
+            text: "Match the document brief's tone.",
+            mode: "persistent",
+          },
         ],
       },
     ];
     const reviewed = await service.reviewBlock(uri, target.source.index);
     const ai = reviewed.annotations.find((entry) => entry.author === "ai")!;
-    expect(ai.suggestedAnswers).toEqual([
-      "Use a neutral, professional register.",
-      "Match the document brief's tone.",
+    expect(ai.options).toEqual([
+      {
+        kind: "instruction",
+        text: "Use a neutral, professional register.",
+        mode: "once",
+      },
+      {
+        kind: "instruction",
+        text: "Match the document brief's tone.",
+        mode: "persistent",
+      },
     ]);
 
     const next = await service.saveUserAnnotation(
@@ -448,14 +464,15 @@ describe("sync annotations", () => {
       target.source.index,
       {
         side: ai.side,
-        message: ai.suggestedAnswers![0],
+        message: ai.options![1].text,
+        mode: "persistent",
         originAnnotationId: ai.id,
         resolveAnnotationId: ai.id,
       },
     );
     const user = next.find((entry) => entry.author === "user")!;
     const resolved = next.find((entry) => entry.id === ai.id)!;
-    expect(user.mode).toBe("once");
+    expect(user.mode).toBe("persistent");
     expect(user.status).toBe("pending");
     expect(user.originAnnotationId).toBe(ai.id);
     expect(resolved.status).toBe("resolved");
@@ -474,7 +491,7 @@ describe("sync annotations", () => {
       {
         author: "user",
         kind: "request-change",
-        text: "Use a neutral, professional register.",
+        text: "Match the document brief's tone.",
       },
     ]);
     expect(requests[0].items[0].reference).toEqual({

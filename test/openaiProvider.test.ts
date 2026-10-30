@@ -413,7 +413,7 @@ describe("OpenAITranslationProvider", () => {
         severity: "check",
         message: "Verify whether “bite” means business impact.",
         question: "Is this the intended sense?",
-        suggestion: "Use the business sense.",
+        options: [{ kind: "advice", text: "Use the business sense." }],
       },
     ]);
     const body = JSON.parse(String(calls[0].init.body)) as {
@@ -423,11 +423,12 @@ describe("OpenAITranslationProvider", () => {
       "You are a bilingual reviewer",
     );
     expect(body.messages[0].content).toContain(
-      "Do not rewrite, translate, or output replacement text",
+      "Do not translate or rewrite the whole item",
     );
+    expect(body.messages[0].content).toContain("options");
   });
 
-  it("keeps suggestedAnswers only with a question and never with suggestion", async () => {
+  it("normalizes new options and legacy answer fields", async () => {
     const { provider } = configuredProvider(async () =>
       completion(
         JSON.stringify({
@@ -492,10 +493,22 @@ describe("OpenAITranslationProvider", () => {
         severity: "check",
         message: "Both fields.",
         question: "Which sense?",
-        suggestedAnswers: [
-          "Use the business sense here.",
-          "Use a more formal alternative.",
-          "Third distinct candidate.",
+        options: [
+          {
+            kind: "instruction",
+            text: "Use the business sense here.",
+            mode: "once",
+          },
+          {
+            kind: "instruction",
+            text: "Use a more formal alternative.",
+            mode: "once",
+          },
+          {
+            kind: "instruction",
+            text: "Third distinct candidate.",
+            mode: "once",
+          },
         ],
       },
       {
@@ -511,7 +524,86 @@ describe("OpenAITranslationProvider", () => {
         type: "term",
         severity: "info",
         message: "Suggestion only.",
-        suggestion: "Use the glossary term.",
+        options: [{ kind: "advice", text: "Use the glossary term." }],
+      },
+    ]);
+  });
+
+  it("parses typed options without requiring a question", async () => {
+    const { provider } = configuredProvider(async () =>
+      completion(
+        JSON.stringify({
+          annotations: [
+            {
+              id: "b1",
+              side: "target",
+              type: "translation-uncertain",
+              severity: "check",
+              message: "The options are typed.",
+              options: [
+                {
+                  kind: "instruction",
+                  text: "将“30 秒”改为“60 秒”。",
+                  mode: "persistent",
+                },
+                {
+                  kind: "advice",
+                  text: "请确认超时时间。",
+                },
+                {
+                  kind: "instruction",
+                  text: "将“预览”改为“预览视图”。",
+                },
+                {
+                  kind: "instruction",
+                  text: "第四个处理项应被丢弃。",
+                },
+                {
+                  kind: "unknown",
+                  text: "Invalid kind.",
+                },
+              ],
+            },
+          ],
+        }),
+      ),
+    );
+
+    const annotations = await provider.review({
+      sourceLanguage: "en",
+      targetLanguage: "zh-CN",
+      glossary: [],
+      items: [
+        {
+          id: "b1",
+          kind: "paragraph",
+          headingPath: [],
+          sourceText: "Set the timeout to 60 seconds.",
+          targetText: "将超时设置为 30 秒。",
+        },
+      ],
+    });
+
+    expect(annotations).toEqual([
+      {
+        id: "b1",
+        side: "target",
+        type: "translation-uncertain",
+        severity: "check",
+        message: "The options are typed.",
+        options: [
+          {
+            kind: "instruction",
+            text: "将“30 秒”改为“60 秒”。",
+            mode: "persistent",
+          },
+          { kind: "advice", text: "请确认超时时间。" },
+          {
+            kind: "instruction",
+            text: "将“预览”改为“预览视图”。",
+            mode: "once",
+          },
+        ],
       },
     ]);
   });
@@ -1371,7 +1463,7 @@ describe("prompt structure", () => {
 
     const review = buildReviewSystemPrompt("en", "zh-CN", "ja-JP");
     expect(review).toContain(
-      "Write annotation messages, questions, suggestions, and suggested answers in ja-JP",
+      "Write annotation messages, questions, and options in ja-JP",
     );
     expect(review).toContain("keep sourceExcerpt and targetExcerpt verbatim");
     expect(review).toContain(

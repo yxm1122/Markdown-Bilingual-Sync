@@ -28,6 +28,8 @@ npm run compile
 | `npm test` | Vitest 全量单元测试 |
 | `npm run test:watch` | Vitest 监听模式 |
 | `npm run preview:sample` | 用 Mock 生成 `tmp/preview*.html` 静态预览 |
+| `npm run eval:translation` | 运行翻译质量评估（默认 Mock，真实 Provider 需 API Key） |
+| `npm run eval:annotations` | 运行 AI 批注质量评估（问题发现、候选处理项、独立执行性） |
 | `npm run package` | 构建并生成 `artifacts/vsix/markdown-bilingual-sync.vsix` |
 
 ## 文档地图
@@ -40,6 +42,7 @@ npm run compile
 | [开发流程](development.md) | 本地调试、新增命令/设置/Provider/UI 动作、打包、发布检查清单、常见坑 |
 | [测试指南](testing.md) | 测试栈、测试文件分工、VS Code mock、CI、隔离环境 E2E、覆盖缺口 |
 | [翻译质量评估](evaluation.md) | 评估集、自动指标、Mock/真实 Provider 运行方式、报告与人工评分 |
+| [AI 批注评估](annotation-evaluation.md) | 批注数据集、指标口径、基线与波动、提示词改动流程 |
 
 ## 架构速览
 

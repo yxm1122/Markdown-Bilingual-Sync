@@ -44,13 +44,11 @@ import { AnnotationStore } from "../annotations/annotationStore";
 import {
   isUserAnnotationActive,
   isUserAnnotationPending,
-  MAX_ANNOTATION_ANSWER,
   MAX_ANNOTATION_EXCERPT,
   MAX_ANNOTATION_MESSAGE,
-  MAX_ANNOTATION_SUGGESTION,
   MAX_ANNOTATIONS_PER_BLOCK,
-  MAX_SUGGESTED_ANSWERS,
   normalizeAnnotationText,
+  normalizeReviewOptions,
   type AnnotationMode,
   type AnnotationRecord,
   type AnnotationView,
@@ -588,29 +586,19 @@ export class SyncService {
         draft.targetExcerpt,
         MAX_ANNOTATION_EXCERPT,
       );
-      const suggestedAnswers: string[] = [];
-      for (const answer of draft.suggestedAnswers ?? []) {
-        const text = normalizeAnnotationText(
-          answer,
-          MAX_ANNOTATION_ANSWER,
-        );
-        if (
-          text &&
-          !suggestedAnswers.includes(text) &&
-          suggestedAnswers.length < MAX_SUGGESTED_ANSWERS
-        ) {
-          suggestedAnswers.push(text);
-        }
-      }
-      if (!question) {
-        suggestedAnswers.length = 0;
-      }
-      const suggestion = suggestedAnswers.length
-        ? undefined
-        : normalizeAnnotationText(
-            draft.suggestion,
-            MAX_ANNOTATION_SUGGESTION,
-          );
+      const normalizedOptions = normalizeReviewOptions(draft.options);
+      const instructions = normalizedOptions.filter(
+        (option) => option.kind === "instruction",
+      );
+      const advice = normalizedOptions.find(
+        (option) => option.kind === "advice",
+      );
+      // 指令和只读建议不应同时出现；有可执行指令时以指令为准。
+      const options = instructions.length
+        ? instructions
+        : advice
+          ? [advice]
+          : [];
       records.push({
         id: `ai-${newBlockId()}`,
         blockId: draft.id,
@@ -620,10 +608,9 @@ export class SyncService {
         severity: draft.severity,
         message,
         ...(question ? { question } : {}),
-        ...(suggestedAnswers.length ? { suggestedAnswers } : {}),
+        ...(options.length ? { options } : {}),
         ...(sourceExcerpt ? { sourceExcerpt } : {}),
         ...(targetExcerpt ? { targetExcerpt } : {}),
-        ...(suggestion ? { suggestion } : {}),
         status: "open",
         sourceHash,
         createdAt: now,
@@ -1002,8 +989,8 @@ export class SyncService {
   /**
    * 添加用户批注；所有用户批注都是翻译修改指令。
    *
-   * `resolveAnnotationId` 用于采纳 AI 候选回答：同一把锁里创建用户批注并把对应
-   * AI 提问标为已核对，避免两次写 sidecar。
+   * `resolveAnnotationId` 用于采纳 AI 处理项：同一把锁里创建用户批注并把对应
+   * AI 批注标为已核对，避免两次写 sidecar。
    */
   async saveUserAnnotation(
     sourceUri: vscode.Uri,
@@ -1013,7 +1000,7 @@ export class SyncService {
       message: string;
       /** 生效方式；缺省仅一次。 */
       mode?: AnnotationMode;
-      /** 关联的 AI 提问；采纳候选回答时使用。 */
+      /** 关联的 AI 批注；采纳处理项时使用。 */
       originAnnotationId?: string;
       /** 采纳回答时一并标记已核对的 AI 批注。 */
       resolveAnnotationId?: string;

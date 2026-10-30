@@ -190,6 +190,20 @@ export type ReviewAnnotationType =
 /** 审校严重度：info 仅供参考，check 表示建议人工核对。 */
 export type ReviewSeverity = "info" | "check";
 
+export type ReviewOptionKind = "instruction" | "advice";
+export type ReviewOptionMode = "once" | "persistent";
+
+/**
+ * 审校批注的处理项。
+ * instruction 可直接发给翻译器（自包含指令或补充信息）；advice 只给人看。
+ */
+export interface ReviewOption {
+  kind: ReviewOptionKind;
+  text: string;
+  /** 仅 instruction 使用；缺省按一次性处理。 */
+  mode?: ReviewOptionMode;
+}
+
 /** 模型返回的审校批注（未落库）。 */
 export interface ReviewAnnotationDraft {
   /** 对应请求中的块 id。 */
@@ -199,11 +213,9 @@ export interface ReviewAnnotationDraft {
   severity: ReviewSeverity;
   message: string;
   question?: string;
-  /** 对问题的候选回答；与 suggestion 互斥。 */
-  suggestedAnswers?: string[];
   sourceExcerpt?: string;
   targetExcerpt?: string;
-  suggestion?: string;
+  options?: ReviewOption[];
 }
 
 /** 单块审校输入。 */

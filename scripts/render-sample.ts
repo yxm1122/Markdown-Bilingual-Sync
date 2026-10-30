@@ -302,9 +302,21 @@ async function main(): Promise<void> {
         severity: "check",
         message: "这句里的 “bite” 可能指业务影响，请确认。",
         question: "这里是指字面“咬”，还是指标对业务的实际影响？",
-        suggestedAnswers: [
-          "这里指业务影响，建议译为“业务影响”并保持一致。",
-          "按“实际影响”理解，并同步更新同段落的术语。",
+        options: [
+          {
+            kind: "instruction",
+            text: "将“bite”改为“业务影响”，并在本段保持一致。",
+            mode: "persistent",
+          },
+          {
+            kind: "instruction",
+            text: "将“bite”改为“实际影响”，并同步更新同段落的术语。",
+            mode: "once",
+          },
+          {
+            kind: "advice",
+            text: "请确认原文中的 “bite” 是指业务影响还是字面含义。",
+          },
         ],
         status: "open",
         sourceHash: annotatedBlock.sourceHash,
@@ -329,7 +341,7 @@ async function main(): Promise<void> {
       },
     ];
     matrixModel.counts.pendingAnnotations =
-      annotatedBlock.annotations.filter(
+      (annotatedBlock.annotations ?? []).filter(
         (annotation) =>
           annotation.author === "user" &&
           (annotation.status === "pending" || annotation.status === "open"),

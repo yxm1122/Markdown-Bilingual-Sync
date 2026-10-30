@@ -45,12 +45,11 @@ import {
   type TranslationResultItem,
 } from "./types";
 import {
-  MAX_ANNOTATION_ANSWER,
   MAX_ANNOTATION_EXCERPT,
   MAX_ANNOTATION_MESSAGE,
-  MAX_ANNOTATION_SUGGESTION,
   MAX_ANNOTATIONS_PER_BLOCK,
-  MAX_SUGGESTED_ANSWERS,
+  MAX_REVIEW_OPTIONS,
+  normalizeReviewOptions,
 } from "../annotations/types";
 import {
   MAX_DOCUMENT_GLOSSARY_ENTRIES,
@@ -213,15 +212,17 @@ const MAX_REVIEW_ANNOTATIONS = 120;
 
 const REVIEW_RULES = [
   "Compare each source item with its current target translation and the document brief.",
-  "Do not rewrite, translate, or output replacement text. Flag only places that need human verification.",
-  "Flag source issues (typos, inconsistent numbers or names, ambiguous references, contradictory statements, broken Markdown) and translation uncertainties (wrong sense, missing nuance, omissions or additions, register mismatch, term conflicts).",
+  "Do not translate or rewrite the whole item. Flag only material problems that change meaning, terminology, structure, or factual accuracy; do not flag valid paraphrases or stylistic alternatives.",
+  "Flag source issues (typos, inconsistent numbers or names, ambiguous references, contradictory statements, broken Markdown) and translation uncertainties (wrong sense, missing nuance, omissions or additions, register mismatch, term conflicts). Use side \"target\" when the translation needs changing; use side \"source\" only when the source itself is wrong and the translation faithfully reflects it. Report each issue once; do not restate it on both sides. Use type \"structure\" for broken Markdown or link syntax.",
   "Use severity \"check\" for things a human should verify and \"info\" for useful notes. Never assert a factual error you cannot verify from the text; say what should be checked.",
-  `For each flag, return the requested id, side, type, severity, a short message, and optional question, sourceExcerpt, targetExcerpt, and either suggestion or suggestedAnswers (never both). suggestedAnswers must be an array of at most ${MAX_SUGGESTED_ANSWERS} distinct, concrete, self-contained replies the user could adopt; include it only together with a question and only when the candidates are genuinely different; otherwise omit it. Do not pad. Keep at most ${MAX_ANNOTATIONS_PER_BLOCK} annotations per id.`,
-  'Return only a JSON object in this exact shape: {"annotations":[{"id":"...","side":"source|target","type":"source-issue|translation-uncertain|term|structure","severity":"info|check","message":"...","question":"...","sourceExcerpt":"...","targetExcerpt":"...","suggestion":"...","suggestedAnswers":["...","..."]}]}. Do not wrap it in Markdown fences.',
+  "A glossary target is mandatory. If the target already uses the glossary target, do not flag that term. Never propose changing the glossary or an option that violates it.",
+  `For each flag, optionally return up to ${MAX_REVIEW_OPTIONS} distinct options. An option is either an instruction or advice. An instruction is sent to the translator without the question, message, excerpts, or surrounding context: it must name the exact term, text, or location, state the required change or decision, and give the intended result. Never return a rewritten translation; quote only the fragment being changed. Never use yes/no replies, pronouns, or references such as "this", "the above", or "option 1". Set mode "once" for a local correction and "persistent" only for a rule that must remain in force for this block. An advice is for the human and is never sent to the translator: use it only when deciding requires information not present in the text (author intent, missing context, an unresolvable source contradiction), and say what to verify and why. Do not mix advice with instructions for the same issue. If a fix follows directly from the source, target, glossary, or brief, give one instruction even when no question is needed. Use multiple instructions only for genuinely different valid resolutions. Do not pad. Keep at most ${MAX_ANNOTATIONS_PER_BLOCK} annotations per id.`,
+  'Examples. Instruction: "将译文中的“30 秒”改为“60 秒”。" (mode once). Advice: "请确认超时时间应为 30 秒还是 60 秒；原文前后不一致。" Clean case: glossary cache→缓存, source "The cache stores the previous translation." with target "缓存会保存上一次的译文。" needs no annotation; never flag a term whose target already uses the glossary target, and do not invent style or terminology concerns when meaning, glossary, and structure are correct.',
+  'Return only a JSON object in this exact shape: {"annotations":[{"id":"...","side":"source|target","type":"source-issue|translation-uncertain|term|structure","severity":"info|check","message":"...","question":"...","sourceExcerpt":"...","targetExcerpt":"...","options":[{"kind":"instruction","text":"...","mode":"once|persistent"},{"kind":"advice","text":"..."}]}]}. options is optional. Do not wrap it in Markdown fences.',
 ].join("\n");
 
 const REVIEW_RETRY_HINT =
-  "The previous response was not a valid annotation list. Return only the JSON object with an annotations array, using only requested ids. Do not rewrite translations.";
+  "The previous response was not a valid annotation list. Return only the JSON object with an annotations array, using only requested ids. Each option must have kind instruction or advice; an instruction also needs text and mode. Do not rewrite translations.";
 
 /** 审校 system 提示；只返回批注，不返回译文。 */
 export function buildReviewSystemPrompt(
@@ -231,7 +232,7 @@ export function buildReviewSystemPrompt(
 ): string {
   return [
     "You are a bilingual reviewer, not a translator.",
-    `Source language: ${sourceLanguage}. Target language: ${targetLanguage}. Write annotation messages, questions, suggestions, and suggested answers in ${outputLanguage}; keep sourceExcerpt and targetExcerpt verbatim.`,
+    `Source language: ${sourceLanguage}. Target language: ${targetLanguage}. Write annotation messages, questions, and options in ${outputLanguage}; keep sourceExcerpt and targetExcerpt verbatim.`,
     REVIEW_RULES,
   ].join("\n");
 }
@@ -693,32 +694,38 @@ function readReviewText(value: unknown, max: number): string | undefined {
   return text ? text.slice(0, max).trim() : undefined;
 }
 
-/** 读取候选回答数组；兼容旧版单个 suggestedAnswer 字符串。 */
-function readReviewSuggestedAnswers(
+/** 读取处理项；兼容旧版 suggestion/suggestedAnswers 输出。 */
+function readReviewOptions(
   entry: Record<string, unknown>,
-): string[] {
-  const raw = entry.suggestedAnswers;
-  const values: unknown[] = [];
-  if (Array.isArray(raw)) {
-    values.push(...raw);
-  } else if (raw !== undefined) {
-    values.push(raw);
+  question: string | undefined,
+): ReviewAnnotationDraft["options"] {
+  const current = normalizeReviewOptions(entry.options);
+  if (current.length > 0) {
+    return current;
+  }
+  const answers: unknown[] = [];
+  if (Array.isArray(entry.suggestedAnswers)) {
+    answers.push(...entry.suggestedAnswers);
+  } else if (entry.suggestedAnswers !== undefined) {
+    answers.push(entry.suggestedAnswers);
   }
   if (entry.suggestedAnswer !== undefined) {
-    values.push(entry.suggestedAnswer);
+    answers.push(entry.suggestedAnswer);
   }
-  const answers: string[] = [];
-  for (const value of values) {
-    const text = readReviewText(value, MAX_ANNOTATION_ANSWER);
-    if (
-      text &&
-      !answers.includes(text) &&
-      answers.length < MAX_SUGGESTED_ANSWERS
-    ) {
-      answers.push(text);
-    }
+  const instructions = question
+    ? normalizeReviewOptions(
+        answers.map((text) => ({
+          kind: "instruction",
+          text,
+          mode: "once",
+        })),
+      )
+    : [];
+  if (instructions.length > 0) {
+    return instructions;
   }
-  return answers;
+  const suggestion = readReviewText(entry.suggestion, MAX_ANNOTATION_MESSAGE);
+  return suggestion ? [{ kind: "advice", text: suggestion }] : [];
 }
 
 /**
@@ -781,13 +788,7 @@ function parseReviewAnnotations(
       entry.question,
       MAX_ANNOTATION_MESSAGE,
     );
-    // 候选回答只在有问题的批注上有效；与 suggestion 同时出现时有问题保留回答。
-    const suggestedAnswers = question
-      ? readReviewSuggestedAnswers(entry)
-      : [];
-    const suggestion = suggestedAnswers.length
-      ? undefined
-      : readReviewText(entry.suggestion, MAX_ANNOTATION_SUGGESTION);
+    const options = readReviewOptions(entry, question);
     drafts.push({
       id,
       side,
@@ -795,7 +796,7 @@ function parseReviewAnnotations(
       severity,
       message,
       ...(question ? { question } : {}),
-      ...(suggestedAnswers.length ? { suggestedAnswers } : {}),
+      ...(options && options.length ? { options } : {}),
       ...(readReviewText(entry.sourceExcerpt, MAX_ANNOTATION_EXCERPT)
         ? {
             sourceExcerpt: readReviewText(
@@ -812,7 +813,6 @@ function parseReviewAnnotations(
             ),
           }
         : {}),
-      ...(suggestion ? { suggestion } : {}),
     });
     if (drafts.length >= MAX_REVIEW_ANNOTATIONS) {
       break;

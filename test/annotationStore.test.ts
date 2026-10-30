@@ -148,13 +148,19 @@ describe("annotation store", () => {
 describe("normalizeAnnotationRecord", () => {
   it("clamps text fields and preserves valid records", () => {
     const normalized = normalizeAnnotationRecord({
-      ...record({ message: "  hello  " }),
+      ...record({
+        author: "ai",
+        kind: "translation-uncertain",
+        status: "open",
+        mode: undefined,
+        message: "  hello  ",
+      }),
       question: " q ",
-      suggestion: "s".repeat(3000),
+      options: [{ kind: "advice", text: "s".repeat(3000) }],
     });
     expect(normalized?.message).toBe("hello");
     expect(normalized?.question).toBe("q");
-    expect(normalized?.suggestion).toHaveLength(2000);
+    expect(normalized?.options?.[0]?.text).toHaveLength(2000);
   });
 
   it("rejects missing required fields", () => {
@@ -167,7 +173,7 @@ describe("normalizeAnnotationRecord", () => {
     ).toBeUndefined();
   });
 
-  it("migrates legacy user annotations and keeps suggested answers", () => {
+  it("migrates legacy user annotations and legacy answer fields", () => {
     const legacy = normalizeAnnotationRecord({
       ...record(),
       status: "open",
@@ -191,9 +197,17 @@ describe("normalizeAnnotationRecord", () => {
         "Use a neutral register.",
       ],
     });
-    expect(ai?.suggestedAnswers).toEqual([
-      "Use a neutral register.",
-      "Match the document tone.",
+    expect(ai?.options).toEqual([
+      {
+        kind: "instruction",
+        text: "Use a neutral register.",
+        mode: "once",
+      },
+      {
+        kind: "instruction",
+        text: "Match the document tone.",
+        mode: "once",
+      },
     ]);
     expect(ai?.mode).toBeUndefined();
 
@@ -207,8 +221,12 @@ describe("normalizeAnnotationRecord", () => {
       question: "Which register?",
       suggestedAnswer: "Legacy single answer.",
     });
-    expect(legacyAnswer?.suggestedAnswers).toEqual([
-      "Legacy single answer.",
+    expect(legacyAnswer?.options).toEqual([
+      {
+        kind: "instruction",
+        text: "Legacy single answer.",
+        mode: "once",
+      },
     ]);
   });
 

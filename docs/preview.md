@@ -124,7 +124,7 @@ Webview 只通过 `vscode.postMessage` 与宿主通信。宿主在 `PreviewManag
 | `saveGlossary` | `glossaryText` | 兼容旧 UI：只保存术语表 |
 | `clearSummary` | — | 清空文档简报与术语表 |
 | `reviewBlock` | `blockIndex` | AI 审校单块，只返回批注 |
-| `saveAnnotation` | `blockIndex`, `side`, `mode`, `message`，可选 `originAnnotationId`/`resolveAnnotationId` | 保存用户批注；采纳候选回答时同时标记 AI 提问已核对 |
+| `saveAnnotation` | `blockIndex`, `side`, `mode`, `message`，可选 `originAnnotationId`/`resolveAnnotationId` | 保存用户批注；采纳 AI 处理项时使用其提议的 `mode`，同时标记 AI 批注已核对 |
 | `updateAnnotation` | `annotationId`，可选 `message`/`mode`/`side`/`reactivate` | 编辑用户批注、改生效方式或重试 |
 | `setAnnotationStatus` | `annotationId`, `status` | AI 批注的已核对/忽略/重新打开 |
 | `deleteAnnotation` | `annotationId` | 删除批注 |
@@ -238,14 +238,17 @@ Webview 只通过 `vscode.postMessage` 与宿主通信。宿主在 `PreviewManag
 - 有批注的块在块头显示待处理标记（AI 待核对 + 用户待生效/未生效）；点击打开原生 popover/sheet。面板按住标题栏可拖动，页面滚动不关闭；点击外部或 `Esc` 关闭，拖动位置不跨会话记忆。
 - popover 按“AI 审校”和“我的批注”两个可折叠分区展示（AI 在前，默认都展开）；条目使用统一紧凑卡片。
 - 用户批注没有“核对”动作；卡片显示“仅一次/持续”和“待生效/已生效/未生效/已失效”，可编辑正文、生效方式与本地分类，可重试或删除。AI 批注保留已核对/忽略/重新打开/删除。
-- 输入区“仅生效一次”默认开启：参与一次翻译后自动失效；关闭后持续参与后续翻译。用户批注不再区分“备注”和“要求修改”，所有用户批注都是修改指令。
+- 输入区“仅生效一次”默认开启：参与一次翻译后自动失效；关闭后持续参与后续翻译。采纳处理项时默认采用 AI 提议的 `once`/`persistent`，但复选框仍可手动切换。用户批注不再区分“备注”和“要求修改”，所有用户批注都是修改指令。
 - 待生效批注会让非 human 的已翻译块进入同步队列；同步、单块重译、全部重译在翻译该块时都会自动带上生效批注。human 块需手动单块重译；deleted/copy 及不可翻译块不会被强制覆盖。不可翻译或已删除的块不能保存可应用的批注，UI 会禁用保存；human 块可保存，但会提示需要手动重译。
 - 稳定翻译仍会把旧译文作为 `reference` 发送；system prompt 明确声明用户批注优先于 reference（但不能覆盖术语表和输出契约）。批注已从请求级下沉到每个 `TranslationItem`，不同块不会串批注。
 - 翻译成功后按块比较新旧译文：变化记“已生效”，未变化记“未生效”；一次性批注消费后失效，持续批注保持生效但不再强制同步；失败、取消或未翻译的块不更新。同块多条批注共享块级判断，这是启发式标记。
 - “审校此块”只返回批注，不改写译文；deleted/copy 或无译文块不提供审校，结果写入本机 sidecar。审校期间新增的用户批注会保留，写入前若原文/译文/锚点已变化则丢弃本次结果。
 - “审校全文”按块数与 token 预算并发分批审校非 human/deleted/copy/未翻译块（复用 `translationConcurrency`）；只替换仍通过校验的块的 AI 批注，用户批注保留。完成提示包含已审校块数和新增批注数。
-- AI 候选回答：审校可为带 `question` 的批注返回 `suggestedAnswers`，最多 3 条、去重、不得为凑数而填充；`suggestion` 与候选回答互斥，由模型选择，且不强制每个问题都有回答。详情中逐条显示候选回答，每条提供“采用 / 改后采用”，底部提供“自己写”；采纳后在同一把文件锁内创建一次性用户批注并标记 AI 提问已核对，只弹 toast，不自动重译。`suggestion` 只读，不能直接采用为回答。
-- AI 批注是观察，用户批注是指令；AI 批注（包括 `suggestion`/`suggestedAnswers`）永远不会直接进入翻译请求。
+- AI 处理项：审校可在批注上返回最多 3 条 `options`，每条带 `kind`。
+  - `instruction`：自包含、可直接发给翻译器的指令或补充信息；模型同时提议 `mode`（`once`/`persistent`）。详情中逐条显示模式徽标和“采用 / 改后采用”，底部提供“自己写”；采纳后在同一把文件锁内创建用户批注（使用该选项的 `mode`）并标记 AI 批注已核对，只弹 toast，不自动重译。
+  - `advice`：只读建议，显示为“需你确认”，不能直接采纳，也不进入翻译上下文；当修法需要原作者意图、缺失上下文或存在无法解决的原文矛盾时使用。
+  - 可执行指令优先于 advice；同一问题的不同分支用多条 `instruction`；不强制每个问题都有处理项。旧 sidecar 的 `suggestion`/`suggestedAnswers` 读取时迁移为 advice/一次性 instruction。
+- AI 批注是观察，用户批注是指令；AI 批注（包括所有 `options`）永远不会直接进入翻译请求，只有用户采纳后生成的 instruction 用户批注会参与翻译。
 - 只有 OpenAI 兼容 Provider 会读取批注；Mock/自定义 HTTP 会在批注面板显示警告。`side` 仅用于本地分类，不会发送给模型；修改原文仍走原文内联编辑与 diff 写回，批注不会改源文件。
 
 ## 8. 导出与原文确认 modal

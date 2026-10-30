@@ -1,0 +1,170 @@
+{
+  "sourceLanguage": "en",
+  "targetLanguage": "zh-CN",
+  "outputLanguage": "zh-CN",
+  "glossary": [
+    { "source": "cache", "target": "缓存" },
+    { "source": "preview", "target": "预览" }
+  ],
+  "cases": [
+    {
+      "id": "clean-save",
+      "source": "cases/clean-save/source.md",
+      "target": "cases/clean-save/target.md",
+      "tags": ["clean", "precision"],
+      "expected": []
+    },
+    {
+      "id": "clean-paraphrase",
+      "source": "cases/clean-paraphrase/source.md",
+      "target": "cases/clean-paraphrase/target.md",
+      "tags": ["clean", "precision", "paraphrase"],
+      "expected": []
+    },
+    {
+      "id": "omission-scope",
+      "source": "cases/omission-scope/source.md",
+      "target": "cases/omission-scope/target.md",
+      "tags": ["omission", "meaning"],
+      "expected": [
+        {
+          "blockId": "b1",
+          "side": "target",
+          "type": "translation-uncertain",
+          "severity": "check",
+          "match": ["only", "仅", "桌面", "desktop", "app"],
+          "option": {
+            "kind": "instruction",
+            "mode": "once",
+            "mustInclude": ["only", "仅", "桌面", "desktop"]
+          },
+          "description": "译文遗漏了 only in the desktop app 的限制"
+        }
+      ]
+    },
+    {
+      "id": "number-timeout",
+      "source": "cases/number-timeout/source.md",
+      "target": "cases/number-timeout/target.md",
+      "tags": ["numbers", "accuracy"],
+      "expected": [
+        {
+          "blockId": "b1",
+          "side": "target",
+          "type": "translation-uncertain",
+          "severity": "check",
+          "match": ["60", "30", "秒"],
+          "option": {
+            "kind": "instruction",
+            "mode": "once",
+            "mustInclude": ["60"]
+          },
+          "description": "原文 60 秒，译文写成 30 秒"
+        }
+      ]
+    },
+    {
+      "id": "term-cache",
+      "source": "cases/term-cache/source.md",
+      "target": "cases/term-cache/target.md",
+      "tags": ["terminology", "glossary"],
+      "expected": [
+        {
+          "blockId": "b1",
+          "side": "target",
+          "type": "term",
+          "severity": "check",
+          "match": ["缓存", "快取", "cache"],
+          "option": {
+            "kind": "instruction",
+            "mustInclude": ["缓存"]
+          },
+          "description": "术语 cache 未使用术语表目标‘缓存’；一次性或持续均可接受"
+        }
+      ]
+    },
+    {
+      "id": "source-contradiction",
+      "source": "cases/source-contradiction/source.md",
+      "target": "cases/source-contradiction/target.md",
+      "tags": ["source-issue", "ambiguity", "advice"],
+      "expected": [
+        {
+          "blockId": "b1",
+          "side": "source",
+          "type": "source-issue",
+          "severity": "check",
+          "match": ["30", "60", "矛盾", "不一致", "冲突", "fixed", "cannot"],
+          "option": {
+            "kind": "advice",
+            "mustInclude": ["30", "60", "确认", "矛盾", "冲突", "不一致"]
+          },
+          "description": "原文先说固定 30 秒不可改，又要求配置为 60 秒；需要人工确认"
+        }
+      ]
+    },
+    {
+      "id": "broken-link",
+      "source": "cases/broken-link/source.md",
+      "target": "cases/broken-link/target.md",
+      "tags": ["markdown", "structure"],
+      "expected": [
+        {
+          "blockId": "b1",
+          "side": "target",
+          "type": "structure",
+          "severity": "check",
+          "match": ["链接", "括号", "markdown", "config", "缺失"],
+          "option": {
+            "kind": "instruction",
+            "mode": "once",
+            "mustInclude": ["config", "链接", "括号", ")"]
+          },
+          "description": "译文链接缺少右括号"
+        }
+      ]
+    },
+    {
+      "id": "recurring-cache",
+      "source": "cases/recurring-cache/source.md",
+      "target": "cases/recurring-cache/target.md",
+      "tags": ["terminology", "consistency", "persistent"],
+      "expected": [
+        {
+          "blockId": "b1",
+          "side": "target",
+          "type": "term",
+          "severity": "check",
+          "match": ["缓存", "快取", "统一", "一致"],
+          "option": {
+            "kind": "instruction",
+            "mode": "persistent",
+            "mustInclude": ["缓存", "统一", "一致"]
+          },
+          "description": "同一块内 cache 的译法不一致；后续翻译应持续统一为‘缓存’"
+        }
+      ]
+    },
+    {
+      "id": "multi-block",
+      "source": "cases/multi-block/source.md",
+      "target": "cases/multi-block/target.md",
+      "tags": ["multi-block", "numbers", "precision"],
+      "expected": [
+        {
+          "blockId": "b2",
+          "side": "target",
+          "type": "translation-uncertain",
+          "severity": "check",
+          "match": ["60", "30", "秒"],
+          "option": {
+            "kind": "instruction",
+            "mode": "once",
+            "mustInclude": ["60"]
+          },
+          "description": "第二个块数字错误，其他块应保持安静"
+        }
+      ]
+    }
+  ]
+}

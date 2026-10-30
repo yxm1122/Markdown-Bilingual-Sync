@@ -5,7 +5,7 @@
 1. 换模型、改提示词、加上下文后，译文是否真的变好？
 2. 失败集中在哪类问题：漏译、术语、结构、受保护片段，还是语义/语气？
 
-数据集约定、用例列表与参考译文说明见 [`eval/README.md`](../eval/README.md)。
+数据集约定、用例列表与参考译文说明见 [`eval/README.md`](../eval/README.md)。AI 批注质量（问题发现、候选处理项、独立执行性）使用独立数据集与流程，见 [`annotation-evaluation.md`](annotation-evaluation.md)。
 
 ## 1. 数据集
 

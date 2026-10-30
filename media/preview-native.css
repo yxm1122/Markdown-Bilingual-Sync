@@ -2033,8 +2033,9 @@ textarea:focus-visible {
   font-size: 10px;
 }
 
-.pv-annotation-suggestion-label {
-  margin-right: 4px;
+.pv-annotation-advice-label {
+  display: block;
+  margin-bottom: 2px;
   color: var(--vscode-descriptionForeground);
   font-size: 10px;
 }
@@ -2069,6 +2070,14 @@ textarea:focus-visible {
   margin: 0;
   line-height: 1.45;
   white-space: pre-wrap;
+}
+
+.pv-annotation-answer-text .pv-annotation-mode {
+  display: inline-block;
+  margin-right: 2px;
+  vertical-align: 1px;
+  font-size: 9.5px;
+  line-height: 15px;
 }
 
 .pv-annotation-answer-actions {
@@ -2116,10 +2125,13 @@ textarea:focus-visible {
   color: var(--vscode-textLink-foreground);
 }
 
-.pv-annotation-suggestion {
-  margin: 3px 0 0;
+.pv-annotation-advice {
+  margin: 0;
+  padding: 6px 2px;
+  border-bottom: 1px solid var(--vscode-panel-border);
   color: var(--vscode-descriptionForeground);
-  font-style: italic;
+  line-height: 1.45;
+  white-space: pre-wrap;
 }
 
 .pv-annotation-details {

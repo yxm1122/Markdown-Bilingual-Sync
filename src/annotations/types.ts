@@ -18,6 +18,7 @@
 import type {
   AnnotationSide,
   ReviewAnnotationType,
+  ReviewOption,
   ReviewSeverity,
 } from "../translation/types";
 
@@ -50,11 +51,10 @@ export interface AnnotationRecord {
   severity: ReviewSeverity;
   message: string;
   question?: string;
-  /** AI 对问题的候选回答；与 suggestion 互斥。 */
-  suggestedAnswers?: string[];
+  /** AI 批注的可采纳指令或只读建议。 */
+  options?: ReviewOption[];
   sourceExcerpt?: string;
   targetExcerpt?: string;
-  suggestion?: string;
   /** 用户批注的生效方式；AI 批注无此字段。 */
   mode?: AnnotationMode;
   status: AnnotationStatus;
@@ -62,9 +62,9 @@ export interface AnnotationRecord {
   sourceHash?: string;
   /** 创建时的源块序号；用于无缓存批注在首次翻译后迁移到锚点。 */
   sourceIndex?: number;
-  /** 用户批注：采纳候选回答时关联的 AI 批注 id。 */
+  /** 用户批注：采纳 AI 处理项时关联的 AI 批注 id。 */
   originAnnotationId?: string;
-  /** AI 批注：被哪条用户批注回答。 */
+  /** AI 批注：被哪条用户批注处理。 */
   answeredBy?: string;
   /** 用户批注：最近一次参与翻译的时间。 */
   lastAppliedAt?: string;
@@ -80,10 +80,55 @@ export interface AnnotationView extends AnnotationRecord {
 /** 单个字段上限；防止模型/用户输入撑爆 sidecar。 */
 export const MAX_ANNOTATION_MESSAGE = 2_000;
 export const MAX_ANNOTATION_EXCERPT = 1_000;
-export const MAX_ANNOTATION_SUGGESTION = 2_000;
-export const MAX_ANNOTATION_ANSWER = 2_000;
-export const MAX_SUGGESTED_ANSWERS = 3;
+export const MAX_ANNOTATION_OPTION = 2_000;
+export const MAX_REVIEW_OPTIONS = 3;
 export const MAX_ANNOTATIONS_PER_BLOCK = 6;
+
+/** 归一化并去重模型返回的处理项；无效项直接丢弃。 */
+export function normalizeReviewOptions(
+  value: unknown,
+  max = MAX_REVIEW_OPTIONS,
+): ReviewOption[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  const options: ReviewOption[] = [];
+  const seen = new Set<string>();
+  for (const item of value) {
+    if (!item || typeof item !== "object") {
+      continue;
+    }
+    const record = item as Record<string, unknown>;
+    const kind =
+      record.kind === "instruction" || record.kind === "advice"
+        ? record.kind
+        : undefined;
+    const text = normalizeAnnotationText(record.text, MAX_ANNOTATION_OPTION);
+    if (!kind || !text) {
+      continue;
+    }
+    const option: ReviewOption =
+      kind === "advice"
+        ? { kind, text }
+        : {
+            kind,
+            text,
+            ...(record.mode === "once" || record.mode === "persistent"
+              ? { mode: record.mode }
+              : { mode: "once" }),
+          };
+    const key = `${option.kind}\u0000${option.text}`;
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    options.push(option);
+    if (options.length >= max) {
+      break;
+    }
+  }
+  return options;
+}
 
 /** 归一化不可信字符串字段。 */
 export function normalizeAnnotationText(

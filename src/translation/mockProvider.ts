@@ -352,9 +352,17 @@ export class MockTranslationProvider implements TranslationProvider {
         message:
           "Mock review: verify that this wording matches the document brief.",
         question: "Is the register appropriate for the intended audience?",
-        suggestedAnswers: [
-          "Use a neutral, professional register for the intended audience.",
-          "Match the document brief's tone and keep the wording concise.",
+        options: [
+          {
+            kind: "instruction",
+            text: "Use a neutral, professional register for the intended audience.",
+            mode: "once",
+          },
+          {
+            kind: "instruction",
+            text: "Match the document brief's tone and keep the wording concise.",
+            mode: "once",
+          },
         ],
       },
     ];

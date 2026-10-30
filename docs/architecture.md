@@ -81,7 +81,7 @@
 
 `CacheSummary`：`text`、`sourceHash`、`updatedAt`、可选 `model`、`glossary`、`brief`（`audience` / `toneAndStyle` / `ambiguities` / `doNotTranslate`）。摘要属于缓存元数据，不参与对齐与导出；源文变化后只标记过期，仍可作为上下文使用。brief 每个字段最多 400 字符，旧缓存缺失时按空处理。
 
-批注不在缓存 Markdown 中，而存放在缓存同目录的 `<cache>.annotations.json` sidecar；`SyncService.loadPreviewState` 读取后在 `buildPreviewModel` 中按块 id 挂到视图，并统计未过期的待生效批注数。用户批注有 `once`/`persistent` 两种生效方式和 `pending`/`applied`/`ineffective` 状态；一次性批注参与一次翻译后失效，持续批注保持生效但不强制同步。源文变化标记 stale，过期用户批注不进入请求。无缓存块的批注带 `src-<hash>` id 和 sourceIndex，首次同步生成锚点后迁移为锚点 id。同步时待生效批注让非 human 的已翻译块进入队列，human 块需手动单块重译；不可翻译/已删除块不允许保存可应用批注。批注随对应 `TranslationItem.annotations` 发送。稳定翻译仍发送旧译文 `reference`，由 system prompt 声明批注优先于 reference。翻译成功后按块比较新旧译文更新状态与 `lastAppliedAt`；失败/取消/未翻译块不更新。AI 候选回答放在 AI 批注的 `suggestedAnswers`（最多 3 条，去重），采纳某一条时同一把锁内创建一次性用户批注、标记 AI 提问 `resolved` 并记录 `answeredBy`。所有批注读改写走同一文件锁；审校模型调用不占锁，但写入前重新读取并对齐校验原文、译文与锚点，用户批注在审校期间新增也会保留。摘要、brief 与批注文本共享 `assistantLanguage` 输出语言（默认跟随译文），术语表 source/target 不受影响。只有 OpenAI 兼容 Provider 会读取批注；Mock/HTTP 不应用。
+批注不在缓存 Markdown 中，而存放在缓存同目录的 `<cache>.annotations.json` sidecar；`SyncService.loadPreviewState` 读取后在 `buildPreviewModel` 中按块 id 挂到视图，并统计未过期的待生效批注数。用户批注有 `once`/`persistent` 两种生效方式和 `pending`/`applied`/`ineffective` 状态；一次性批注参与一次翻译后失效，持续批注保持生效但不强制同步。源文变化标记 stale，过期用户批注不进入请求。无缓存块的批注带 `src-<hash>` id 和 sourceIndex，首次同步生成锚点后迁移为锚点 id。同步时待生效批注让非 human 的已翻译块进入队列，human 块需手动单块重译；不可翻译/已删除块不允许保存可应用批注。批注随对应 `TranslationItem.annotations` 发送。稳定翻译仍发送旧译文 `reference`，由 system prompt 声明批注优先于 reference。翻译成功后按块比较新旧译文更新状态与 `lastAppliedAt`；失败/取消/未翻译块不更新。AI 处理项放在 AI 批注的 `options`（最多 3 条，去重）：`instruction` 可采纳并携带 `once`/`persistent`，`advice` 只读；采纳 instruction 时同一把锁内创建使用该 `mode` 的用户批注、标记 AI 批注 `resolved` 并记录 `answeredBy`。旧 `suggestion`/`suggestedAnswers` 在读取时迁移。所有批注读改写走同一文件锁；审校模型调用不占锁，但写入前重新读取并对齐校验原文、译文与锚点，用户批注在审校期间新增也会保留。摘要、brief 与批注文本共享 `assistantLanguage` 输出语言（默认跟随译文），术语表 source/target 不受影响。只有 OpenAI 兼容 Provider 会读取批注；Mock/HTTP 不应用。
 
 ## 3. 主要流程
 
@@ -198,7 +198,7 @@ batchTranslateFolder
 - 简报过期（源文哈希变化）仍作为上下文使用，只提示用户。
 - 同步/重译/全部重译/回译可以携带摘要与 brief；二者 token 从每批预算中扣除；不同摘要、brief 或 context 的请求不会被合并。用户批注随 item 携带，逐块计入批次预算。
 - 单块重译/回译由 `sync/blockContext` 从同一 section 取 1 个前块/后块（标题优先取后一块正文），作为只读 `context` 发送；大块或超过 600 token 时不加。回译的 adjacent context 来自目标语言缓存。
-- 审校可手动按块或按文件触发；文件级审校跳过 human/deleted/copy/未翻译块，按块数（最多 6）和 token 预算分批并发调用 reviewer（共享 `translationConcurrency` 全局限流），只替换仍通过原文/译文校验的块的 AI 批注，用户批注保留。完成提示报告已审校块数和新增批注数。审校可为带 `question` 的批注返回最多 3 条 `suggestedAnswers`（去重、不填充）；`suggestion` 与候选回答互斥，且不强制每个问题都有回答。
+- 审校可手动按块或按文件触发；文件级审校跳过 human/deleted/copy/未翻译块，按块数（最多 6）和 token 预算分批并发调用 reviewer（共享 `translationConcurrency` 全局限流），只替换仍通过原文/译文校验的块的 AI 批注，用户批注保留。完成提示报告已审校块数和新增批注数。审校可返回最多 3 条带类型的 `options`（去重、不填充）：`instruction` 必须自包含并可单独进入翻译上下文，`advice` 只给人看；处理项不再要求批注先有 `question`，且不强制每个问题都有处理项。
 - 稳定翻译仍由 `stableTranslation` 控制：重译参考旧译文，回译参考当前原文；单块上下文不会替代 reference。带生效批注时 reference 仍按稳定翻译发送，system prompt 声明批注优先于 reference，避免旧译文压过批注。
 - `retranslateAll` 仍会重译“手工改过缓存但锚点 mode=auto”的块；human 限制只作用于待生效批注拉起的分支，避免改变原有全部重译语义。
 
@@ -244,13 +244,13 @@ Provider 必须：
 能力：
 
 - `supportsSummary` + `summarize`：支持整篇摘要、术语表与 brief 生成；`outputLanguage` 控制摘要与 brief 文本语言，术语表 source/target 仍使用翻译语言对。
-- `supportsReview` + `review`：支持语义审校；只返回 `ReviewAnnotationDraft[]`（批注），不返回译文；`outputLanguage` 控制批注消息、问题、建议与候选回答的语言，excerpt 保持原文/译文原样。
+- `supportsReview` + `review`：支持语义审校；只返回 `ReviewAnnotationDraft[]`（批注），不返回译文；`outputLanguage` 控制批注消息、问题与处理项的语言，excerpt 保持原文/译文原样。
 - `supportsAnnotations`：Provider 是否读取并执行 `TranslationItem.annotations`。Mock/自定义 HTTP 为 false；只有 OpenAI 兼容 Provider 为 true。
 - `testConnection`：支持连接测试。
 
 实现：
 
-- `MockTranslationProvider`：离线词典替换 + 结构标记，用于演示和测试；返回固定 brief 与一条带多个候选回答的演示批注，但不会执行批注。
+- `MockTranslationProvider`：离线词典替换 + 结构标记，用于演示和测试；返回固定 brief 与一条带多个 instruction 处理项的演示批注，但不会执行批注。
 - `OpenAITranslationProvider`：Chat Completions，JSON 输出校验、重试、脱敏、连接测试、摘要、审校与批注；审校失败时带严格提示重试一次。
 - `GenericHttpTranslationProvider`：模板化 endpoint/headers/body，响应 JSON path 或纯文本，不支持自动摘要、审校与批注。
 
