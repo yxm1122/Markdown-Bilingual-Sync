@@ -26,28 +26,80 @@ function termForms(term: string): string[] {
   const head = space >= 0 ? clean.slice(0, space + 1) : "";
   const last = space >= 0 ? clean.slice(space + 1) : clean;
   const forms = new Set<string>([clean]);
-  for (const suffix of ["s", "es", "ed", "ing", "d"]) {
-    forms.add(`${head}${last}${suffix}`);
-  }
+  const add = (value: string): void => {
+    forms.add(`${head}${value}`);
+  };
   if (/[^aeiou]y$/i.test(last)) {
-    forms.add(`${head}${last.slice(0, -1)}ies`);
+    const stem = last.slice(0, -1);
+    add(`${stem}ies`);
+    add(`${stem}ied`);
+    add(`${last}ing`);
+  } else {
+    if (/(?:s|x|z|ch|sh)$/i.test(last)) {
+      add(`${last}es`);
+    } else {
+      add(`${last}s`);
+    }
+    if (/e$/i.test(last)) {
+      add(`${last}d`);
+      add(`${last.slice(0, -1)}ing`);
+    } else {
+      add(`${last}ed`);
+      add(`${last}ing`);
+    }
   }
   return [...forms];
+}
+
+/** 判断是否为可用词边界/词形匹配的拉丁术语。 */
+function isLatinTerm(term: string): boolean {
+  return /^[A-Za-z0-9][A-Za-z0-9 _-]*$/.test(term);
 }
 
 /** 拉丁术语按词边界和常见词形匹配；其他（含中文/混排）按子串匹配。 */
 export function containsTerm(text: string, term: string): boolean {
   const clean = term.trim();
   if (!clean) return false;
-  if (/^[A-Za-z0-9][A-Za-z0-9 _-]*$/.test(clean)) {
+  if (isLatinTerm(clean)) {
     return termForms(clean).some((form) =>
       new RegExp(
-        `(?<![\\p{L}\\p{N}_])${escapeRegExp(form)}(?![\\p{L}\\p{N}_])`,
+        `(?<![A-Za-z0-9_])${escapeRegExp(form)}(?![A-Za-z0-9_])`,
         "iu",
       ).test(text),
     );
   }
   return text.toLowerCase().includes(clean.toLowerCase());
+}
+
+/**
+ * 统计术语在文本中出现的次数，供评估判断“只出现一次”的生成条目。
+ * 拉丁术语按词边界和常见词形统计；其他按不重叠子串统计。
+ */
+export function countTermOccurrences(text: string, term: string): number {
+  const clean = term.trim();
+  if (!clean) return 0;
+  if (isLatinTerm(clean)) {
+    const pattern = termForms(clean).map(escapeRegExp).join("|");
+    return (
+      text.match(
+        new RegExp(
+          `(?<![A-Za-z0-9_])(?:${pattern})(?![A-Za-z0-9_])`,
+          "giu",
+        ),
+      ) ?? []
+    ).length;
+  }
+  const haystack = text.toLowerCase();
+  const needle = clean.toLowerCase();
+  let count = 0;
+  let index = 0;
+  while (index < haystack.length) {
+    const found = haystack.indexOf(needle, index);
+    if (found < 0) break;
+    count += 1;
+    index = found + needle.length;
+  }
+  return count;
 }
 
 /**

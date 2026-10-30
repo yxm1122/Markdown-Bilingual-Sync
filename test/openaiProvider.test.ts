@@ -8,6 +8,7 @@ import {
   resolveChatCompletionsUrl,
   sanitizeRemoteMessage,
   selectGlossary,
+  type OpenAIRetryInfo,
   type OpenAIProviderConfig,
   type OpenAIProviderOptions,
 } from "../src/translation/openaiProvider";
@@ -69,6 +70,7 @@ function configuredProvider(
   config: Partial<OpenAIProviderConfig> = {},
   limiter?: RequestLimiter,
   onResponse?: OpenAIProviderOptions["onResponse"],
+  onRetry?: OpenAIProviderOptions["onRetry"],
 ) {
   const calls: FetchCall[] = [];
   const provider = new OpenAITranslationProvider({
@@ -76,6 +78,7 @@ function configuredProvider(
     retryDelayMs: 0,
     limiter,
     onResponse,
+    onRetry,
     fetchImpl: (async (
       input: string | URL | Request,
       init?: RequestInit,
@@ -911,6 +914,135 @@ describe("OpenAITranslationProvider", () => {
     expect(calls).toHaveLength(2);
   });
 
+  it("reports glossary retry diagnostics without changing the result", async () => {
+    let attempt = 0;
+    const retries: OpenAIRetryInfo[] = [];
+    const { provider } = configuredProvider(
+      async () => {
+        attempt += 1;
+        return completion(
+          JSON.stringify({
+            items: [
+              {
+                id: "b1",
+                text: attempt === 1 ? "下表汇总状态。" : "下面的表格汇总了状态。",
+              },
+            ],
+          }),
+        );
+      },
+      {},
+      undefined,
+      undefined,
+      (info) => retries.push(info),
+    );
+
+    const results = await provider.translate({
+      ...request([item("b1", "The table below summarizes the state.")]),
+      glossary: [{ source: "table", target: "表格" }],
+    });
+
+    expect(results).toEqual([
+      { id: "b1", text: "下面的表格汇总了状态。" },
+    ]);
+    expect(retries).toEqual([
+      { reasons: ["glossary"], attempt: 2, batchSize: 1 },
+    ]);
+  });
+
+  it("reports review parse retry diagnostics", async () => {
+    let attempt = 0;
+    const retries: OpenAIRetryInfo[] = [];
+    const { provider } = configuredProvider(
+      async () => {
+        attempt += 1;
+        return completion(
+          attempt === 1
+            ? '{"annotations":[{"id":"b1"}]}'
+            : '{"annotations":[{"id":"b1","side":"target","type":"term","severity":"check","message":"请核对术语。"}]}',
+        );
+      },
+      {},
+      undefined,
+      undefined,
+      (info) => retries.push(info),
+    );
+
+    const annotations = await provider.review({
+      sourceLanguage: "en",
+      targetLanguage: "zh-CN",
+      glossary: [],
+      items: [
+        {
+          id: "b1",
+          kind: "paragraph",
+          headingPath: [],
+          sourceText: "Use the cache.",
+          targetText: "使用快取。",
+        },
+      ],
+    });
+
+    expect(annotations).toHaveLength(1);
+    expect(annotations[0]?.id).toBe("b1");
+    expect(retries).toEqual([
+      { reasons: ["review-parse"], attempt: 2, batchSize: 1 },
+    ]);
+  });
+
+  it("reports HTTP and validation retry diagnostics", async () => {
+    const httpRetries: OpenAIRetryInfo[] = [];
+    let httpAttempt = 0;
+    const httpProvider = configuredProvider(
+      async () => {
+        httpAttempt += 1;
+        if (httpAttempt === 1) {
+          return completion("temporary failure", 500);
+        }
+        return completion('{"items":[{"id":"b1","text":"已翻译。"}]}');
+      },
+      {},
+      undefined,
+      undefined,
+      (info) => httpRetries.push(info),
+    ).provider;
+
+    await httpProvider.translate(request([item("b1", "Translate this.")]));
+    expect(httpRetries).toEqual([
+      {
+        reasons: ["http"],
+        attempt: 2,
+        batchSize: 1,
+        delayMs: 0,
+        status: 500,
+      },
+    ]);
+
+    const validationRetries: OpenAIRetryInfo[] = [];
+    let validationAttempt = 0;
+    const validationProvider = configuredProvider(
+      async () => {
+        validationAttempt += 1;
+        return completion(
+          validationAttempt === 1
+            ? '{"items":[]}'
+            : '{"items":[{"id":"b1","text":"已翻译。"}]}',
+        );
+      },
+      {},
+      undefined,
+      undefined,
+      (info) => validationRetries.push(info),
+    ).provider;
+
+    await validationProvider.translate(
+      request([item("b1", "Translate this.")]),
+    );
+    expect(validationRetries).toEqual([
+      { reasons: ["validation"], attempt: 2, batchSize: 1 },
+    ]);
+  });
+
   it("retries once when inline code is replaced by quoted prose", async () => {
     const source =
       "Use `Translate Current File` to create a translation.";
@@ -1456,11 +1588,15 @@ describe("prompt structure", () => {
     ).toContain(
       "Output language for the summary and translation guidance: ja-JP.",
     );
-    expect(summary).toContain("Only include terms that actually appear");
     expect(summary).toContain(
-      `up to ${MAX_DOCUMENT_GLOSSARY_ENTRIES} entries`,
+      `at most ${MAX_DOCUMENT_GLOSSARY_ENTRIES} entries (storage limit)`,
     );
-    expect(summary).toContain("do not invent or pad entries");
+    expect(summary).toContain("translation decisions, not vocabulary");
+    expect(summary).toContain("appears at least twice");
+    expect(summary).toContain("exactly one target");
+    expect(summary).toContain('Never combine alternatives with "/", "、"');
+    expect(summary).toContain("Do not copy entries whose source does not appear");
+    expect(summary).toContain("Never pad entries to reach a count");
 
     const review = buildReviewSystemPrompt("en", "zh-CN", "ja-JP");
     expect(review).toContain(

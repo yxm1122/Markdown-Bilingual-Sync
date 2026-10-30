@@ -53,6 +53,7 @@ npm run eval:translation -- \
 | `--candidate-dir <dir>` | 直接评估已有候选文件 |
 | `--out <dir>` | 报告目录，默认 `eval/reports/<timestamp>` |
 | `--filter <text>` | 只运行 id/tag 包含该文本的用例 |
+| `--glossary <path>` | 用 JSON 数组或摘要 candidate JSON 覆盖 manifest 术语表，用于测试 AI 术语对译文与重试的影响 |
 | `--model <name>` / `--base-url <url>` | 覆盖 OpenAI 兼容配置 |
 | `--api-key-env <name>` | 读取 Key 的环境变量名，默认 `MBS_API_KEY` |
 | `--case-concurrency <n>` | 同时评估的用例数，默认 4；设为 1 可复现旧的串行耗时 |
@@ -63,6 +64,28 @@ npm run eval:translation -- \
 | `--help` | 查看完整帮助 |
 
 其他环境变量：`MBS_API_BASE_URL`、`MBS_API_MODEL`、`MBS_BATCH_SIZE`、`MBS_BATCH_TOKEN_BUDGET`、`MBS_TIMEOUT_MS`、`MBS_CONCURRENCY`、`MBS_THINKING=enabled|disabled|default`、旧版 `MBS_DISABLE_THINKING=1`。
+
+### 摘要/术语表生成评估
+
+`eval:summary` 复用 `eval/manifest.json` 的 source 文档与用户术语表，直接调用 `Provider.summarize`，不进入翻译流程：
+
+```bash
+MBS_API_KEY=... npm run eval:summary -- \
+  --provider openai \
+  --model deepseek-ai/DeepSeek-V3.2 \
+  --base-url https://api.siliconflow.cn/v1 \
+  --out eval/reports/summary/current
+```
+
+报告同时记录模型原始输出（raw）与产品确定性过滤后的结果（filtered）：
+
+- 条目数、平均每篇条数、原文中不存在的 source；
+- source 与 target 相同、target 含 `/`/`、`/`or`/`或` 并列、含代码/URL/HTML；
+- 与用户术语表冲突的条目；
+- 只出现一次的条目（提示性指标）；
+- 摘要词数、brief 字段与人工评分表。
+
+默认应用产品过滤：source 至少出现两次、不重复用户术语，并丢弃并列译法/代码/原文=译文等条目；`--no-filter` 关闭过滤，`--min-occurrences 1` 只关闭频率门槛。摘要生成本身没有自动重试；runner error 用例保留在逐篇报告中，但不计入聚合平均值。
 
 ## 3. 速度与思考模式
 
@@ -104,6 +127,8 @@ npm run eval:translation -- --provider openai --model deepseek-ai/DeepSeek-V3.2 
 - `human-review.md`：单独的人工评分表。
 - `candidates/<case-id>.md`：生成的候选译文，便于人工对照。
 
+翻译报告还会记录 `timing.retry`：自动重试事件数以及 `http`/`validation`/`protected`/`glossary` 比例。它只用于诊断，不参与 pass/fail；`0 event(s)` 表示这一轮没有触发任何请求级重试。摘要报告写入 `eval/reports/summary/<label>/`，包含 `prompt.txt`、逐篇 `candidates/<case-id>.json`（raw/filtered 术语与丢弃原因）和人工评分表。
+
 自动指标：
 
 | 类别 | 指标 |
@@ -122,7 +147,7 @@ npm run eval:translation -- --provider openai --model deepseek-ai/DeepSeek-V3.2 
 
 - 评估集当前是 **en → zh-CN**，其他语言对需要新增对应参考译文；源词保留率等启发式依赖英文源文。
 - 脚注定义现在参与翻译，但只覆盖同一段连续行；跨空行的多段脚注只有第一段会被翻译。预览仍把脚注区单独渲染，不提供逐块编辑入口。
-- 文档术语表由摘要生成，只存在于缓存；评估 CLI 直接使用 `eval/manifest.json` 的术语表，不读取文档术语表。
+- 文档术语表由摘要生成，只存在于缓存；翻译评估 CLI 默认直接使用 `eval/manifest.json` 的术语表，不读取文档术语表；需要测试 AI 术语时用 `--glossary` 传入 candidate JSON。摘要评估只检查生成质量，不验证译文质量。
 - 链接 title 视为可翻译正文，不作为受保护片段；评估只检查链接目标地址是否保留。行内代码按 CommonMark 反引号规则识别，支持双反引号片段；代码片段内反斜杠没有转义含义。
 - 源词保留率用于识别“只加标记、正文照抄”的输出，对大量保留英文专有名词的技术文本可能偏严；报告会给出具体块和比例。
 - 参考相似度是字符 bigram Dice，适合发现大幅偏离，不适合判定“哪种译法更好”。
@@ -134,5 +159,6 @@ npm run eval:translation -- --provider openai --model deepseek-ai/DeepSeek-V3.2 
 1. 固定数据集、模型、参数，先跑一次基线。
 2. 阅读 `report.md` 的硬问题和人工评分，记录主要错误类型。
 3. 一次只改一个变量（提示词、批次策略、术语表、模型），重跑并对比 `report.json`。
-4. 自动指标改善但人工评分不升，说明指标被“技巧性输出”误导，应优先看人工结果。
-5. 新用例先过数据集自检测试，再纳入基线。
+4. 改摘要/术语表提示词时先跑 `eval:summary` 的 raw 指标，再跑默认 filtered 指标，分别判断提示词与确定性过滤的贡献。
+5. 自动指标改善但人工评分不升，说明指标被“技巧性输出”误导，应优先看人工结果。
+6. 新用例先过数据集自检测试，再纳入基线。

@@ -153,7 +153,7 @@ describe("SyncService block editing and back-translation", () => {
       audience: "Developers",
       toneAndStyle: "Concise technical prose",
     };
-    summaryGlossary = [{ source: "summary", target: "摘要" }];
+    summaryGlossary = [{ source: "item", target: "条目" }];
     const provider: TranslationProvider = {
       id: "batch:test",
       label: "Test",
@@ -789,7 +789,7 @@ describe("SyncService block editing and back-translation", () => {
     const generated = parseCacheDocument(cacheText, makeMd()).summary;
     expect(generated?.text).toContain("摘要：");
     expect(generated?.glossary).toEqual([
-      { source: "summary", target: "摘要" },
+      { source: "item", target: "条目" },
     ]);
     expect(generated?.brief).toEqual({
       audience: "Developers",
@@ -806,12 +806,37 @@ describe("SyncService block editing and back-translation", () => {
     expect(cacheStore.text).toContain("mbs-summary:");
   });
 
+  it("filters unusable generated glossary entries before writing the cache", async () => {
+    const uri = mocks.FakeUri.file("/project/demo.md") as unknown as Uri;
+    mocks.documentState.text = `${SOURCE}\n\nHeading First paragraph item one single`;
+    summaryGlossary = [
+      { source: "Heading", target: "标题" },
+      { source: "First paragraph", target: "第一段" },
+      { source: "single", target: "单个" },
+      { source: "missing", target: "缺失" },
+      { source: "item one", target: "item one" },
+      { source: "Paragraph", target: "段落 / 段落项" },
+    ];
+
+    const text = await service.generateSummary(uri);
+    const summary = parseCacheDocument(text, makeMd()).summary;
+    expect(summary?.glossary).toEqual([
+      { source: "Heading", target: "标题" },
+      { source: "First paragraph", target: "第一段" },
+    ]);
+  });
+
   it("keeps existing glossary entries when generation fills the cap", async () => {
     const uri = mocks.FakeUri.file("/project/demo.md") as unknown as Uri;
     const existing = Array.from({ length: 3 }, (_, index) => ({
       source: `keep-${index}`,
       target: `保留-${index}`,
     }));
+    const fillers = [
+      ...existing.map((entry) => entry.source),
+      ...Array.from({ length: 200 }, (_, index) => `new-${index}`),
+    ];
+    mocks.documentState.text = `${SOURCE}\n\n${fillers.join(" ")} ${fillers.join(" ")}`;
     await service.saveBrief(uri, {
       text: "旧摘要",
       glossary: existing,
@@ -927,6 +952,26 @@ describe("SyncService block editing and back-translation", () => {
     expect(updated?.text).toBe(summary?.text);
   });
 
+  it("preserves user-edited document glossary entries in translation requests", async () => {
+    const uri = mocks.FakeUri.file("/project/demo.md") as unknown as Uri;
+    await service.saveBrief(uri, {
+      text: "摘要",
+      glossary: [
+        { source: "Heading", target: "标题 / 标头" },
+        { source: "item", target: "条目" },
+      ],
+    });
+    const paragraph = inspect(SOURCE, cacheStore.text!).alignment.blocks.find(
+      (block) => block.source.kind === "paragraph" && block.cache,
+    )!;
+    requests = [];
+    await service.retranslateBlock(uri, paragraph.source.index);
+    expect(requests[0].glossary).toEqual([
+      { source: "Heading", target: "标题 / 标头" },
+      { source: "item", target: "条目" },
+    ]);
+  });
+
   it("preserves omitted brief fields and keeps the summary hash for brief-only saves", async () => {
     const uri = mocks.FakeUri.file("/project/demo.md") as unknown as Uri;
     const first = await service.saveBrief(uri, {
@@ -1022,7 +1067,7 @@ describe("SyncService block editing and back-translation", () => {
     const summary = parseCacheDocument(regenerated, makeMd()).summary;
     expect(summary?.glossary).toEqual([
       { source: "custom", target: "自定义" },
-      { source: "summary", target: "摘要" },
+      { source: "item", target: "条目" },
     ]);
   });
 

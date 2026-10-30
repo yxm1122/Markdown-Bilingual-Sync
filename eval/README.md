@@ -51,4 +51,4 @@ Create `cases/<id>/source.md` and `cases/<id>/reference.zh.md`, keep block parit
 
 ## Runner
 
-Run `npm run eval:translation -- --provider mock` for an offline pipeline smoke test, or see [`docs/evaluation.md`](../docs/evaluation.md) for real Provider runs, environment variables, reports, metrics, and the known footnote-definition gap. Reports are written to `eval/reports/` and ignored by git.
+Run `npm run eval:translation -- --provider mock` for an offline pipeline smoke test, or see [`docs/evaluation.md`](../docs/evaluation.md) for real Provider runs, environment variables, reports, metrics, and the known footnote-definition gap. `npm run eval:summary` reuses the same source documents to evaluate summary and document-glossary quality (raw vs deterministic filtered). Reports are written to `eval/reports/` and ignored by git.

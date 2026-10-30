@@ -24,6 +24,7 @@ import {
   type EvaluationCaseReport,
 } from "../src/evaluation/report";
 import { syncDocument } from "../src/sync/sync";
+import { normalizeGlossaryEntries } from "../src/glossary/glossary";
 import { ConcurrencyLimiter } from "../src/translation/concurrency";
 import type {
   GlossaryEntry,
@@ -54,6 +55,7 @@ interface CliOptions {
   candidateDir?: string;
   outDir: string;
   filter?: string;
+  glossary?: string;
   model?: string;
   baseUrl?: string;
   apiKeyEnv: string;
@@ -73,6 +75,7 @@ Options:
   --candidate-dir <dir>   Evaluate <id>.md files instead of calling a provider
   --out <dir>             Report output directory (default: eval/reports/<timestamp>)
   --filter <text>         Only run cases whose id or tags contain text
+  --glossary <path>       Override the manifest glossary with a JSON array or a summary candidate JSON
   --model <name>          Override model (openai provider)
   --base-url <url>        Override base URL (openai provider)
   --api-key-env <name>    Environment variable containing the API key (default: MBS_API_KEY)
@@ -171,6 +174,7 @@ function parseCli(): CliOptions | undefined {
       "candidate-dir": { type: "string" },
       out: { type: "string" },
       filter: { type: "string" },
+      glossary: { type: "string" },
       model: { type: "string" },
       "base-url": { type: "string" },
       "api-key-env": { type: "string" },
@@ -216,6 +220,9 @@ function parseCli(): CliOptions | undefined {
       ),
     ),
     ...(values.filter ? { filter: String(values.filter) } : {}),
+    ...(values.glossary
+      ? { glossary: path.resolve(String(values.glossary)) }
+      : {}),
     ...(values.model ? { model: String(values.model) } : {}),
     ...(values["base-url"] ? { baseUrl: String(values["base-url"]) } : {}),
     apiKeyEnv: String(values["api-key-env"] ?? "MBS_API_KEY"),
@@ -257,11 +264,18 @@ async function readJson<T>(file: string): Promise<T> {
   return JSON.parse(await readFile(file, "utf8")) as T;
 }
 
+interface ProviderDiagnostics {
+  responseCount: number;
+  reasoningResponses: number;
+  retryEvents: number;
+  retryByReason: Record<string, number>;
+}
+
 function createProvider(options: CliOptions): {
   provider: TranslationProvider;
   label: string;
   model: string;
-  diagnostics?: { responseCount: number; reasoningResponses: number };
+  diagnostics?: ProviderDiagnostics;
 } {
   if (options.provider === "mock") {
     return {
@@ -281,7 +295,12 @@ function createProvider(options: CliOptions): {
     process.env.MBS_API_BASE_URL ??
     "https://api.openai.com/v1";
   const model = options.model ?? process.env.MBS_API_MODEL ?? "gpt-4o-mini";
-  const diagnostics = { responseCount: 0, reasoningResponses: 0 };
+  const diagnostics: ProviderDiagnostics = {
+    responseCount: 0,
+    reasoningResponses: 0,
+    retryEvents: 0,
+    retryByReason: {},
+  };
   const provider = new OpenAITranslationProvider({
     getConfig: () => ({
       baseUrl,
@@ -297,6 +316,13 @@ function createProvider(options: CliOptions): {
       diagnostics.responseCount += 1;
       if (info.hasReasoning) {
         diagnostics.reasoningResponses += 1;
+      }
+    },
+    onRetry: (info) => {
+      diagnostics.retryEvents += 1;
+      for (const reason of info.reasons) {
+        diagnostics.retryByReason[reason] =
+          (diagnostics.retryByReason[reason] ?? 0) + 1;
       }
     },
   });
@@ -354,6 +380,25 @@ async function main(): Promise<void> {
   if (!options) return;
 
   const manifest = await readJson<EvalManifest>(options.manifest);
+  if (options.glossary) {
+    const raw = await readJson<unknown>(options.glossary);
+    let entries: unknown;
+    if (Array.isArray(raw)) {
+      entries = raw;
+    } else if (raw && typeof raw === "object") {
+      const record = raw as Record<string, unknown>;
+      entries =
+        record.filteredGlossary ??
+        record.rawGlossary ??
+        record.glossary;
+    }
+    if (!Array.isArray(entries)) {
+      throw new Error(
+        "--glossary must point to a JSON array or a summary candidate JSON with a glossary array.",
+      );
+    }
+    manifest.glossary = normalizeGlossaryEntries(entries);
+  }
   if (!manifest.sourceLanguage || !manifest.targetLanguage) {
     throw new Error("Manifest must define sourceLanguage and targetLanguage.");
   }
@@ -498,6 +543,10 @@ async function main(): Promise<void> {
                   responseCount: providerInfo.diagnostics.responseCount,
                   reasoningResponses:
                     providerInfo.diagnostics.reasoningResponses,
+                  retry: {
+                    events: providerInfo.diagnostics.retryEvents,
+                    byReason: providerInfo.diagnostics.retryByReason,
+                  },
                 }
               : {}),
           }
@@ -555,6 +604,15 @@ async function main(): Promise<void> {
   if (usesProvider && providerInfo?.diagnostics) {
     console.log(
       `Thinking: ${options.thinking}; reasoning responses: ${providerInfo.diagnostics.reasoningResponses}/${providerInfo.diagnostics.responseCount}`,
+    );
+    console.log(
+      `Automatic retries: ${providerInfo.diagnostics.retryEvents} event(s)${
+        Object.keys(providerInfo.diagnostics.retryByReason).length > 0
+          ? ` (${Object.entries(providerInfo.diagnostics.retryByReason)
+              .map(([reason, count]) => `${reason} ${count}`)
+              .join(", ")})`
+          : ""
+      }`,
     );
   }
 }

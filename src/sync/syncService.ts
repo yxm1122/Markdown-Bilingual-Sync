@@ -27,6 +27,7 @@ import {
   prioritizeGlossaryEntries,
   type GlossaryLoadResult,
 } from "../glossary/glossary";
+import { filterGeneratedGlossary } from "../glossary/generatedGlossary";
 import type { GlossaryStore } from "../glossary/glossaryStore";
 import {
   markCachedBlockSynced,
@@ -2082,6 +2083,23 @@ export class SyncService {
     if (!text) {
       throw new Error(tError("sync.aiEmptySummary"));
     }
+    const generatedGlossary = filterGeneratedGlossary(
+      result.glossary,
+      summaryText,
+      {
+        // 文档术语表用于跨块一致性：只出现一次的词不需要一致性约束；
+        // 用户术语表已覆盖的 source 也不重复收录，避免覆盖用户选择。
+        minOccurrences: 2,
+        reservedSources: scopedGlossary.entries.map((entry) => entry.source),
+      },
+    );
+    if (generatedGlossary.dropped.length > 0) {
+      this.log(
+        `summary glossary: dropped ${generatedGlossary.dropped.length} generated entries (${[
+          ...new Set(generatedGlossary.dropped.map((entry) => entry.reason)),
+        ].join(", ")})`,
+      );
+    }
     // 持久化稳定 provider id（mock/openai/http），显示名在渲染时按当前 locale 映射，
     // 避免缓存内容随界面语言变化。BatchTranslationCoordinator 的 id 带 batch: 前缀，
     // 只用于运行时路由，不写入缓存。
@@ -2091,7 +2109,7 @@ export class SyncService {
       model: this.provider.id.replace(/^batch:/, ""),
       glossary: this.mergeGeneratedGlossary(
         existingGlossary,
-        result.glossary,
+        generatedGlossary.entries,
       ),
       brief: hasTranslationBrief(generatedBrief)
         ? generatedBrief

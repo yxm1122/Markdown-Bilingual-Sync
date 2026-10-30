@@ -616,6 +616,7 @@
     "ui:perf": "npm run compile && tsx --tsconfig scripts/tsconfig.json scripts/benchmark-preview.ts",
     "eval:translation": "tsx --tsconfig scripts/tsconfig.json scripts/evaluate-translation.ts",
     "eval:annotations": "tsx --tsconfig scripts/tsconfig.json scripts/evaluate-annotations.ts",
+    "eval:summary": "tsx --tsconfig scripts/tsconfig.json scripts/evaluate-summary.ts",
     "package": "npm run compile && node -e \"require('node:fs').mkdirSync('artifacts/vsix',{recursive:true})\" && vsce package --readme-path README.en.md --out artifacts/vsix/markdown-bilingual-sync.vsix",
     "l10n:build": "tsx scripts/build-l10n.ts"
   },

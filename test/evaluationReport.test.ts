@@ -74,6 +74,7 @@ describe("translation evaluation report", () => {
         thinkingMode: "disabled",
         responseCount: 10,
         reasoningResponses: 5,
+        retry: { events: 3, byReason: { http: 1, glossary: 2 } },
         totalCaseDurationMs: 10_000,
         wallDurationMs: 3_000,
       },
@@ -84,10 +85,14 @@ describe("translation evaluation report", () => {
       "- Concurrency: 4 case(s), 8 request(s); thinking: disabled",
     );
     expect(markdown).toContain("- Reasoning responses: 5/10");
+    expect(markdown).toContain(
+      "- Automatic retries: 3 event(s) across 10 response(s); http 1, glossary 2",
+    );
     const json = JSON.parse(formatEvaluationJson(report)) as {
-      timing: { wallDurationMs: number };
+      timing: { wallDurationMs: number; retry: { events: number } };
     };
     expect(json.timing.wallDurationMs).toBe(3_000);
+    expect(json.timing.retry.events).toBe(3);
   });
 
   it("escapes table separators in dynamic case ids", () => {

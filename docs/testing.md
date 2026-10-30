@@ -48,7 +48,7 @@ CI 会依次执行 `npm ci`、`typecheck`、`test`、`package`。本地提交前
 | `batchCoordinator.test.ts` | 跨文件合并、复合 id 路由、摘要/brief/context/annotations 隔离、文档标识分配、单调用取消 |
 | `concurrency.test.ts` | 全局限制器 FIFO/取消/计数、文件 worker |
 | `batchFiles.test.ts` | 目录扫描、导出文件过滤、路径边界 |
-| `openaiProvider.test.ts` | 请求体、JSON 校验、重试、提示词/回声拒绝、脱敏、摘要/brief、context、annotations、审校、连接测试 |
+| `openaiProvider.test.ts` | 请求体、JSON 校验、重试与重试诊断、提示词/回声拒绝、脱敏、摘要/brief、context、annotations、审校、连接测试 |
 | `blockContext.test.ts` | 单块标题/段落/回译邻块上下文、section 边界、大块与 token 上限 |
 | `genericHttpProvider.test.ts` | 模板变量、响应路径/纯文本、脱敏、错误处理 |
 | `mockProvider.test.ts` | 演示 Provider 输出契约 |
@@ -59,6 +59,8 @@ CI 会依次执行 `npm ci`、`typecheck`、`test`、`package`。本地提交前
 | `documentMetadata.test.ts` | frontmatter 白名单（含 name）、列表/块值、截断、相对路径与 frontmatter 剥离 |
 | `evaluationMetrics.test.ts` | 遗漏/回显、受保护片段、术语、结构、frontmatter、参考相似度等评估指标 |
 | `evaluationDataset.test.ts` | 17 个评估用例的结构/术语/参考译文自洽性 |
+| `generatedGlossary.test.ts` | AI 生成术语的缺失/相同/并列/受保护/单次出现/用户重复过滤，以及术语计数与 CJK 邻接边界 |
+| `summaryEvaluation.test.ts` | 摘要词数/术语表红旗/聚合指标、raw/filtered 报告与丢弃原因 |
 | `consistency.test.ts` | 译后术语/受保护 Markdown 检查、人工锁定块跳过、无缓存处理 |
 | `documentGlossary.test.ts` | 文档术语表文本格式解析、去重、行号错误与条数上限 |
 | `i18nCatalog.test.ts` | en/zh key 与占位符一致性、bundle 新鲜度、中/英文 locale 行为 |

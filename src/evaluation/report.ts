@@ -25,6 +25,14 @@ export interface EvaluationCaseReport extends CaseEvaluation {
   error?: string;
 }
 
+/** 自动重试统计；只用于诊断重试是否过频，不参与通过/失败。 */
+export interface EvaluationRetryStats {
+  /** 触发的重试请求数；一次请求可能同时覆盖多个原因。 */
+  events: number;
+  /** 按原因统计的重试次数；同一事件可能计入多个原因。 */
+  byReason: Record<string, number>;
+}
+
 /** 评估运行的耗时与并发配置，用于比较不同参数的吞吐。 */
 export interface EvaluationTiming {
   /** 同时运行的用例数。 */
@@ -36,6 +44,8 @@ export interface EvaluationTiming {
   /** 实际收到的模型响应数与其中包含 reasoning 的数量。 */
   responseCount?: number;
   reasoningResponses?: number;
+  /** 自动重试统计；仅 Provider 运行且提供诊断时有值。 */
+  retry?: EvaluationRetryStats;
   /** 各用例耗时之和，反映总工作量。 */
   totalCaseDurationMs: number;
   /** 实际墙钟耗时，反映并行后的速度。 */
@@ -175,6 +185,17 @@ export function formatEvaluationMarkdown(report: EvaluationReport): string {
           ...(report.timing.responseCount !== undefined
             ? [
                 `- Reasoning responses: ${report.timing.reasoningResponses ?? 0}/${report.timing.responseCount}`,
+              ]
+            : []),
+          ...(report.timing.retry
+            ? [
+                `- Automatic retries: ${report.timing.retry.events} event(s) across ${report.timing.responseCount ?? "-"} response(s)${
+                  Object.keys(report.timing.retry.byReason).length > 0
+                    ? `; ${Object.entries(report.timing.retry.byReason)
+                        .map(([reason, count]) => `${reason} ${count}`)
+                        .join(", ")}`
+                    : ""
+                }`,
               ]
             : []),
         ]
