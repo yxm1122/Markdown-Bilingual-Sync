@@ -5,7 +5,7 @@
  * 计算问题召回/误报，并检查处理项是否可独立执行、是否选择了合理的生效方式。
  *
  * 关键约定：
- * - 当前提示词（suggestion/suggestedAnswers）只作为基线，归一化时映射为 advice/instruction；
+ * - 同时兼容当前 options 与旧 suggestion/suggestedAnswers 基线输出，旧字段映射为 advice/instruction；
  * - 问题匹配按 block id、side、type/severity 和关键词匹配，避免依赖模型措辞完全一致；
  * - 自动指标只判断结构与可执行性，语义质量仍需 human-review.md 人工评分；
  * - 独立执行检查是启发式，低分项必须人工复核，不能直接当作唯一的 pass/fail 依据。

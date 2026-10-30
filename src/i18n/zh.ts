@@ -296,6 +296,8 @@ export const UI_TEXT = {
       statusIneffective: "未生效",
       statusInactive: "已失效",
       statusArchived: "已归档",
+      statusChecked: "已核对",
+      statusDismissed: "已忽略",
       statusHint: "按译文是否发生变化判断是否生效。",
       unsupported: "当前 Provider 不会读取批注，保存后不会影响翻译。",
       cannotAnnotate: "此块不参与翻译，无法保存可应用的批注。",

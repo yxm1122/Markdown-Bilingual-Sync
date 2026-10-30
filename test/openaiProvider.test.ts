@@ -423,8 +423,9 @@ describe("OpenAITranslationProvider", () => {
       "You are a bilingual reviewer",
     );
     expect(body.messages[0].content).toContain(
-      "Do not translate or rewrite the whole item",
+      "Flag only material problems",
     );
+    expect(body.messages[0].content).toContain("never rewrite the item");
     expect(body.messages[0].content).toContain("options");
   });
 
@@ -1467,7 +1468,7 @@ describe("prompt structure", () => {
     );
     expect(review).toContain("keep sourceExcerpt and targetExcerpt verbatim");
     expect(review).toContain(
-      `at most ${MAX_ANNOTATIONS_PER_BLOCK} annotations per id`,
+      `Max ${MAX_ANNOTATIONS_PER_BLOCK} annotations per id`,
     );
   });
 });

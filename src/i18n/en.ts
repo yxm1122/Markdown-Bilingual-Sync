@@ -313,6 +313,8 @@ export const UI_TEXT = {
       statusIneffective: "Not applied",
       statusInactive: "Expired",
       statusArchived: "Archived",
+      statusChecked: "Checked",
+      statusDismissed: "Dismissed",
       statusHint:
         "Effect is inferred from whether the target text changed.",
       unsupported:

@@ -267,6 +267,100 @@ describe("block annotations", () => {
     });
   });
 
+  it("replaces the pending severity badge after an AI annotation is checked", () => {
+    const text = harness.text.preview.annotations;
+    const { container } = renderWithAnnotation([
+      annotation({ status: "resolved" }),
+      annotation({
+        id: "u1",
+        author: "user",
+        kind: "request-change",
+        mode: "once",
+        status: "pending",
+        message: "Apply this change.",
+      }),
+    ]);
+    fireEvent.click(
+      within(container).getByLabelText(
+        fmt(text.openCount, { count: 1 }),
+      ) as HTMLElement,
+    );
+    const dialog = screen.getByRole("dialog", { name: text.title });
+    expect(within(dialog).getByText(text.statusChecked)).toBeTruthy();
+    expect(within(dialog).queryByText(text.severityCheck)).toBeNull();
+  });
+
+  it("removes the block attention badge when the only AI annotation is checked", () => {
+    const text = harness.text.preview.annotations;
+    const { container } = renderWithAnnotation([
+      annotation({ status: "resolved" }),
+    ]);
+    expect(
+      within(container).queryByLabelText(
+        fmt(text.openCount, { count: 1 }),
+      ),
+    ).toBeNull();
+  });
+
+  it("removes the block attention badge when the only AI annotation is dismissed", () => {
+    const text = harness.text.preview.annotations;
+    const { container } = renderWithAnnotation([
+      annotation({ status: "dismissed" }),
+    ]);
+    expect(
+      within(container).queryByLabelText(
+        fmt(text.openCount, { count: 1 }),
+      ),
+    ).toBeNull();
+  });
+
+  it("shows answered instead of checked when an AI annotation was adopted", () => {
+    const text = harness.text.preview.annotations;
+    const { container } = renderWithAnnotation([
+      annotation({ status: "resolved", answeredBy: "u1" }),
+      annotation({
+        id: "u1",
+        author: "user",
+        kind: "request-change",
+        mode: "once",
+        status: "pending",
+        message: "Apply this change.",
+      }),
+    ]);
+    fireEvent.click(
+      within(container).getByLabelText(
+        fmt(text.openCount, { count: 1 }),
+      ) as HTMLElement,
+    );
+    const dialog = screen.getByRole("dialog", { name: text.title });
+    expect(within(dialog).getByText(text.answered)).toBeTruthy();
+    expect(within(dialog).queryByText(text.statusChecked)).toBeNull();
+    expect(within(dialog).queryByText(text.severityCheck)).toBeNull();
+  });
+
+  it("shows a dismissed AI annotation as dismissed instead of pending", () => {
+    const text = harness.text.preview.annotations;
+    const { container } = renderWithAnnotation([
+      annotation({ status: "dismissed" }),
+      annotation({
+        id: "u1",
+        author: "user",
+        kind: "request-change",
+        mode: "once",
+        status: "pending",
+        message: "Apply this change.",
+      }),
+    ]);
+    fireEvent.click(
+      within(container).getByLabelText(
+        fmt(text.openCount, { count: 1 }),
+      ) as HTMLElement,
+    );
+    const dialog = screen.getByRole("dialog", { name: text.title });
+    expect(within(dialog).getByText(text.statusDismissed)).toBeTruthy();
+    expect(within(dialog).queryByText(text.severityCheck)).toBeNull();
+  });
+
   it("triggers a file-level review from the toolbar", () => {
     const { container } = renderWithAnnotation([]);
     const toolbar = container.querySelector(".pv-toolbar") as HTMLElement;

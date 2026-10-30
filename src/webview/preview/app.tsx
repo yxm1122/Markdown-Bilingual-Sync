@@ -643,7 +643,7 @@ function AnnotationItem(props: {
               : text.preview.panes.target}
           </span>
           {annotation.author === "ai" ? (
-            <>
+            annotation.status === "open" ? (
               <span
                 class={`pv-annotation-severity is-${annotation.severity}`}
               >
@@ -651,12 +651,17 @@ function AnnotationItem(props: {
                   ? text.preview.annotations.severityCheck
                   : text.preview.annotations.severityInfo}
               </span>
-              {annotation.answeredBy ? (
-                <span class="pv-annotation-answered">
-                  {text.preview.annotations.answered}
-                </span>
-              ) : null}
-            </>
+            ) : annotation.answeredBy ? (
+              <span class="pv-annotation-answered">
+                {text.preview.annotations.answered}
+              </span>
+            ) : (
+              <span class={`pv-annotation-state is-${annotation.status}`}>
+                {annotation.status === "dismissed"
+                  ? text.preview.annotations.statusDismissed
+                  : text.preview.annotations.statusChecked}
+              </span>
+            )
           ) : null}
           {annotation.stale ? (
             <span

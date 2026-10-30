@@ -2001,12 +2001,17 @@ textarea:focus-visible {
   background: var(--vscode-inputValidation-warningBackground);
 }
 
-.pv-annotation-state.is-applied {
+.pv-annotation-state.is-applied,
+.pv-annotation-state.is-resolved {
   color: var(--vscode-testing-iconPassed, var(--vscode-charts-green));
 }
 
 .pv-annotation-state.is-ineffective {
   color: var(--vscode-editorWarning-foreground);
+}
+
+.pv-annotation-state.is-dismissed {
+  color: var(--vscode-descriptionForeground);
 }
 
 .pv-annotation-state.is-inactive {
