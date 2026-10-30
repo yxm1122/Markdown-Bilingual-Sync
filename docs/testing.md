@@ -79,8 +79,8 @@ CI 会依次执行 `npm ci`、`typecheck`、`test`、`package`。本地提交前
 | `webview/glossaryModel.test.ts` | 术语表文本解析/序列化/校验/规范化 |
 | `annotationStore.test.ts` | 本机批注 sidecar 往返/sourceIndex、旧 open→pending 迁移、mode/status、options 去重/上限、旧 suggestion/suggestedAnswers 迁移、损坏备份、字段裁剪、删除 |
 | `syncAnnotations.test.ts` | 审校批注替换、用户批注保留、待生效批注进入同步、一次性消费/持续生效、生效标记、带批注仍发送 reference、锚点优先重绑定、不可翻译/删除块拒绝、retranslateAll 手改 auto 块、pending 拉起 stale 计数、未翻译批注迁移、并发写、并发分批请求、stale 过滤、token 分批、处理项采纳并使用其 mode、标记已核对、reopen 清除 answeredBy |
-| `reviewEvaluation.test.ts` | 批注归一化（旧字段映射）、问题匹配、clean 误报、option coverage、standalone 启发式、mode/advice 指标、聚合 |
-| `reviewEvaluationDataset.test.ts` | `eval/review` 用例唯一性、源/译文块对齐、预期块/关键词/处理项自洽性 |
+| `reviewEvaluation.test.ts` | 批注归一化（旧字段映射）、问题匹配、clean 误报、option coverage、standalone 启发式、mode/advice、消息/批注长度、多指令、过程化措辞、无依据标点、字段重复、option 长度/禁用词/全包含词、`any` 块匹配、聚合 |
+| `reviewEvaluationDataset.test.ts` | `eval/review` 12 个用例唯一性、源/译文块对齐、预期块/关键词/处理项自洽性、多分支与持久规则覆盖 |
 | `reviewEvaluationReport.test.ts` | 批注评测 report/human-review 格式、基线对比与 delta |
 | `webview/app.dialogs.test.tsx` | 导出/原文 diff、写入态竞态、错误恢复、关闭与焦点 |
 | `webview/bridge.test.ts` | 首屏 JSON、格式化、VS Code API 与静态预览 localStorage 回退 |

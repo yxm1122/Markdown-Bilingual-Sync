@@ -47,6 +47,7 @@ export interface NormalizedReviewAnnotation {
 
 /** 单个用例中人工标注的预期问题。 */
 export interface ExpectedReviewIssue {
+  /** 对应块 id；"any" 表示任意块。 */
   blockId: string;
   side: AnnotationSide;
   type: ReviewAnnotationType | "any";
@@ -59,6 +60,14 @@ export interface ExpectedReviewIssue {
     mode?: ReviewOptionMode | "any";
     /** 处理项文本中至少命中一个词；省略时不限制。 */
     mustInclude?: string[];
+    /** 处理项文本中必须全部包含的词；省略时不限制。 */
+    mustIncludeAll?: string[];
+    /** 每个词组的至少一个词必须分别由不同处理项包含；用于校验分支互斥。 */
+    mustIncludeGroups?: string[][];
+    /** 处理项文本最大字符数；省略时不限制。 */
+    maxChars?: number;
+    /** 处理项不得包含的过程化或填充片段。 */
+    forbid?: string[];
     /** 至少需要多少个满足条件的处理项，默认 1。 */
     minCount?: number;
   };
@@ -116,6 +125,14 @@ export interface ReviewCaseEvaluation {
   advicePassedCount: number;
   adviceFallbackRate: number;
   mixedOptionAnnotations: number;
+  messageChars: number;
+  maxMessageChars: number;
+  annotationChars: number;
+  multiInstructionAnnotations: number;
+  adviceOnlyAnnotations: number;
+  proceduralInstructions: number;
+  unsupportedPunctuationClaims: number;
+  duplicateFieldAnnotations: number;
   durationMs: number;
   error?: string;
 }
@@ -152,6 +169,14 @@ export interface ReviewEvaluationAggregate {
   adviceFallbackRate: number;
   mixedOptionAnnotations: number;
   totalAnnotations: number;
+  averageMessageChars: number;
+  maxMessageChars: number;
+  averageAnnotationChars: number;
+  multiInstructionAnnotations: number;
+  adviceOnlyAnnotations: number;
+  proceduralInstructions: number;
+  unsupportedPunctuationClaims: number;
+  duplicateFieldAnnotations: number;
   formatErrors: number;
   cleanCasePassRate: number;
   averageDurationMs: number;
@@ -179,7 +204,7 @@ const DEICTIC =
 const QUOTE =
   /[`"'“”‘’「」『』]/;
 const INSTRUCTION_VERB =
-  /(?:\b(?:change|replace|remove|delete|add|insert|use|set|update|translate|keep|match|apply|restore|reword|rewrite|fix|correct|ensure|preserve|clarify)\b|将|把|改为|改成|替换|删除|删去|补上|补充|保留|统一|使用|译为|写成|添加|增加|移除|修正|调整|设置|确保|保持|重译|翻译|标注|注明|禁止|避免)/i;
+  /(?:\b(?:change|replace|remove|delete|add|insert|use|set|update|translate|keep|match|apply|restore|reword|rewrite|fix|correct|ensure|preserve|clarify)\b|将|把|改为|改成|替换|删除|删去|补上|补充|补全|加上|添加|增加|保留|统一|使用|译为|写成|移除|修正|调整|设置|确保|保持|重译|翻译|标注|注明|禁止|避免|不加|不得|不要)/i;
 
 function normalizeText(value: unknown): string | undefined {
   if (typeof value !== "string") {
@@ -373,6 +398,18 @@ function optionMatches(
     return false;
   }
   // mode 是独立维度：用户可在采纳时切换，不应让整个处理项算作未覆盖。
+  if (spec.maxChars !== undefined && option.text.length > spec.maxChars) {
+    return false;
+  }
+  if (spec.forbid?.some((term) => option.text.includes(term))) {
+    return false;
+  }
+  if (
+    spec.mustIncludeAll?.length &&
+    !spec.mustIncludeAll.every((term) => option.text.includes(term))
+  ) {
+    return false;
+  }
   if (spec.mustInclude?.length) {
     return countMatches(spec.mustInclude, option.text) > 0;
   }
@@ -381,6 +418,130 @@ function optionMatches(
 
 function ratio(numerator: number, denominator: number): number {
   return denominator > 0 ? numerator / denominator : 1;
+}
+
+const PROCEDURAL_INSTRUCTION =
+  /(?:例如|比如|本指令|适用于|步骤如下|第[一二三]步|e\.g\.|for example)/i;
+
+const PUNCTUATION_CLAIMS: Array<{
+  name: string;
+  claim: RegExp;
+  evidence: RegExp;
+}> = [
+  {
+    name: "colon",
+    claim:
+      /(?:使用了|用了|出现|多了|多出|添加|加了|包含|带有).{0,8}冒号|冒号.{0,8}(?:出现|多余|重复)|(?:\b(?:uses?|used|contains?|has|adds?|added|includes?)\b.{0,12}\bcolon\b)/i,
+    evidence: /[:：]/,
+  },
+  {
+    name: "period",
+    claim:
+      /(?:使用了|用了|出现|多了|多出|添加|加了|包含|带有).{0,8}(?:句号|句点)|(?:句号|句点).{0,8}(?:出现|多余|重复)|(?:\b(?:uses?|used|contains?|has|adds?|added|includes?)\b.{0,12}\bperiod\b)/i,
+    evidence: /[。.]/,
+  },
+  {
+    name: "comma",
+    claim:
+      /(?:使用了|用了|出现|多了|多出|添加|加了|包含|带有).{0,8}逗号|逗号.{0,8}(?:出现|多余|重复)|(?:\b(?:uses?|used|contains?|has|adds?|added|includes?)\b.{0,12}\bcomma\b)/i,
+    evidence: /[，,]/,
+  },
+  {
+    name: "parentheses",
+    claim:
+      /(?:使用了|用了|出现|多了|多出|添加|加了|包含|带有).{0,8}括号|括号.{0,8}(?:出现|多余|重复)|(?:\b(?:uses?|used|contains?|has|adds?|added|includes?)\b.{0,12}\bparenth)/i,
+    evidence: /[()（）]/,
+  },
+];
+
+function normalizeForOverlap(text: string): string {
+  return text.toLowerCase().replace(/[\s\p{P}\p{S}]+/gu, "");
+}
+
+function bigrams(text: string): Set<string> {
+  const values = new Set<string>();
+  for (let index = 0; index < text.length - 1; index += 1) {
+    values.add(text.slice(index, index + 2));
+  }
+  return values;
+}
+
+function fieldOverlap(left: string, right: string): number {
+  const a = normalizeForOverlap(left);
+  const b = normalizeForOverlap(right);
+  if (a.length < 4 || b.length < 4) {
+    return 0;
+  }
+  const first = bigrams(a);
+  const second = bigrams(b);
+  let shared = 0;
+  for (const value of first) {
+    if (second.has(value)) {
+      shared += 1;
+    }
+  }
+  return shared / Math.max(1, first.size + second.size - shared);
+}
+
+function hasUnsupportedPunctuation(
+  annotation: NormalizedReviewAnnotation,
+): boolean {
+  const text = [
+    annotation.message,
+    annotation.question ?? "",
+    ...annotation.options.map((option) => option.text),
+  ].join("\n");
+  const evidence = [
+    annotation.sourceExcerpt ?? "",
+    annotation.targetExcerpt ?? "",
+  ].join("\n");
+  return PUNCTUATION_CLAIMS.some(
+    (item) => item.claim.test(text) && !item.evidence.test(evidence),
+  );
+}
+
+function annotationQuality(
+  annotation: NormalizedReviewAnnotation,
+): {
+  messageChars: number;
+  annotationChars: number;
+  multiInstruction: boolean;
+  adviceOnly: boolean;
+  proceduralInstruction: boolean;
+  unsupportedPunctuation: boolean;
+  duplicateField: boolean;
+} {
+  const instructions = annotation.options.filter(
+    (option) => option.kind === "instruction",
+  );
+  const advices = annotation.options.filter(
+    (option) => option.kind === "advice",
+  );
+  const optionChars = annotation.options.reduce(
+    (total, option) => total + option.text.length,
+    0,
+  );
+  return {
+    messageChars: annotation.message.length,
+    annotationChars:
+      annotation.message.length +
+      (annotation.question?.length ?? 0) +
+      optionChars,
+    multiInstruction: instructions.length >= 2,
+    adviceOnly: advices.length > 0 && instructions.length === 0,
+    proceduralInstruction: instructions
+      .filter((option) => option.mode === "persistent")
+      .some((option) => PROCEDURAL_INSTRUCTION.test(option.text)),
+    unsupportedPunctuation: hasUnsupportedPunctuation(annotation),
+    duplicateField: [
+      annotation.question ?? "",
+      ...annotation.options.map((option) => option.text),
+    ].some(
+      (value) =>
+        Boolean(value) &&
+        fieldOverlap(annotation.message, value) >= 0.6,
+    ),
+  };
 }
 
 /** 评估一个用例的批注质量。 */
@@ -400,7 +561,10 @@ export function evaluateReviewCase(
       | { index: number; annotation: NormalizedReviewAnnotation; score: number }
       | undefined;
     for (const [index, annotation] of annotations.entries()) {
-      if (used.has(index) || annotation.id !== expected.blockId) {
+      if (
+        used.has(index) ||
+        (expected.blockId !== "any" && annotation.id !== expected.blockId)
+      ) {
         continue;
       }
       if (annotation.side !== expected.side) {
@@ -447,7 +611,24 @@ export function evaluateReviewCase(
         (item) => item.kind !== "instruction" || item.standalone === true,
       )
       .slice(0, minCount);
-    const optionMatched = candidates.length >= minCount;
+    const usedGroupCandidates = new Set<number>();
+    const groupsSatisfied =
+      option.mustIncludeGroups?.every((group) =>
+        group.some((term) =>
+          candidates.some((candidate, index) => {
+            if (
+              usedGroupCandidates.has(index) ||
+              !candidate.text.includes(term)
+            ) {
+              return false;
+            }
+            usedGroupCandidates.add(index);
+            return true;
+          }),
+        ),
+      ) ?? true;
+    const optionMatched =
+      candidates.length >= minCount && groupsSatisfied;
     const standalonePassed =
       option.kind === "instruction" && optionCandidates.length >= minCount
         ? optionCandidates
@@ -525,6 +706,38 @@ export function evaluateReviewCase(
   const standaloneCount = instructionOptions.filter(
     (option) => option.standalone === true,
   ).length;
+  const qualities = annotations.map((annotation) =>
+    annotationQuality(annotation),
+  );
+  const messageChars = qualities.reduce(
+    (total, item) => total + item.messageChars,
+    0,
+  );
+  const maxMessageChars = qualities.reduce(
+    (max, item) => Math.max(max, item.messageChars),
+    0,
+  );
+  const annotationChars = qualities.reduce(
+    (total, item) => total + item.annotationChars,
+    0,
+  );
+  const multiInstructionAnnotations = qualities.filter(
+    (item) => item.multiInstruction,
+  ).length;
+  const adviceOnlyAnnotations = qualities.filter(
+    (item) => item.adviceOnly,
+  ).length;
+  const proceduralInstructions = instructionOptions.filter(
+    (option) =>
+      option.mode === "persistent" &&
+      PROCEDURAL_INSTRUCTION.test(option.text),
+  ).length;
+  const unsupportedPunctuationClaims = qualities.filter(
+    (item) => item.unsupportedPunctuation,
+  ).length;
+  const duplicateFieldAnnotations = qualities.filter(
+    (item) => item.duplicateField,
+  ).length;
 
   return {
     id: input.id,
@@ -564,6 +777,14 @@ export function evaluateReviewCase(
       const kinds = new Set(annotation.options.map((option) => option.kind));
       return kinds.size > 1;
     }).length,
+    messageChars,
+    maxMessageChars,
+    annotationChars,
+    multiInstructionAnnotations,
+    adviceOnlyAnnotations,
+    proceduralInstructions,
+    unsupportedPunctuationClaims,
+    duplicateFieldAnnotations,
     durationMs: input.durationMs ?? 0,
     ...(input.error ? { error: input.error } : {}),
   };
@@ -595,6 +816,13 @@ export function aggregateReviewEvaluations(
   const modePassedCount = sum((item) => item.modePassedCount);
   const adviceSpecifiedCount = sum((item) => item.adviceSpecifiedCount);
   const advicePassedCount = sum((item) => item.advicePassedCount);
+  const totalAnnotations = sum((item) => item.annotations.length);
+  const messageChars = sum((item) => item.messageChars);
+  const annotationChars = sum((item) => item.annotationChars);
+  const maxMessageChars = cases.reduce(
+    (max, item) => Math.max(max, item.maxMessageChars),
+    0,
+  );
 
   return {
     caseCount: cases.length,
@@ -629,7 +857,23 @@ export function aggregateReviewEvaluations(
     advicePassedCount,
     adviceFallbackRate: ratio(advicePassedCount, adviceSpecifiedCount),
     mixedOptionAnnotations: sum((item) => item.mixedOptionAnnotations),
-    totalAnnotations: sum((item) => item.annotations.length),
+    totalAnnotations,
+    averageMessageChars:
+      totalAnnotations > 0 ? messageChars / totalAnnotations : 0,
+    maxMessageChars,
+    averageAnnotationChars:
+      totalAnnotations > 0 ? annotationChars / totalAnnotations : 0,
+    multiInstructionAnnotations: sum(
+      (item) => item.multiInstructionAnnotations,
+    ),
+    adviceOnlyAnnotations: sum((item) => item.adviceOnlyAnnotations),
+    proceduralInstructions: sum((item) => item.proceduralInstructions),
+    unsupportedPunctuationClaims: sum(
+      (item) => item.unsupportedPunctuationClaims,
+    ),
+    duplicateFieldAnnotations: sum(
+      (item) => item.duplicateFieldAnnotations,
+    ),
     formatErrors: cases.filter((item) => item.error).length,
     cleanCasePassRate: ratio(
       cleanCases.length - cleanFalsePositiveCases,

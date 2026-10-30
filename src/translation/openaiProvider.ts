@@ -238,17 +238,20 @@ const MAX_REVIEW_ANNOTATIONS = 120;
 
 const REVIEW_RULES = [
   "Compare each source item with its current target translation and the document brief.",
-  "Flag only material problems in meaning, terminology, structure, or factual accuracy. Do not flag valid paraphrases, equivalent phrasing, or stylistic alternatives. If nothing material is wrong, return an empty annotations array; never return a note that needs no action.",
-  "Flag source issues (typos, inconsistent names/numbers, ambiguous references, contradictions, broken Markdown) and translation uncertainties (wrong sense, missing nuance, omissions/additions, register mismatch, term conflicts). Use \"target\" when the translation needs changing; use \"source\" only when the source itself is wrong and the translation reflects it faithfully. Report each issue once; use \"structure\" for broken Markdown/link syntax.",
-  "Use \"check\" for human verification and \"info\" for useful notes. Never assert an unverifiable factual error; say what to check.",
+  "Flag only material problems in meaning, terminology, structure, or factual accuracy. Ignore valid paraphrases, style preferences, and claims not visible in the quoted source/target; do not speculate about grammar or intent. Do not question a legitimate term or title choice; flag a term only for a glossary/brief conflict or an objective error. If nothing material is wrong, return {\"annotations\":[]}; never return a note that needs no action.",
+  "Use side \"target\" when the translation needs changing; use \"source\" only when the source itself is wrong and the translation reflects it faithfully; a source contradiction belongs to source even if the translation copies it. Report each issue once; one annotation per issue; use \"structure\" for broken Markdown/link syntax. Use \"check\" for human verification and \"info\" for notes. Never assert an unverifiable factual error.",
   "Glossary targets are mandatory: if the target already uses the target term, do not flag it; never change the glossary or propose an option that violates it.",
   [
-    `For each flag, optionally return up to ${MAX_REVIEW_OPTIONS} distinct options:`,
-    "- instruction: sent to the translator without the question or context. Name the exact text/location, state the change and intended result, and quote only the changed fragment; never rewrite the item. No yes/no, pronouns, or \"option 1\". Use once for a local fix; persistent only for a block-wide rule.",
-    "- advice: human-only, never sent. Use only when outside information is needed (author intent, missing context, unresolvable contradiction); say what to verify and why.",
-    `- A direct fix gets one instruction even without a question. Use several only for genuinely different resolutions. Do not mix advice and instructions, or pad. Max ${MAX_ANNOTATIONS_PER_BLOCK} annotations per id.`,
+    `Return up to ${MAX_REVIEW_OPTIONS} options:`,
+    "- instruction: sent to the translator without the question or context. Name the exact text/location, state the change and result, quote only the changed fragment; never rewrite. No yes/no, pronouns, or option numbers. One sentence. Use once for a local fix; persistent only for a block-wide rule, using the brief's wording as one general rule with no examples or affected items. If the brief states a rule, return that rule as a persistent instruction, not a local edit.",
+    "- advice: human-only and never sent. Use only when external information is needed; say what to verify and why. An unresolvable source issue must include one advice.",
+    `- If a fix exists, options must not be empty: one clear fix -> one instruction even without a question; multiple valid resolutions, including alternatives allowed by the brief -> 2–3 instructions, one per resolution. Do not mix advice/instructions or pad. Max ${MAX_ANNOTATIONS_PER_BLOCK} per id.`,
   ].join("\n"),
-  'Examples. Instruction: "将译文中的“30 秒”改为“60 秒”。" (once). Advice: "请确认超时时间应为 30 秒还是 60 秒；原文前后不一致。" Clean: glossary cache→缓存, target "缓存会保存上一次的译文。" -> no annotation; never flag a term whose target uses the glossary target or invent style/terminology concerns when meaning, glossary, and structure are correct.',
+  "Examples:",
+  'Numeric: source "The default port is 8080.", target "默认端口为 80。" -> {"id":"b1","side":"target","type":"translation-uncertain","severity":"check","message":"译文将 8080 写成 80。","options":[{"kind":"instruction","text":"将“80”改为“8080”。","mode":"once"}]}.',
+  'Persistent rule: brief "列表项末尾不加英文句点", target has code items ending with "." -> {"id":"b1","side":"target","type":"structure","severity":"check","message":"列表项末尾多了英文句点。","options":[{"kind":"instruction","text":"译文的列表项末尾不加英文句点。","mode":"persistent"}]}.',
+  'Open choice: brief allows sidebar as "侧边栏" or "侧栏", target mixes both -> {"id":"b1","side":"target","type":"term","severity":"check","message":"sidebar 译法不一致。","options":[{"kind":"instruction","text":"将 sidebar 统一译为“侧边栏”。","mode":"persistent"},{"kind":"instruction","text":"将 sidebar 统一译为“侧栏”。","mode":"persistent"}]}.',
+  'Clean: source "## Billing API limitations", target "## 计费 API 的限制" -> {"annotations":[]}; do not question the term, title style, or missing punctuation.',
   'Return only JSON: {"annotations":[{"id":"...","side":"source|target","type":"source-issue|translation-uncertain|term|structure","severity":"info|check","message":"...","question":"...","sourceExcerpt":"...","targetExcerpt":"...","options":[{"kind":"instruction","text":"...","mode":"once|persistent"},{"kind":"advice","text":"..."}]}]}. question/options are optional; no Markdown fences.',
 ].join("\n");
 

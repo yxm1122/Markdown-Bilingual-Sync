@@ -428,7 +428,7 @@ describe("OpenAITranslationProvider", () => {
     expect(body.messages[0].content).toContain(
       "Flag only material problems",
     );
-    expect(body.messages[0].content).toContain("never rewrite the item");
+    expect(body.messages[0].content).toContain("never rewrite");
     expect(body.messages[0].content).toContain("options");
   });
 
@@ -1604,7 +1604,7 @@ describe("prompt structure", () => {
     );
     expect(review).toContain("keep sourceExcerpt and targetExcerpt verbatim");
     expect(review).toContain(
-      `Max ${MAX_ANNOTATIONS_PER_BLOCK} annotations per id`,
+      `Max ${MAX_ANNOTATIONS_PER_BLOCK} per id`,
     );
   });
 });

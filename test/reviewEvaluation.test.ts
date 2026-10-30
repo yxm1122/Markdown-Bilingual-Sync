@@ -251,6 +251,122 @@ describe("review evaluation", () => {
     expect(evaluation.recall).toBe(0);
   });
 
+  it("measures concision, duplicate fields, procedural options, and unsupported punctuation", () => {
+    const message = "标题使用了冒号，需要确认格式是否统一。";
+    const evaluation = evaluateReviewCase({
+      id: "quality",
+      annotations: [
+        draft({
+          message,
+          question: "标题使用了冒号，需要确认格式是否统一？",
+          options: [
+            {
+              kind: "instruction",
+              text: "移除所有标题中冒号后的内容，例如“Foo: bar”。",
+              mode: "persistent",
+            },
+            {
+              kind: "instruction",
+              text: "将标题改为“Foo bar”。",
+              mode: "persistent",
+            },
+          ],
+        }),
+      ],
+      expected: [],
+      blockTexts: {
+        b1: { sourceText: "## Foo bar", targetText: "## Foo bar" },
+      },
+    });
+    expect(evaluation.messageChars).toBe(message.length);
+    expect(evaluation.maxMessageChars).toBe(message.length);
+    expect(evaluation.annotationChars).toBeGreaterThan(message.length);
+    expect(evaluation.multiInstructionAnnotations).toBe(1);
+    expect(evaluation.adviceOnlyAnnotations).toBe(0);
+    expect(evaluation.proceduralInstructions).toBe(1);
+    expect(evaluation.unsupportedPunctuationClaims).toBe(1);
+    expect(evaluation.duplicateFieldAnnotations).toBe(1);
+
+    const aggregate = aggregateReviewEvaluations([evaluation]);
+    expect(aggregate.averageMessageChars).toBe(message.length);
+    expect(aggregate.maxMessageChars).toBe(message.length);
+    expect(aggregate.proceduralInstructions).toBe(1);
+    expect(aggregate.unsupportedPunctuationClaims).toBe(1);
+    expect(aggregate.duplicateFieldAnnotations).toBe(1);
+  });
+
+  it("enforces concise options and matches any block id", () => {
+    const pass = evaluateReviewCase({
+      id: "code-period",
+      annotations: [
+        draft({
+          id: "b2",
+          message: "代码片段后多了中文句号。",
+          options: [
+            {
+              kind: "instruction",
+              text: "译文的代码块末尾不加句号。",
+              mode: "persistent",
+            },
+          ],
+        }),
+      ],
+      expected: [
+        expected({
+          blockId: "any",
+          match: ["句号"],
+          option: {
+            kind: "instruction",
+            mode: "persistent",
+            mustIncludeAll: ["代码", "句号"],
+            maxChars: 20,
+            forbid: ["例如", "所有"],
+          },
+        }),
+      ],
+      blockTexts: {
+        b2: { sourceText: "Use code.", targetText: "使用代码。" },
+      },
+    });
+    expect(pass.truePositives).toBe(1);
+    expect(pass.optionPassedCount).toBe(1);
+
+    const fail = evaluateReviewCase({
+      id: "code-period-long",
+      annotations: [
+        draft({
+          id: "b2",
+          message: "代码片段后多了中文句号。",
+          options: [
+            {
+              kind: "instruction",
+              text: "请移除所有代码块后的中文句号，例如“foo”和“bar”。",
+              mode: "persistent",
+            },
+          ],
+        }),
+      ],
+      expected: [
+        expected({
+          blockId: "any",
+          match: ["句号"],
+          option: {
+            kind: "instruction",
+            mode: "persistent",
+            mustIncludeAll: ["代码", "句号"],
+            maxChars: 20,
+            forbid: ["例如", "所有"],
+          },
+        }),
+      ],
+      blockTexts: {
+        b2: { sourceText: "Use code.", targetText: "使用代码。" },
+      },
+    });
+    expect(fail.truePositives).toBe(1);
+    expect(fail.optionPassedCount).toBe(0);
+  });
+
   it("aggregates clean and issue cases", () => {
     const issue = evaluateReviewCase({
       id: "issue",

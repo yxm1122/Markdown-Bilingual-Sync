@@ -36,21 +36,30 @@ describe("review evaluation dataset", () => {
       );
       expect(content.items.length).toBeGreaterThan(0);
       for (const expected of item.expected) {
-        expect(
-          content.blockTexts[expected.blockId],
-          `${item.id}: unknown block ${expected.blockId}`,
-        ).toBeDefined();
+        if (expected.blockId !== "any") {
+          expect(
+            content.blockTexts[expected.blockId],
+            `${item.id}: unknown block ${expected.blockId}`,
+          ).toBeDefined();
+        }
         expect(expected.match.length).toBeGreaterThan(0);
         if (expected.option?.mustInclude) {
           expect(expected.option.mustInclude.length).toBeGreaterThan(0);
+        }
+        if (expected.option?.mustIncludeAll) {
+          expect(expected.option.mustIncludeAll.length).toBeGreaterThan(0);
         }
       }
     }
   });
 
-  it("covers clean, instruction, advice, and persistent cases", () => {
+  it("covers clean, instruction, advice, multi-option, and persistent cases", () => {
     const expected = manifest.cases.flatMap((item) => item.expected);
-    expect(manifest.cases.filter((item) => item.expected.length === 0).length).toBeGreaterThanOrEqual(2);
+    const ids = new Set(manifest.cases.map((item) => item.id));
+    expect(ids.has("clean-heading")).toBe(true);
+    expect(ids.has("code-period")).toBe(true);
+    expect(ids.has("heading-choice")).toBe(true);
+    expect(manifest.cases.filter((item) => item.expected.length === 0).length).toBeGreaterThanOrEqual(3);
     expect(
       expected.filter((item) => item.option?.kind === "instruction").length,
     ).toBeGreaterThanOrEqual(3);
@@ -59,10 +68,16 @@ describe("review evaluation dataset", () => {
     ).toBeGreaterThanOrEqual(1);
     expect(
       expected.filter((item) => item.option?.mode === "persistent").length,
-    ).toBeGreaterThanOrEqual(1);
+    ).toBeGreaterThanOrEqual(2);
     expect(
       expected.filter((item) => item.option?.mode === "once").length,
     ).toBeGreaterThanOrEqual(3);
+    expect(
+      expected.some((item) => (item.option?.minCount ?? 1) >= 2),
+    ).toBe(true);
+    expect(
+      expected.some((item) => item.option?.maxChars !== undefined),
+    ).toBe(true);
   });
 
   it("declares a glossary for the cache cases", () => {

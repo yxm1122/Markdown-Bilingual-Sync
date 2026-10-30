@@ -22,6 +22,77 @@
       "expected": []
     },
     {
+      "id": "clean-heading",
+      "source": "cases/clean-heading/source.md",
+      "target": "cases/clean-heading/target.md",
+      "tags": ["clean", "precision", "heading", "factual-support"],
+      "expected": []
+    },
+    {
+      "id": "code-period",
+      "source": "cases/code-period/source.md",
+      "target": "cases/code-period/target.md",
+      "tags": ["style", "persistent", "conciseness", "code"],
+      "brief": {
+        "toneAndStyle": "代码片段末尾不加中文句号。"
+      },
+      "expected": [
+        {
+          "blockId": "b1",
+          "side": "target",
+          "type": "structure",
+          "severity": "any",
+          "match": ["句号", "period", "代码", "code"],
+          "option": {
+            "kind": "instruction",
+            "mode": "persistent",
+            "mustIncludeAll": ["句号"],
+            "maxChars": 50,
+            "forbid": ["例如", "比如", "本指令", "适用于", "紧跟在"]
+          },
+          "description": "代码片段后的中文句号违反文档风格；规则应简洁并持续生效"
+        }
+      ]
+    },
+    {
+      "id": "heading-choice",
+      "source": "cases/heading-choice/source.md",
+      "target": "cases/heading-choice/target.md",
+      "tags": ["style", "persistent", "multi-option", "conciseness", "heading"],
+      "brief": {
+        "toneAndStyle": "标题标点必须统一；全部加句号、全部不加句号两种方案都允许，请分别输出为独立 instruction，只报一次。"
+      },
+      "expected": [
+        {
+          "blockId": "any",
+          "side": "target",
+          "type": "structure",
+          "severity": "check",
+          "match": ["句号", "标题", "一致", "统一"],
+          "option": {
+            "kind": "instruction",
+            "mode": "persistent",
+            "mustInclude": ["句号"],
+            "mustIncludeGroups": [
+              ["不加句号"],
+              ["统一加句号", "统一加上句号", "加上句号"]
+            ],
+            "minCount": 2,
+            "maxChars": 50,
+            "forbid": [
+              "入门",
+              "后续步骤",
+              "例如",
+              "比如",
+              "本指令",
+              "适用于"
+            ]
+          },
+          "description": "标题标点不一致；全加或全不加都是合理方案"
+        }
+      ]
+    },
+    {
       "id": "omission-scope",
       "source": "cases/omission-scope/source.md",
       "target": "cases/omission-scope/target.md",

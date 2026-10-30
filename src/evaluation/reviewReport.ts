@@ -187,6 +187,13 @@ export function formatReviewMarkdown(report: ReviewReport): string {
     `| Advice fallback | ${percent(aggregate.adviceFallbackRate)} (${aggregate.advicePassedCount}/${aggregate.adviceSpecifiedCount}) |`,
     `| Mixed option annotations | ${aggregate.mixedOptionAnnotations} |`,
     `| Total annotations | ${aggregate.totalAnnotations} |`,
+    `| Avg message chars / max | ${number(aggregate.averageMessageChars)} / ${aggregate.maxMessageChars} |`,
+    `| Avg annotation chars | ${number(aggregate.averageAnnotationChars)} |`,
+    `| Multi-instruction annotations | ${aggregate.multiInstructionAnnotations} |`,
+    `| Advice-only annotations | ${aggregate.adviceOnlyAnnotations} |`,
+    `| Procedural instructions | ${aggregate.proceduralInstructions} |`,
+    `| Unsupported punctuation claims | ${aggregate.unsupportedPunctuationClaims} |`,
+    `| Duplicate-field annotations | ${aggregate.duplicateFieldAnnotations} |`,
     `| Format errors | ${aggregate.formatErrors} |`,
     `| Average latency | ${number(aggregate.averageDurationMs)} ms |`,
     "",
@@ -290,6 +297,18 @@ export function formatReviewComparison(
 ): string {
   const a = baseline.aggregate;
   const b = current.aggregate;
+  const optionalNumber = (value: number | undefined, digits = 1): string =>
+    value === undefined ? "-" : value.toFixed(digits);
+  const optionalDelta = (
+    before: number | undefined,
+    after: number | undefined,
+    digits = 1,
+  ): string =>
+    before === undefined || after === undefined
+      ? "-"
+      : signed(Number((after - before).toFixed(digits)));
+  const optionalCount = (value: number | undefined): string =>
+    value === undefined ? "-" : String(value);
   const rows: string[][] = [
     ["Precision", percent(a.precision), percent(b.precision), metricDelta(a.precision, b.precision, true)],
     ["Recall", percent(a.recall), percent(b.recall), metricDelta(a.recall, b.recall, true)],
@@ -302,6 +321,13 @@ export function formatReviewComparison(
     ["Mode accuracy", percent(a.modeAccuracy), percent(b.modeAccuracy), metricDelta(a.modeAccuracy, b.modeAccuracy, true)],
     ["Advice fallback", percent(a.adviceFallbackRate), percent(b.adviceFallbackRate), metricDelta(a.adviceFallbackRate, b.adviceFallbackRate, true)],
     ["Mixed option annotations", String(a.mixedOptionAnnotations), String(b.mixedOptionAnnotations), signed(b.mixedOptionAnnotations - a.mixedOptionAnnotations)],
+    ["Avg message chars", optionalNumber(a.averageMessageChars), optionalNumber(b.averageMessageChars), optionalDelta(a.averageMessageChars, b.averageMessageChars)],
+    ["Avg annotation chars", optionalNumber(a.averageAnnotationChars), optionalNumber(b.averageAnnotationChars), optionalDelta(a.averageAnnotationChars, b.averageAnnotationChars)],
+    ["Multi-instruction annotations", optionalCount(a.multiInstructionAnnotations), optionalCount(b.multiInstructionAnnotations), optionalDelta(a.multiInstructionAnnotations, b.multiInstructionAnnotations, 0)],
+    ["Advice-only annotations", optionalCount(a.adviceOnlyAnnotations), optionalCount(b.adviceOnlyAnnotations), optionalDelta(a.adviceOnlyAnnotations, b.adviceOnlyAnnotations, 0)],
+    ["Procedural instructions", optionalCount(a.proceduralInstructions), optionalCount(b.proceduralInstructions), optionalDelta(a.proceduralInstructions, b.proceduralInstructions, 0)],
+    ["Unsupported punctuation claims", optionalCount(a.unsupportedPunctuationClaims), optionalCount(b.unsupportedPunctuationClaims), optionalDelta(a.unsupportedPunctuationClaims, b.unsupportedPunctuationClaims, 0)],
+    ["Duplicate-field annotations", optionalCount(a.duplicateFieldAnnotations), optionalCount(b.duplicateFieldAnnotations), optionalDelta(a.duplicateFieldAnnotations, b.duplicateFieldAnnotations, 0)],
     ["Format errors", String(a.formatErrors), String(b.formatErrors), signed(b.formatErrors - a.formatErrors)],
     ["Prompt chars", String(baseline.promptChars), String(current.promptChars), signed(current.promptChars - baseline.promptChars)],
   ];

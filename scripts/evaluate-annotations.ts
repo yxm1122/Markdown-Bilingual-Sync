@@ -287,6 +287,25 @@ function validateExpected(caseId: string, item: ReviewEvalCase): string[] {
     ) {
       issues.push(`${caseId}: minCount must be at least 1`);
     }
+    if (
+      expected.option.maxChars !== undefined &&
+      expected.option.maxChars < 1
+    ) {
+      issues.push(`${caseId}: maxChars must be at least 1`);
+    }
+    if (
+      expected.option.forbid?.some((term) => term.trim() === "")
+    ) {
+      issues.push(`${caseId}: forbid terms must not be empty`);
+    }
+    if (
+      expected.option.mustIncludeGroups?.some(
+        (group) =>
+          group.length === 0 || group.some((term) => term.trim() === ""),
+      )
+    ) {
+      issues.push(`${caseId}: mustIncludeGroups entries must not be empty`);
+    }
   }
   return issues;
 }
@@ -351,7 +370,10 @@ async function main(): Promise<void> {
         ...validateExpected(item.id, item),
       ];
       for (const expected of item.expected) {
-        if (!content.blockTexts[expected.blockId]) {
+        if (
+          expected.blockId !== "any" &&
+          !content.blockTexts[expected.blockId]
+        ) {
           issues.push(
             `${item.id}: expected block "${expected.blockId}" is not a translatable block`,
           );
