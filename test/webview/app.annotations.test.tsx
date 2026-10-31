@@ -181,7 +181,7 @@ describe("block annotations", () => {
       .getAllByRole("menuitem")
       .find((item) =>
         item.textContent?.includes(
-          fmt(text.openCount, { count: 0 }),
+          fmt(text.viewCount, { count: 0 }),
         ),
       );
     expect(menuItem).toBeTruthy();
@@ -290,7 +290,7 @@ describe("block annotations", () => {
     expect(within(dialog).queryByText(text.severityCheck)).toBeNull();
   });
 
-  it("removes the block attention badge when the only AI annotation is checked", () => {
+  it("keeps a view-only badge when the only AI annotation is checked", () => {
     const text = harness.text.preview.annotations;
     const { container } = renderWithAnnotation([
       annotation({ status: "resolved" }),
@@ -300,9 +300,16 @@ describe("block annotations", () => {
         fmt(text.openCount, { count: 1 }),
       ),
     ).toBeNull();
+    fireEvent.click(
+      within(container).getByLabelText(
+        fmt(text.viewCount, { count: 1 }),
+      ) as HTMLElement,
+    );
+    const dialog = screen.getByRole("dialog", { name: text.title });
+    expect(within(dialog).getByText(text.statusChecked)).toBeTruthy();
   });
 
-  it("removes the block attention badge when the only AI annotation is dismissed", () => {
+  it("keeps a view-only badge when the only AI annotation is dismissed", () => {
     const text = harness.text.preview.annotations;
     const { container } = renderWithAnnotation([
       annotation({ status: "dismissed" }),
@@ -312,6 +319,100 @@ describe("block annotations", () => {
         fmt(text.openCount, { count: 1 }),
       ),
     ).toBeNull();
+    fireEvent.click(
+      within(container).getByLabelText(
+        fmt(text.viewCount, { count: 1 }),
+      ) as HTMLElement,
+    );
+    const dialog = screen.getByRole("dialog", { name: text.title });
+    expect(within(dialog).getByText(text.statusDismissed)).toBeTruthy();
+  });
+
+  it("dims only dismissed AI annotations", () => {
+    const text = harness.text.preview.annotations;
+    const { container } = renderWithAnnotation([
+      annotation({ id: "ai-open", status: "open", message: "Open AI note." }),
+      annotation({
+        id: "ai-resolved",
+        status: "resolved",
+        message: "Resolved AI note.",
+      }),
+      annotation({
+        id: "ai-dismissed",
+        status: "dismissed",
+        message: "Dismissed AI note.",
+      }),
+      annotation({
+        id: "u-applied",
+        author: "user",
+        kind: "request-change",
+        mode: "once",
+        status: "applied",
+        message: "Applied user note.",
+      }),
+      annotation({
+        id: "u-resolved",
+        author: "user",
+        kind: "request-change",
+        mode: "persistent",
+        status: "resolved",
+        message: "Resolved user note.",
+      }),
+    ]);
+    fireEvent.click(
+      within(container).getByLabelText(
+        fmt(text.openCount, { count: 1 }),
+      ) as HTMLElement,
+    );
+    const dialog = screen.getByRole("dialog", { name: text.title });
+    const article = (message: string): HTMLElement =>
+      within(dialog).getByText(message).closest(
+        ".pv-annotation",
+      ) as HTMLElement;
+
+    expect(
+      article("Dismissed AI note.").classList.contains("is-dimmed"),
+    ).toBe(true);
+    expect(
+      article("Open AI note.").classList.contains("is-dimmed"),
+    ).toBe(false);
+    expect(
+      article("Resolved AI note.").classList.contains("is-dimmed"),
+    ).toBe(false);
+    expect(
+      article("Applied user note.").classList.contains("is-dimmed"),
+    ).toBe(false);
+    expect(
+      article("Resolved user note.").classList.contains("is-dimmed"),
+    ).toBe(false);
+  });
+
+  it("keeps an applied once annotation accessible from the badge", () => {
+    const text = harness.text.preview.annotations;
+    const { container } = renderWithAnnotation([
+      annotation({
+        author: "user",
+        kind: "request-change",
+        severity: "info",
+        mode: "once",
+        status: "applied",
+        message: "Apply this change.",
+        question: undefined,
+      }),
+    ]);
+    expect(
+      within(container).queryByLabelText(
+        fmt(text.openCount, { count: 1 }),
+      ),
+    ).toBeNull();
+    fireEvent.click(
+      within(container).getByLabelText(
+        fmt(text.viewCount, { count: 1 }),
+      ) as HTMLElement,
+    );
+    const dialog = screen.getByRole("dialog", { name: text.title });
+    expect(within(dialog).getByText(text.statusApplied)).toBeTruthy();
+    expect(within(dialog).queryByText(text.statusPending)).toBeNull();
   });
 
   it("shows answered instead of checked when an AI annotation was adopted", () => {

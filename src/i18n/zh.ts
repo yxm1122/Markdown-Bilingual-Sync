@@ -271,6 +271,7 @@ export const UI_TEXT = {
     annotations: {
       title: "批注",
       openCount: "待处理批注（{count}）",
+      viewCount: "查看批注（{count}）",
       empty: "这个块还没有批注。",
       review: "审校此块",
       add: "添加批注",

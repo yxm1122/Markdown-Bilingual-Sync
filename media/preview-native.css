@@ -1084,6 +1084,12 @@ textarea:focus-visible {
   background: var(--vscode-toolbar-hoverBackground);
 }
 
+.pv-annotation-badge.is-view-only {
+  color: var(--vscode-descriptionForeground);
+  background: transparent;
+  border-color: var(--vscode-panel-border);
+}
+
 .pv-annotation-badge .codicon {
   font-size: 11px;
 }
@@ -1931,7 +1937,7 @@ textarea:focus-visible {
   background: var(--vscode-input-background);
 }
 
-.pv-annotation.is-closed {
+.pv-annotation.is-dimmed {
   opacity: 0.65;
   border-left-color: var(--vscode-descriptionForeground);
 }

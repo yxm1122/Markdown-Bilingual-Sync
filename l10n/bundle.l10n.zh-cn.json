@@ -650,6 +650,7 @@
   "Use": "采用",
   "Use document brief context": "使用文档简报上下文",
   "Verify": "待核对",
+  "View annotations ({count})": "查看批注（{count}）",
   "Waiting to start": "等待开始",
   "When enabled, this annotation expires after one translation; when off, it applies to future translations.": "开启后，该批注参与一次翻译即自动失效；关闭则持续参与后续翻译。",
   "Works only when a brief exists: the summary and guidance are sent to the AI as document-wide context and count toward each request's token budget.": "仅在已有文档简报时生效：把摘要与翻译要求作为整篇文档的上下文发送给 AI，并计入每批请求的 token 预算。",

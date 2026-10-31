@@ -650,6 +650,7 @@
   "Use": "Use",
   "Use document brief context": "Use document brief context",
   "Verify": "Verify",
+  "View annotations ({count})": "View annotations ({count})",
   "Waiting to start": "Waiting to start",
   "When enabled, this annotation expires after one translation; when off, it applies to future translations.": "When enabled, this annotation expires after one translation; when off, it applies to future translations.",
   "Works only when a brief exists: the summary and guidance are sent to the AI as document-wide context and count toward each request's token budget.": "Works only when a brief exists: the summary and guidance are sent to the AI as document-wide context and count toward each request's token budget.",

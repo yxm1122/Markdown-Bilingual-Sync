@@ -450,15 +450,8 @@ function annotationNeedsAttention(annotation: AnnotationView): boolean {
   );
 }
 
-function isAnnotationClosed(annotation: AnnotationView): boolean {
-  if (annotation.author !== "user") {
-    return annotation.status !== "open";
-  }
-  return (
-    annotation.status === "resolved" ||
-    annotation.status === "dismissed" ||
-    (annotation.mode === "once" && annotation.status === "applied")
-  );
+function isAnnotationDimmed(annotation: AnnotationView): boolean {
+  return annotation.author === "ai" && annotation.status === "dismissed";
 }
 
 function AnnotationItem(props: {
@@ -589,7 +582,7 @@ function AnnotationItem(props: {
   return (
     <article
       class={`pv-annotation${
-        isAnnotationClosed(annotation) ? " is-closed" : ""
+        isAnnotationDimmed(annotation) ? " is-dimmed" : ""
       }`}
     >
       <div class="pv-annotation-meta">
@@ -2932,8 +2925,15 @@ function PendingBadges({ block, text }: { block: PreviewBlockView; text: UiCatal
   return <Fragment>{badges}</Fragment>;
 }
 
-function annotationAttentionCount(block: PreviewBlockView): number {
-  return (block.annotations ?? []).filter(annotationNeedsAttention).length;
+function annotationCounts(block: PreviewBlockView): {
+  attention: number;
+  total: number;
+} {
+  const annotations = block.annotations ?? [];
+  return {
+    attention: annotations.filter(annotationNeedsAttention).length,
+    total: annotations.length,
+  };
 }
 
 function AnnotationBadge(props: {
@@ -2941,17 +2941,22 @@ function AnnotationBadge(props: {
   text: UiCatalog;
   onClick?: () => void;
 }) {
-  const count = annotationAttentionCount(props.block);
-  if (count === 0) {
+  const { attention, total } = annotationCounts(props.block);
+  if (total === 0) {
     return null;
   }
+  const active = attention > 0;
+  const count = active ? attention : total;
+  const label = active
+    ? props.text.preview.annotations.openCount
+    : props.text.preview.annotations.viewCount;
   return (
     <button
       type="button"
-      class="pv-annotation-badge"
+      class={`pv-annotation-badge${active ? "" : " is-view-only"}`}
       data-block-key={props.block.key}
-      title={fmt(props.text.preview.annotations.openCount, { count })}
-      aria-label={fmt(props.text.preview.annotations.openCount, { count })}
+      title={fmt(label, { count })}
+      aria-label={fmt(label, { count })}
       onClick={(event) => {
         event.stopPropagation();
         props.onClick?.();
@@ -4247,12 +4252,19 @@ export function App(props: { boot: BootData; text: UiCatalog }) {
         );
       }
     }
+    const counts = annotationCounts(block);
     items.push(
       { separator: true },
       {
-        label: fmt(text.preview.annotations.openCount, {
-          count: annotationAttentionCount(block),
-        }),
+        label: fmt(
+          counts.attention > 0
+            ? text.preview.annotations.openCount
+            : text.preview.annotations.viewCount,
+          {
+            count:
+              counts.attention > 0 ? counts.attention : counts.total,
+          },
+        ),
         icon: "comment-discussion",
         onSelect: () => openAnnotationsForBlock(block),
       },

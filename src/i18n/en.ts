@@ -288,6 +288,7 @@ export const UI_TEXT = {
     annotations: {
       title: "Annotations",
       openCount: "Annotations needing attention ({count})",
+      viewCount: "View annotations ({count})",
       empty: "No annotations for this block yet.",
       review: "Review this block",
       add: "Add annotation",

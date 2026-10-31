@@ -75,7 +75,7 @@ CI 会依次执行 `npm ci`、`typecheck`、`test`、`package`。本地提交前
 | `webview/app.scroll.test.tsx` | 虚拟块几何下的分栏双向同步、仅原文/仅译文切换位置还原、顶部/底部对齐 |
 | `webview/app.editing.test.tsx` | 译文/原文编辑、待插入/独立译文、插入、删除/撤销、链接、菜单键盘导航、滚动关闭菜单、选择文本不误触编辑 |
 | `webview/app.summary.test.tsx` | 文档简报/brief/术语卡内容自适应与分侧揭示、内联编辑/焦点恢复、assist 开关、提示条/toast、宿主刷新时草稿保持、忙碌、脚注 |
-| `webview/app.annotations.test.tsx` | 批注标记、popover 拖动/滚动保持、AI/我的分组折叠、焦点与草稿回显、一次性/持续模式、生效状态、编辑/重试、多个 instruction 的采用/改后采用、advice 只读格式、采纳时使用选项 mode、输入区可改 mode |
+| `webview/app.annotations.test.tsx` | 批注标记/查看入口、popover 拖动/滚动保持、AI/我的分组折叠、焦点与草稿回显、一次性/持续模式、生效状态、已生效批注仍可查看、仅 AI 已忽略变灰、用户批注不变灰、编辑/重试、多个 instruction 的采用/改后采用、advice 只读格式、采纳时使用选项 mode、输入区可改 mode |
 | `webview/glossaryModel.test.ts` | 术语表文本解析/序列化/校验/规范化 |
 | `annotationStore.test.ts` | 本机批注 sidecar 往返/sourceIndex、旧 open→pending 迁移、mode/status、options 去重/上限、旧 suggestion/suggestedAnswers 迁移、损坏备份、字段裁剪、删除 |
 | `syncAnnotations.test.ts` | 审校批注替换、用户批注保留、待生效批注进入同步、一次性消费/持续生效、生效标记、带批注仍发送 reference、锚点优先重绑定、不可翻译/删除块拒绝、retranslateAll 手改 auto 块、pending 拉起 stale 计数、未翻译批注迁移、并发写、并发分批请求、stale 过滤、token 分批、处理项采纳并使用其 mode、标记已核对、reopen 清除 answeredBy |
