@@ -111,6 +111,16 @@ export interface SyncOptions {
   retranslateStale: boolean;
   /** 是否重译所有 `auto` 块（不影响人工块）。 */
   retranslateAll?: boolean;
+  /**
+   * 只处理这些原文块索引；用于预览中的块级批量操作。
+   * 设置后未选中的块保持不变，缺失的未选中块也不会进入缓存。
+   */
+  onlySourceIndexes?: ReadonlySet<number>;
+  /**
+   * 与 `onlySourceIndexes` 配合时是否允许重译人工锁定块。
+   * 显式重译锁定块会把锚点模式改回 auto，与单块重译行为一致。
+   */
+  includeHuman?: boolean;
   glossary?: readonly GlossaryEntry[];
   /** 稳定翻译参考与全文摘要上下文。 */
   assist?: TranslationAssistOptions;
@@ -410,7 +420,8 @@ function mergeTargetEntries(
  *
  * 行为要点：
  * - 同步前若发现未跟踪内容或人工锁定块成为孤儿，抛 `SyncBlockedError`，缓存不变；
- * - 只翻译缺失、`copy`、按设置需要重译的 `auto` 块；人工块与墓碑永不翻译；
+ * - 默认只翻译缺失、`copy`、按设置需要重译的 `auto` 块；人工块与墓碑永不翻译；
+ * - 块级批量模式下，`onlySourceIndexes + includeHuman` 可显式重译选中的锁定块；
  * - `allowPartial` 时通过 `onChunk` 流式接收结果，并按块数/时间阈值调用
  *   `onCacheCommit` 落盘；Provider 抛错但已有成功结果时保留部分译文并返回；
  * - `signal` 取消时先尝试提交已有部分结果（仅 `allowPartial`）再抛出取消错误；
@@ -540,6 +551,13 @@ export async function syncDocument(options: SyncOptions): Promise<SyncResult> {
 
   for (const aligned of initialAlignment.blocks) {
     const sourceBlock = aligned.source;
+    // 块级批量模式：未选中的块完全不参与任务选择、警告与批注处理。
+    if (
+      options.onlySourceIndexes &&
+      !options.onlySourceIndexes.has(sourceBlock.index)
+    ) {
+      continue;
+    }
     if (!sourceBlock.translatable) {
       continue;
     }
@@ -557,6 +575,7 @@ export async function syncDocument(options: SyncOptions): Promise<SyncResult> {
       !cacheIsDeleted &&
       (!cached ||
         cacheIsCopy ||
+        (options.includeHuman === true && aligned.human) ||
         (retranslateAll && cached.anchor.mode === "auto") ||
         (aligned.status === "stale" && retranslateStale) ||
         (hasPendingAnnotations && !aligned.human));

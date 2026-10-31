@@ -15,6 +15,7 @@
 import * as vscode from "vscode";
 import { formatText, UI_TEXT } from "../i18n";
 import type {
+  TaskOperation,
   TranslationTaskMonitor,
   TranslationTaskView,
   TranslationTaskStatus,
@@ -121,6 +122,27 @@ function statusLabel(status: TranslationTaskStatus): string {
   return UI_TEXT.taskPanel.statusLabels[status];
 }
 
+export function operationLabel(operation: TaskOperation | undefined): string {
+  switch (operation) {
+    case "sync":
+      return UI_TEXT.taskPanel.operations.sync;
+    case "retranslate":
+      return UI_TEXT.taskPanel.operations.retranslate;
+    case "review":
+      return UI_TEXT.taskPanel.operations.review;
+    case "backtranslate":
+      return UI_TEXT.taskPanel.operations.backtranslate;
+    case "summary":
+      return UI_TEXT.taskPanel.operations.summary;
+    case "markSynced":
+      return UI_TEXT.taskPanel.operations.markSynced;
+    case "deleteTranslation":
+      return UI_TEXT.taskPanel.operations.deleteTranslation;
+    default:
+      return "";
+  }
+}
+
 function durationText(startedAt?: number, finishedAt?: number): string {
   if (!startedAt) {
     return "";
@@ -156,9 +178,15 @@ function taskProgress(task: TranslationTaskView): string {
 
 function taskDescription(task: TranslationTaskView): string {
   const parts: string[] = [];
+  const operation = operationLabel(task.operation);
+  if (operation) {
+    parts.push(operation);
+  }
   const progress = taskProgress(task);
   if (progress) {
     parts.push(progress);
+  } else if (task.status === "running" && task.phase.trim()) {
+    parts.push(task.phase);
   }
   parts.push(statusLabel(task.status));
   if (task.startedAt) {
@@ -182,6 +210,11 @@ function taskTooltip(task: TranslationTaskView): vscode.MarkdownString {
   const tooltip = new vscode.MarkdownString();
   tooltip.appendText(task.label);
   tooltip.appendMarkdown("\n\n");
+  const operation = operationLabel(task.operation);
+  if (operation) {
+    tooltip.appendText(operation);
+    tooltip.appendMarkdown("  \n");
+  }
   tooltip.appendText(statusLabel(task.status));
   tooltip.appendMarkdown("  \n");
   tooltip.appendText(taskProgress(task));
@@ -388,6 +421,16 @@ export class TaskViewProvider
             label: UI_TEXT.taskPanel.activeTasksLabel,
             description: String(snapshot.activeCount),
             icon: "files",
+          },
+          {
+            kind: "stat",
+            id: "overview:queued",
+            label: UI_TEXT.taskPanel.queuedTasksLabel,
+            description: String(
+              snapshot.active.filter((task) => task.status === "queued")
+                .length,
+            ),
+            icon: "clock",
           },
           {
             kind: "stat",

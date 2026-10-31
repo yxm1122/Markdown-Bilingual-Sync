@@ -207,6 +207,22 @@ export const UI_TEXT = {
       resetSource: "重置暂存",
       resetSourceTitle: "清除所有暂存的原文修改、插入和删除",
     },
+    // 块多选模式：选择态的计数、批量操作条与无障碍文案。
+    selection: {
+      selected: "已选 {count} 块",
+      selectAll: "全选",
+      clear: "清除",
+      exit: "退出多选",
+      actionGroup: "批量操作",
+      selectBlock: "选择块 {index}",
+      hint: "Shift 点击连选，Esc 退出",
+      changed: "所选块的内容或锁定状态已变化，请重新选择。",
+      retranslate: "重新翻译",
+      review: "审校",
+      backTranslate: "回译",
+      markSynced: "标记已同步",
+      deleteTranslation: "删除译文",
+    },
     // 翻译态占位文本：目标块无内容、未翻译、已删除等场景。
     summary: {
       title: "文档简报",
@@ -385,6 +401,9 @@ export const UI_TEXT = {
       checkConsistencyTitle: "检查机器译文中的术语与受保护 Markdown",
       reviewMachine: "审校全文",
       reviewUnsupportedTitle: "当前翻译服务不支持审校",
+      selectBlocksTitle: "进入块多选，可批量重译、审校、回译、标记或删除",
+      taskActivity: "{running} 运行 · {queued} 排队",
+      taskActivityTitle: "打开任务面板",
       export: "导出",
       exportDisabledTitle: "需要先生成译文缓存",
       openCacheFolder: "打开缓存目录",
@@ -472,9 +491,6 @@ export const UI_TEXT = {
     exportCancelled: "已取消导出。",
     noPendingExport: "没有待确认的导出。",
     noStaleTranslations: "没有过期的机器译文。",
-    syncBusy: "正在同步译文…",
-    retranslateBlockBusy: "正在重新翻译该块…",
-    markSyncedBusy: "正在更新同步状态…",
     retranslateCancelled: "已取消重新翻译。",
     confirmRetranslateBlock:
       "重新翻译这个块？该块已有译文，若包含译文修改将被覆盖。",
@@ -524,6 +540,12 @@ export const UI_TEXT = {
       "源文件已发生变化，暂存的原文修改已清空，请重新编辑。",
     pendingSourceBeforeRetranslate:
       "有未应用的原文修改。请先确认写回原文；写回后会自动继续重译。",
+    pendingSourceBeforeBatch:
+      "有未应用的原文修改。请先应用或丢弃原文修改，再执行批量操作。",
+    pendingSourceBeforeBackTranslate:
+      "有未应用的原文修改。请先应用或丢弃原文修改，再执行回译。",
+    waitForTasksBeforeSource:
+      "有任务正在进行。请等待任务完成后再应用原文修改。",
     sourceEditsDiscarded: "已放弃暂存的原文修改。",
     sourceWriting: "正在写回原文…",
     sourceApplied: "原文修改已写入并保存。",
@@ -558,12 +580,47 @@ export const UI_TEXT = {
     backSame: "回译结果与当前原文一致，未暂存修改。",
     backMultiBlock: "回译结果包含多个 Markdown 块，无法暂存为单个原文块。",
     pairedLockFailed: "原文已写入，但无法把译文锁定到新的原文块。",
+    queuedNotice: "已加入队列，前面还有 {count} 个任务。",
+    queuedNoticeSolo: "已加入队列。",
+    operationFailed: "操作失败。",
+    noEligibleBlocks: "所选块没有可执行该操作的项。",
+    batchSkipped: "已跳过 {count} 个不适用或已变化的块。",
+    confirmRetranslateBlocks:
+      "重译选中的 {count} 个块？已有译文会被覆盖。",
+    confirmRetranslateBlocksHuman:
+      "重译选中的 {count} 个块？其中 {locked} 个译文锁定块也会被覆盖并解除锁定。",
+    confirmRetranslateBlocksAction: "重译选中块",
+    retranslateBlocksDone: "已重译 {count} 个块。",
+    retranslateBlocksPartial:
+      "重译完成：成功 {count} 个，失败 {failed} 个。",
+    reviewBlocksNothing: "所选块没有可审校的机器译文。",
+    reviewBlocksDone: "审校完成：已审校 {reviewed} 块，新增 {count} 条批注。",
+    reviewBlocksNoIssues: "审校完成：已审校 {reviewed} 块，未发现问题。",
+    backTranslateBlocksDone:
+      "已暂存 {count} 个回译结果，点击“应用原文修改”写回文件。",
+    backTranslateBlocksPartial:
+      "回译完成：已暂存 {count} 个，失败 {failed} 个。",
+    confirmMarkSyncedBlocks:
+      "将选中的 {count} 个块标记为译文锁定并接受当前原文？",
+    confirmMarkSyncedBlocksAction: "标记选中块",
+    markSyncedBlocksDone: "已将 {count} 个块标记为译文锁定。",
+    markSyncedBlocksPartial:
+      "标记完成：成功 {count} 个，失败 {failed} 个。",
+    confirmDeleteBlocks:
+      "删除选中的 {count} 个块的译文？删除后仍可逐块撤销。",
+    confirmDeleteBlocksHuman:
+      "选中的 {count} 个块中有 {human} 个译文锁定块。删除其译文并标记锁定后，锁定内容会从缓存中移除。确定继续？",
+    confirmDeleteBlocksAction: "删除选中译文",
+    deleteBlocksDone: "已删除 {count} 个块的译文，可撤销。",
+    deleteBlocksPartial:
+      "删除完成：成功 {count} 个，失败 {failed} 个。",
   },
   // 翻译任务侧边栏与状态栏共用；statusLabels 供任务视图按状态动态查表。
   taskPanel: {
     title: "翻译任务",
     empty: "暂无翻译任务",
-    emptyHint: "运行批量翻译或同步后会显示在这里。",
+    emptyHint:
+      "同步、重译、审校、回译、摘要等操作会按队列显示在这里。",
     activeSection: "活动任务",
     historySection: "最近完成",
     overviewTitle: "批量总览",
@@ -571,6 +628,7 @@ export const UI_TEXT = {
     concurrency: "并发 {active}/{limit} · 等待 {waiting}",
     concurrencyLabel: "并发占用",
     activeTasksLabel: "活动文件",
+    queuedTasksLabel: "排队任务",
     activeBlocksLabel: "活动块",
     failedBlocksLabel: "失败块",
     providerLabel: "翻译服务",
@@ -615,6 +673,11 @@ export const UI_TEXT = {
       completed: "完成",
       translatingBlocks: "正在翻译 {count} 个块…",
       translatingProgress: "正在翻译 {completed}/{total} 个块…",
+      retranslatingProgress: "正在重译 {completed}/{total} 个块…",
+      reviewingProgress: "正在审校 {completed}/{total} 个块…",
+      backTranslatingProgress: "正在回译 {completed}/{total} 个块…",
+      markingSyncedProgress: "正在标记同步 {completed}/{total} 个块…",
+      deletingTranslationsProgress: "正在删除译文 {completed}/{total} 个块…",
     },
     statusLabels: {
       queued: "排队中",
@@ -624,16 +687,26 @@ export const UI_TEXT = {
       failed: "失败",
       cancelled: "已取消",
     },
+    // 任务操作类型：与 TaskOperation 一一对应，任务面板描述行使用。
+    operations: {
+      sync: "同步",
+      retranslate: "重新翻译",
+      review: "审校",
+      backtranslate: "回译",
+      summary: "全文摘要",
+      markSynced: "标记已同步",
+      deleteTranslation: "删除译文",
+    },
   },
-  // 状态栏条目：active 使用 {tasks}/{active}/{limit}，failed 使用 {failed}。
+  // 状态栏条目：active 使用 {tasks}/{queued}，failed 使用 {failed}。
   statusBar: {
     idle: "翻译任务",
-    active: "翻译 {tasks} 项 · {active}/{limit}",
-    failed: "翻译任务 · {failed} 失败",
+    active: "任务 {tasks} 项 · {queued} 排队",
+    failed: "任务 · {failed} 失败",
     tooltipTitle: "翻译任务",
     tooltipHint: "点击打开任务面板",
     // 单条任务提示：{label} 文件、{status} 状态、{progress} 进度、{failed} 失败后缀。
-    taskLine: "{label}：{status} · {progress}{failed}",
+    taskLine: "{label}：{operation}{status} · {progress}{failed}",
     moreTasks: "… 另有 {count} 个任务",
   },
   // 翻译服务显示名：Provider 实例与任务面板“运行状态”共用。

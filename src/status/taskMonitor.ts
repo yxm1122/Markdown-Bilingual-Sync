@@ -10,7 +10,7 @@
  * 关键不变量：
  * - 对外快照不含 cancel 回调，避免调用方误触发取消；
  * - 历史任务最多保留 MAX_FINISHED_TASKS 条；
- * - 状态只能 queued → running → 终态，finish 幂等。
+ * - 状态只能 queued → running → 终态，或 queued 直接被取消为终态；finish 幂等。
  */
 import type * as vscode from "vscode";
 import { UI_TEXT } from "../i18n";
@@ -25,6 +25,16 @@ export type TranslationTaskStatus =
   | "success"
   | "failed"
   | "cancelled";
+
+/** 任务对应的操作类型；用于任务面板区分同步、块级重译、审校等。 */
+export type TaskOperation =
+  | "sync"
+  | "retranslate"
+  | "review"
+  | "backtranslate"
+  | "summary"
+  | "markSynced"
+  | "deleteTranslation";
 
 /** 判断任务是否已结束（partial 也是终态，不再接受进度或取消回调）。 */
 function isTerminalStatus(status: TranslationTaskStatus): boolean {
@@ -60,6 +70,8 @@ export interface TranslationTaskView {
   label: string;
   /** 源文件 URI；仅在主线程内部使用，不会原样发送到 webview。 */
   uri?: vscode.Uri;
+  /** 操作类型；旧调用方未提供时为空。 */
+  operation?: TaskOperation;
   status: TranslationTaskStatus;
   /** 当前阶段文案（如“正在翻译 2/5 个块…”）。 */
   phase: string;
@@ -126,16 +138,22 @@ export class TranslationTaskMonitor {
    * 创建排队中的任务。
    * @param label 展示标签（相对路径）
    * @param uri 源文件，可省略
+   * @param operation 操作类型，可省略
    * @returns 新任务 ID
    * @sideeffect 立即 emit 一次，任务面板会显示排队条目
    */
-  create(label: string, uri?: vscode.Uri): number {
+  create(
+    label: string,
+    uri?: vscode.Uri,
+    operation?: TaskOperation,
+  ): number {
     const id = this.nextId;
     this.nextId += 1;
     this.tasks.set(id, {
       id,
       label,
-      uri,
+      ...(uri ? { uri } : {}),
+      ...(operation ? { operation } : {}),
       status: "queued",
       phase: UI_TEXT.taskPanel.phases.waiting,
       completed: 0,
@@ -336,8 +354,16 @@ export class TranslationTaskMonitor {
         finished.push(toView(task));
       }
     }
-    // 活动任务按开始时间升序（尚未开始的排在最前），历史按结束时间倒序。
-    active.sort((a, b) => (a.startedAt ?? 0) - (b.startedAt ?? 0));
+    // 运行中的任务优先；排队任务按创建顺序（id）展示，历史按结束时间倒序。
+    active.sort((a, b) => {
+      if (a.status !== b.status) {
+        return a.status === "running" ? -1 : 1;
+      }
+      if (a.status === "running") {
+        return (a.startedAt ?? 0) - (b.startedAt ?? 0);
+      }
+      return a.id - b.id;
+    });
     finished.sort((a, b) => (b.finishedAt ?? 0) - (a.finishedAt ?? 0));
     return {
       active,

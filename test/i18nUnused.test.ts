@@ -74,6 +74,9 @@ describe("localization key usage", () => {
     if (leaf.startsWith("taskPanel.statusLabels.")) {
       return corpus.includes("UI_TEXT.taskPanel.statusLabels");
     }
+    if (leaf.startsWith("preview.selection.")) {
+      return corpus.includes("text.preview.selection");
+    }
     if (leaf.startsWith("preview.errorPage.")) {
       return previewManager.includes("UI_TEXT.preview.errorPage");
     }

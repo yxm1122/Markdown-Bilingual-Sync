@@ -125,6 +125,16 @@ export const SYNC_ERRORS = [
     zh: "这个块还没有译文，请先同步译文。",
   },
   {
+    key: "sync.noSelectedBlocks",
+    en: "None of the selected blocks can be retranslated. Refresh the preview and try again.",
+    zh: "所选块当前都无法重译，请刷新预览后重试。",
+  },
+  {
+    key: "sync.deletedBlockRetranslate",
+    en: "Block {index} has a deleted translation. Restore it with single-block retranslation first.",
+    zh: "块 {index} 的译文已删除，请先用单块“恢复翻译”恢复。",
+  },
+  {
     key: "sync.noTranslationReview",
     en: "Sync this block before reviewing it.",
     zh: "请先生成该块的译文，再审校。",

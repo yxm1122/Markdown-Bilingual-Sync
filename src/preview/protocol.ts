@@ -46,6 +46,7 @@ export type PreviewHostMessage =
       exportConfirmation?: ExportConfirmationView;
     }
   | { type: "busy"; busy: boolean; message?: string }
+  | { type: "taskActivity"; running: number; queued: number }
   | { type: "toast"; text: string; kind: PreviewToastKind }
   | { type: "sourceConfirm"; data: SourceConfirmationView }
   | { type: "sourceSettled" }

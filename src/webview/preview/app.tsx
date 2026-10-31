@@ -60,11 +60,33 @@ import {
   MAX_ANNOTATION_MESSAGE,
   type AnnotationView,
 } from "../../annotations/types";
-import type { BootData, MenuEntry, OutboundMessage, UiCatalog } from "./types";
+import type {
+  BlockSelection,
+  BootData,
+  MenuEntry,
+  OutboundMessage,
+  UiCatalog,
+} from "./types";
 
 type Mode = "bilingual" | "source" | "target";
 type Side = "source" | "target";
+type BulkAction =
+  | "retranslate"
+  | "review"
+  | "backTranslate"
+  | "markSynced"
+  | "deleteTranslation";
 type Summary = PreviewModel["assist"]["summary"];
+
+/** 选择快照签名：内容、锚点或锁定态变化时，旧选择不能继续用于批量操作。 */
+function blockSelectionSignature(block: PreviewBlockView): string {
+  return [
+    block.sourceHash,
+    block.cacheId ?? "",
+    block.cacheDst ?? "",
+    String(block.human),
+  ].join("|");
+}
 
 interface EditingState {
   key: string;
@@ -87,8 +109,7 @@ interface InsertState {
 interface Toast {
   id: number;
   text: string;
-  kind: PreviewToastKind;
-}
+  kind: PreviewToastKind;}
 
 interface SplitScrollAnchor {
   side: Side;
@@ -195,6 +216,7 @@ function IconButton(props: {
       class={`pv-icon-button${props.active ? " is-active" : ""}`}
       title={props.title}
       aria-label={props.title}
+      aria-pressed={props.active === undefined ? undefined : props.active}
       disabled={props.disabled}
       onClick={props.onClick}
     >
@@ -1375,13 +1397,20 @@ function Toolbar(props: {
   model: PreviewModel;
   text: UiCatalog;
   busy: boolean;
+  locked: boolean;
+  selectionMode: boolean;
+  canSelect: boolean;
+  taskActivity: { running: number; queued: number };
   onSync: () => void;
   onReview: () => void;
   onExport: () => void;
   onRefresh: () => void;
   toolbarMenu: (event: MouseEvent) => void;
+  onToggleSelection: () => void;
+  onOpenTasks: () => void;
 }) {
-  const { model, text, busy } = props;
+  const { model, text, busy, locked, taskActivity } = props;
+  const taskCount = taskActivity.running + taskActivity.queued;
   return (
     <header class="pv-toolbar">
       <div class="pv-file">
@@ -1394,6 +1423,26 @@ function Toolbar(props: {
         </div>
       </div>
       <div class="pv-toolbar-actions">
+        {taskCount > 0 ? (
+          <button
+            type="button"
+            class="pv-task-activity"
+            title={text.preview.toolbar.taskActivityTitle}
+            aria-label={text.preview.toolbar.taskActivityTitle}
+            onClick={props.onOpenTasks}
+          >
+            <span
+              class={`codicon ${
+                taskActivity.running > 0
+                  ? "codicon-sync codicon-modifier-spin"
+                  : "codicon-clock"
+              }`}
+            />
+            <span>
+              {fmt(text.preview.toolbar.taskActivity, taskActivity)}
+            </span>
+          </button>
+        ) : null}
         <Button primary disabled={busy} onClick={props.onSync}>
           <Icon name="sync" size={14} />
           {text.preview.toolbar.sync}
@@ -1413,8 +1462,19 @@ function Toolbar(props: {
           <Icon name="comment-discussion" size={14} />
           {text.preview.toolbar.reviewMachine}
         </Button>
+        <IconButton
+          icon="checklist"
+          title={
+            props.selectionMode
+              ? text.preview.selection.exit
+              : text.preview.toolbar.selectBlocksTitle
+          }
+          active={props.selectionMode}
+          disabled={busy || !props.canSelect}
+          onClick={props.onToggleSelection}
+        />
         <Button
-          disabled={busy || !model.cacheExists}
+          disabled={locked || !model.cacheExists}
           title={model.cacheExists ? undefined : text.preview.toolbar.exportDisabledTitle}
           onClick={props.onExport}
         >
@@ -1571,15 +1631,98 @@ function ContextBar(props: {
   );
 }
 
+function SelectionBar(props: {
+  text: UiCatalog;
+  selectedCount: number;
+  counts: Record<BulkAction, number>;
+  onAction: (action: BulkAction) => void;
+  onSelectAll: () => void;
+  onClear: () => void;
+  onExit: () => void;
+}) {
+  const t = props.text.preview.selection;
+  const actions: Array<{
+    key: BulkAction;
+    label: string;
+    icon: string;
+  }> = [
+    { key: "retranslate", label: t.retranslate, icon: "refresh" },
+    { key: "review", label: t.review, icon: "comment-discussion" },
+    { key: "backTranslate", label: t.backTranslate, icon: "arrow-swap" },
+    { key: "markSynced", label: t.markSynced, icon: "check" },
+    {
+      key: "deleteTranslation",
+      label: t.deleteTranslation,
+      icon: "trash",
+    },
+  ];
+  return (
+    <div
+      class="pv-selection-bar"
+      role="region"
+      aria-label={t.actionGroup}
+    >
+      <div class="pv-selection-summary">
+        <Icon name="checklist" size={14} />
+        <strong>{fmt(t.selected, { count: props.selectedCount })}</strong>
+        <span class="pv-selection-hint">{t.hint}</span>
+      </div>
+      <div
+        class="pv-selection-actions"
+        role="group"
+        aria-label={t.actionGroup}
+      >
+        {actions.map((action) => (
+          <button
+            key={action.key}
+            type="button"
+            class="pv-bulk-action"
+            disabled={props.counts[action.key] === 0}
+            title={action.label}
+            onClick={() => props.onAction(action.key)}
+          >
+            <Icon name={action.icon} size={13} />
+            <span>{action.label}</span>
+            {props.counts[action.key] > 0 ? (
+              <span class="pv-bulk-count">
+                {props.counts[action.key]}
+              </span>
+            ) : null}
+          </button>
+        ))}
+      </div>
+      <div class="pv-selection-tools">
+        <button
+          type="button"
+          class="pv-selection-tool"
+          onClick={props.onSelectAll}
+        >
+          {t.selectAll}
+        </button>
+        <button
+          type="button"
+          class="pv-selection-tool"
+          disabled={props.selectedCount === 0}
+          onClick={props.onClear}
+        >
+          {t.clear}
+        </button>
+        <IconButton icon="close" title={t.exit} onClick={props.onExit} />
+      </div>
+    </div>
+  );
+}
+
 function Notices(props: {
   model: PreviewModel;
   text: UiCatalog;
   busy: boolean;
+  locked: boolean;
   onApplySource: () => void;
   onDiscardSource: () => void;
   onRetranslateStale: () => void;
 }) {
-  const { model, text, busy } = props;
+  const { model, text, busy, locked } = props;
   const notices: JSX.Element[] = [];
   if (model.pendingSourceCount > 0) {
     notices.push(
@@ -1589,10 +1732,10 @@ function Notices(props: {
           {model.pendingSourceCount} · {text.preview.actions.sourcePendingBadge}
         </span>
         <span class="pv-notice-actions">
-          <Button disabled={busy} onClick={props.onApplySource}>
+          <Button disabled={locked} onClick={props.onApplySource}>
             {fmt(text.preview.actions.applySource, { count: model.pendingSourceCount })}
           </Button>
-          <Button disabled={busy} onClick={props.onDiscardSource}>
+          <Button disabled={locked} onClick={props.onDiscardSource}>
             {text.preview.actions.resetSource}
           </Button>
         </span>
@@ -2348,6 +2491,7 @@ function SummaryPanel(props: {
   summary: Summary;
   open: boolean;
   busy: boolean;
+  locked: boolean;
   stableTranslation: boolean;
   summaryContext: boolean;
   summaryDraft: string;
@@ -2430,7 +2574,7 @@ function SummaryPanel(props: {
               {text.preview.summary.generate}
             </Button>
             <Button
-              disabled={props.busy || glossaryBlocked}
+              disabled={props.locked || glossaryBlocked}
               title={
                 glossaryBlocked
                   ? text.preview.summary.glossarySaveBlocked
@@ -2440,13 +2584,13 @@ function SummaryPanel(props: {
             >
               {text.preview.summary.save}
             </Button>
-            <Button disabled={props.busy || !hasSummary} onClick={props.onClear}>
+            <Button disabled={props.locked || !hasSummary} onClick={props.onClear}>
               {text.preview.summary.clear}
             </Button>
             <label class="pv-check" title={text.preview.summary.stableTranslationTitle}>
               <input
                 type="checkbox"
-                disabled={props.busy}
+                disabled={props.locked}
                 checked={props.stableTranslation}
                 onChange={(event) => props.onAssist("stableTranslation", event.currentTarget.checked)}
               />
@@ -2456,7 +2600,7 @@ function SummaryPanel(props: {
               <input
                 type="checkbox"
                 checked={props.summaryContext}
-                disabled={!hasSummary || props.busy}
+                disabled={!hasSummary || props.locked}
                 onChange={(event) => props.onAssist("summaryContext", event.currentTarget.checked)}
               />
               {text.preview.summary.useSummary}
@@ -2466,6 +2610,7 @@ function SummaryPanel(props: {
             class="pv-textarea"
             rows={6}
             spellcheck={false}
+            disabled={props.locked}
             aria-label={text.preview.summary.title}
             value={props.summaryDraft}
             placeholder={text.preview.summary.placeholder}
@@ -2502,6 +2647,7 @@ function SummaryPanel(props: {
                     value={props.brief.audience ?? ""}
                     maxLength={BRIEF_FIELD_LIMIT}
                     spellcheck={false}
+                    disabled={props.locked}
                     placeholder={text.preview.summary.briefAudiencePlaceholder}
                     onInput={(event) =>
                       props.onBriefDraft({ audience: event.currentTarget.value })
@@ -2516,6 +2662,7 @@ function SummaryPanel(props: {
                     value={props.brief.toneAndStyle ?? ""}
                     maxLength={BRIEF_FIELD_LIMIT}
                     spellcheck={false}
+                    disabled={props.locked}
                     placeholder={text.preview.summary.briefTonePlaceholder}
                     onInput={(event) =>
                       props.onBriefDraft({
@@ -2532,6 +2679,7 @@ function SummaryPanel(props: {
                     value={props.brief.ambiguities ?? ""}
                     maxLength={BRIEF_FIELD_LIMIT}
                     spellcheck={false}
+                    disabled={props.locked}
                     placeholder={
                       text.preview.summary.briefAmbiguitiesPlaceholder
                     }
@@ -2550,6 +2698,7 @@ function SummaryPanel(props: {
                     value={props.brief.doNotTranslate ?? ""}
                     maxLength={BRIEF_FIELD_LIMIT}
                     spellcheck={false}
+                    disabled={props.locked}
                     placeholder={
                       text.preview.summary.briefDoNotTranslatePlaceholder
                     }
@@ -2596,7 +2745,7 @@ function SummaryPanel(props: {
                 <GlossaryTable
                   text={text}
                   value={props.glossaryDraft}
-                  disabled={props.busy}
+                  disabled={props.locked}
                   onDraft={props.onGlossaryDraft}
                   onEditing={setGlossaryEditing}
                 />
@@ -2640,6 +2789,7 @@ function InlineEditor(props: {
         rows={Math.min(28, Math.max(5, draft.split("\n").length + 1))}
         spellcheck={false}
         value={draft}
+        disabled={props.busy}
         aria-label={props.hint}
         onInput={(event) => setDraft(event.currentTarget.value)}
         onKeyDown={(event) => {
@@ -2665,6 +2815,7 @@ function InlineEditor(props: {
 
 function InsertEditor(props: {
   type: "source" | "target";
+  busy: boolean;
   onSave: (text: string) => void;
   onCancel: () => void;
 }) {
@@ -2683,6 +2834,7 @@ function InsertEditor(props: {
         aria-label={text.actions.insertPlaceholder}
         placeholder={text.actions.insertPlaceholder}
         value={draft}
+        disabled={props.busy}
         onInput={(event) => setDraft(event.currentTarget.value)}
         onKeyDown={(event) => {
           if (event.key === "Escape") {
@@ -2699,7 +2851,7 @@ function InsertEditor(props: {
           {props.type === "target" ? text.actions.targetInsertHint : text.actions.sourceEditHint}
         </span>
         <Button onClick={props.onCancel}>{text.actions.cancelEdit}</Button>
-        <Button primary onClick={() => props.onSave(draft)}>
+        <Button primary disabled={props.busy} onClick={() => props.onSave(draft)}>
           {props.type === "target" ? text.actions.addStandaloneTarget : text.actions.stageInsert}
         </Button>
       </div>
@@ -2717,6 +2869,7 @@ function PaneContent(props: {
   readonly: boolean;
   flat?: boolean;
   busy: boolean;
+  selectionMode?: boolean;
   editing: EditingState | null;
   onStartEdit: (block: PreviewBlockView, side: Side) => void;
   onSave: (text: string) => void;
@@ -2818,7 +2971,7 @@ function PaneContent(props: {
   const body = (
     <Fragment>
       {content}
-      {stale ? (
+      {stale && !props.selectionMode ? (
         <div class="pv-stale-hint">
           <Icon name="warning" />
           <span>{text.preview.statusLabels.stale}</span>
@@ -2837,7 +2990,9 @@ function PaneContent(props: {
       <div class="pv-pane-label">
         <span>{isTarget ? text.preview.panes.target : text.preview.panes.source}</span>
         <span class="pv-lang">{props.language}</span>
-        {(canEditSource || canEditTarget) && (
+        {(canEditSource || canEditTarget) &&
+          !props.selectionMode &&
+          !props.busy && (
           <button
             type="button"
             class="pv-pane-edit"
@@ -2861,6 +3016,7 @@ function handleContentClick(
     side: Side;
     busy: boolean;
     readonly: boolean;
+    selectionMode?: boolean;
     onStartEdit: (block: PreviewBlockView, side: Side) => void;
     onOpenLink: (href: string) => void;
   },
@@ -2895,7 +3051,7 @@ function handleContentClick(
   if (target.closest("input, button, summary, label")) {
     return;
   }
-  if (props.busy || props.readonly) {
+  if (props.selectionMode || props.busy || props.readonly) {
     return;
   }
   if (!isTarget && props.block.standaloneTargetId) {
@@ -2976,28 +3132,49 @@ function BlockHead(props: {
   onRetranslate?: () => void;
   onAnnotations?: () => void;
   showLine?: boolean;
+  selectionMode?: boolean;
+  selected?: boolean;
+  onToggleSelect?: (block: PreviewBlockView, shiftKey: boolean) => void;
 }) {
   const { block, text } = props;
   return (
     <header class="pv-block-head">
+      {props.selectionMode && block.blockIndex >= 0 ? (
+        <input
+          type="checkbox"
+          class="pv-select-box"
+          checked={Boolean(props.selected)}
+          aria-label={fmt(text.preview.selection.selectBlock, {
+            index: block.sourceLine || block.blockIndex + 1,
+          })}
+          onClick={(event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            props.onToggleSelect?.(block, event.shiftKey);
+          }}
+          onChange={() => undefined}
+        />
+      ) : null}
       <span class="pv-kind">{text.preview.kindLabels[block.kind] ?? block.kind}</span>
       <span class="pv-status" style={`--status-color:${statusColor(block)}`}>
         <Icon name={statusIcon(block)} />
         <strong>{block.statusLabel}</strong>
       </span>
       <PendingBadges block={block} text={text} />
-      <AnnotationBadge
-        block={block}
-        text={text}
-        onClick={props.onAnnotations}
-      />
+      {props.selectionMode ? null : (
+        <AnnotationBadge
+          block={block}
+          text={text}
+          onClick={props.onAnnotations}
+        />
+      )}
       {block.headingPath ? (
         <span class="pv-heading-path" title={text.preview.actions.headingPathTitle}>
           {block.headingPath}
         </span>
       ) : null}
       {props.showLine && block.sourceLine ? <span class="pv-line">L{block.sourceLine}</span> : null}
-      {props.actions ? (
+      {props.actions && !props.selectionMode ? (
         <span class="pv-block-actions">
           {(block.status === "stale" || block.status === "human-stale") && (
             <button
@@ -3033,6 +3210,9 @@ function PairedBlock(props: {
   readonly: boolean;
   editing: EditingState | null;
   insert: InsertState | null;
+  selectionMode: boolean;
+  selected: boolean;
+  onToggleSelect: (block: PreviewBlockView, shiftKey: boolean) => void;
   onMenu: (event: MouseEvent, block: PreviewBlockView, side?: Side) => void;
   onRetranslate: (block: PreviewBlockView) => void;
   onAnnotations: (block: PreviewBlockView) => void;
@@ -3048,14 +3228,39 @@ function PairedBlock(props: {
     props.insert && props.insert.afterBlockIndex === block.blockIndex
       ? props.insert
       : null;
+  const toggleFromSurface = (event: MouseEvent) => {
+    if (!props.selectionMode) {
+      return;
+    }
+    const selection = window.getSelection();
+    if (selection && !selection.isCollapsed && selection.toString().trim()) {
+      return;
+    }
+    const target = event.target;
+    if (
+      target instanceof Element &&
+      target.closest("a,button,input,textarea,select,label,summary")
+    ) {
+      return;
+    }
+    props.onToggleSelect(block, event.shiftKey);
+  };
   return (
     <Fragment>
-      <article class="pv-block" data-status={block.status} data-key={block.key}>
+      <article
+        class={`pv-block${props.selected ? " is-selected" : ""}`}
+        data-status={block.status}
+        data-key={block.key}
+        onClick={toggleFromSurface}
+      >
         <BlockHead
           block={block}
           text={text}
           actions
           showLine
+          selectionMode={props.selectionMode}
+          selected={props.selected}
+          onToggleSelect={props.onToggleSelect}
           onMenu={(event) => props.onMenu(event, block)}
           onRetranslate={() => props.onRetranslate(block)}
           onAnnotations={() => props.onAnnotations(block)}
@@ -3084,6 +3289,7 @@ function PairedBlock(props: {
       {insertHere ? (
         <InsertEditor
           type={insertHere.type}
+          busy={props.busy}
           onSave={props.onInsertSave}
           onCancel={props.onInsertCancel}
         />
@@ -3102,6 +3308,10 @@ function SplitCell(props: {
   busy: boolean;
   readonly: boolean;
   editing: EditingState | null;
+  selectionMode: boolean;
+  selected: boolean;
+  showSelection: boolean;
+  onToggleSelect: (block: PreviewBlockView, shiftKey: boolean) => void;
   onMenu: (event: MouseEvent, block: PreviewBlockView, side: Side) => void;
   onStartEdit: (block: PreviewBlockView, side: Side) => void;
   onRetranslate: (block: PreviewBlockView) => void;
@@ -3115,22 +3325,57 @@ function SplitCell(props: {
   const hidden =
     (isTarget && Boolean(block.pendingInsertId)) ||
     (!isTarget && Boolean(block.standaloneTargetId));
+  const toggleFromSurface = (event: MouseEvent) => {
+    if (!props.selectionMode) {
+      return;
+    }
+    const selection = window.getSelection();
+    if (selection && !selection.isCollapsed && selection.toString().trim()) {
+      return;
+    }
+    const target = event.target;
+    if (
+      target instanceof Element &&
+      target.closest("a,button,input,textarea,select,label,summary")
+    ) {
+      return;
+    }
+    props.onToggleSelect(block, event.shiftKey);
+  };
   return (
     <article
-      class="pv-cell"
+      class={`pv-cell${props.selected ? " is-selected" : ""}`}
       data-status={block.status}
       data-key={block.key}
       data-sync-key={block.key}
+      onClick={toggleFromSurface}
     >
       {props.readonly ? null : (
         <header class="pv-cell-head">
+          {props.showSelection && block.blockIndex >= 0 ? (
+            <input
+              type="checkbox"
+              class="pv-select-box"
+              checked={props.selected}
+              aria-label={fmt(text.preview.selection.selectBlock, {
+                index: block.sourceLine || block.blockIndex + 1,
+              })}
+              onClick={(event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                props.onToggleSelect(block, event.shiftKey);
+              }}
+              onChange={() => undefined}
+            />
+          ) : null}
           <span class="pv-kind">{text.preview.kindLabels[block.kind] ?? block.kind}</span>
           <span class="pv-status" style={`--status-color:${statusColor(block)}`}>
             <Icon name={statusIcon(block)} />
             <strong>{block.statusLabel}</strong>
           </span>
           <PendingBadges block={block} text={text} />
-          {(isTarget ? Boolean(block.standaloneTargetId) : !block.standaloneTargetId) ? (
+          {!props.selectionMode &&
+          (isTarget ? Boolean(block.standaloneTargetId) : !block.standaloneTargetId) ? (
             <AnnotationBadge
               block={block}
               text={text}
@@ -3138,17 +3383,19 @@ function SplitCell(props: {
             />
           ) : null}
           {block.sourceLine ? <span class="pv-line">L{block.sourceLine}</span> : null}
-          <span class="pv-cell-actions">
-            <button
-              type="button"
-              class="pv-action"
-              title={text.preview.actions.showBlockActions}
-              aria-label={text.preview.actions.showBlockActions}
-              onClick={(event) => props.onMenu(event, block, side)}
-            >
-              <Icon name="ellipsis" />
-            </button>
-          </span>
+          {props.selectionMode ? null : (
+            <span class="pv-cell-actions">
+              <button
+                type="button"
+                class="pv-action"
+                title={text.preview.actions.showBlockActions}
+                aria-label={text.preview.actions.showBlockActions}
+                onClick={(event) => props.onMenu(event, block, side)}
+              >
+                <Icon name="ellipsis" />
+              </button>
+            </span>
+          )}
         </header>
       )}
       {hidden ? (
@@ -3165,6 +3412,7 @@ function SplitCell(props: {
           readonly={props.readonly}
           flat
           busy={props.busy}
+          selectionMode={props.selectionMode}
           editing={props.editing}
           onStartEdit={props.onStartEdit}
           onSave={props.onSave}
@@ -3195,6 +3443,9 @@ function SplitView(props: {
   onInsertSave: (text: string) => void;
   onInsertCancel: () => void;
   onToggleReadonly: (side: Side) => void;
+  selectionMode: boolean;
+  selectedKeys: ReadonlySet<string>;
+  onToggleSelect: (block: PreviewBlockView, shiftKey: boolean) => void;
 }) {
   const { model, text, mode, readonly } = props;
   const sourceRef = useRef<HTMLDivElement>(null);
@@ -3404,6 +3655,7 @@ function SplitView(props: {
     return (
       <InsertEditor
         type={side}
+        busy={props.busy}
         onSave={props.onInsertSave}
         onCancel={props.onInsertCancel}
       />
@@ -3442,6 +3694,10 @@ function SplitView(props: {
                 busy={props.busy}
                 readonly={readonly.source}
                 editing={props.editing}
+                selectionMode={props.selectionMode}
+                selected={props.selectedKeys.has(block.key)}
+                showSelection={props.selectionMode && !readonly.source && mode !== "target"}
+                onToggleSelect={props.onToggleSelect}
                 onMenu={props.onMenu}
                 onStartEdit={props.onStartEdit}
                 onRetranslate={props.onRetranslate}
@@ -3493,6 +3749,10 @@ function SplitView(props: {
                 busy={props.busy}
                 readonly={readonly.target}
                 editing={props.editing}
+                selectionMode={props.selectionMode}
+                selected={props.selectedKeys.has(block.key)}
+                showSelection={props.selectionMode && (readonly.source || mode === "target")}
+                onToggleSelect={props.onToggleSelect}
                 onMenu={props.onMenu}
                 onStartEdit={props.onStartEdit}
                 onRetranslate={props.onRetranslate}
@@ -3756,6 +4016,17 @@ export function App(props: { boot: BootData; text: UiCatalog }) {
       : "bilingual";
   });
   const [busy, setBusy] = useState(false);
+  const [taskActivity, setTaskActivity] = useState({
+    running: 0,
+    queued: 0,
+  });
+  const [selectionMode, setSelectionMode] = useState(false);
+  const [selectedKeys, setSelectedKeys] = useState<Set<string>>(
+    () => new Set(),
+  );
+  const selectionSignatures = useRef<Map<string, string>>(new Map());
+  const lastSelectedKey = useRef<string | null>(null);
+  const locked = busy || taskActivity.running + taskActivity.queued > 0;
   const [summaryOpen, setSummaryOpen] = useState(false);
   const [summaryDraft, setSummaryDraft] = useState(props.boot.state.model.assist.summary.text);
   const [summaryDirty, setSummaryDirty] = useState(false);
@@ -3871,6 +4142,20 @@ export function App(props: { boot: BootData; text: UiCatalog }) {
             showToast(message.message, "info");
           }
           break;
+        case "taskActivity": {
+          const running =
+            typeof message.running === "number" &&
+            Number.isFinite(message.running)
+              ? Math.max(0, Math.floor(message.running))
+              : 0;
+          const queued =
+            typeof message.queued === "number" &&
+            Number.isFinite(message.queued)
+              ? Math.max(0, Math.floor(message.queued))
+              : 0;
+          setTaskActivity({ running, queued });
+          break;
+        }
         case "toast":
           showToast(String(message.text || ""), message.kind || "info");
           break;
@@ -3975,9 +4260,233 @@ export function App(props: { boot: BootData; text: UiCatalog }) {
   const readonly = host.readonly;
   const layout = host.layout;
   const blocks = host.model.blocks;
+  const selectableBlocks = useMemo(
+    () => blocks.filter((block) => block.blockIndex >= 0),
+    [blocks],
+  );
+  const selectedBlocks = useMemo(
+    () => selectableBlocks.filter((block) => selectedKeys.has(block.key)),
+    [selectableBlocks, selectedKeys],
+  );
+  const selectionCounts = useMemo<Record<BulkAction, number>>(() => {
+    const reviewable = (block: PreviewBlockView) =>
+      block.hasCache &&
+      block.canRetranslate &&
+      !block.human &&
+      block.status !== "deleted" &&
+      block.status !== "untranslated" &&
+      Boolean(block.targetRaw.trim());
+    return {
+      retranslate: selectedBlocks.filter(
+        (block) => block.canRetranslate && block.status !== "deleted",
+      ).length,
+      review: selectedBlocks.filter(reviewable).length,
+      backTranslate: selectedBlocks.filter(
+        (block) => block.canBackTranslate,
+      ).length,
+      markSynced: selectedBlocks.filter(
+        (block) => block.canMarkSynced,
+      ).length,
+      deleteTranslation: selectedBlocks.filter(
+        (block) => block.hasCache && block.status !== "deleted",
+      ).length,
+    };
+  }, [selectedBlocks]);
+
+  // 模型刷新后清理已消失或内容/锁定态变化的块，避免把旧选择带到新结构上。
+  useEffect(() => {
+    const byKey = new Map(
+      host.model.blocks
+        .filter((block) => block.blockIndex >= 0)
+        .map((block) => [block.key, block]),
+    );
+    setSelectedKeys((current) => {
+      let changed = false;
+      const next = new Set<string>();
+      for (const key of current) {
+        const block = byKey.get(key);
+        if (
+          block &&
+          selectionSignatures.current.get(key) ===
+            blockSelectionSignature(block)
+        ) {
+          next.add(key);
+        } else {
+          selectionSignatures.current.delete(key);
+          changed = true;
+        }
+      }
+      return changed ? next : current;
+    });
+  }, [host.model.blocks]);
+
+  useEffect(() => {
+    if (selectionMode && selectableBlocks.length === 0) {
+      setSelectionMode(false);
+      setSelectedKeys(new Set());
+      selectionSignatures.current.clear();
+      lastSelectedKey.current = null;
+    }
+  }, [selectionMode, selectableBlocks.length]);
+
+  useEffect(() => {
+    if (!selectionMode) {
+      return;
+    }
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (
+        event.key === "Escape" &&
+        !editing &&
+        !insert &&
+        !menu &&
+        !annotationTarget
+      ) {
+        event.preventDefault();
+        setSelectionMode(false);
+        setSelectedKeys(new Set());
+        selectionSignatures.current.clear();
+        lastSelectedKey.current = null;
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [annotationTarget, editing, insert, menu, selectionMode]);
+
+  const clearSelection = () => {
+    setSelectedKeys(new Set());
+    selectionSignatures.current.clear();
+    lastSelectedKey.current = null;
+  };
+
+  const exitSelection = () => {
+    setSelectionMode(false);
+    clearSelection();
+  };
+
+  const toggleSelectionMode = () => {
+    if (busy) {
+      return;
+    }
+    if (selectionMode) {
+      exitSelection();
+      return;
+    }
+    setEditing(null);
+    setInsert(null);
+    setMenu(null);
+    setAnnotationTarget(null);
+    clearSelection();
+    setSelectionMode(true);
+  };
+
+  const selectAllBlocks = () => {
+    selectionSignatures.current = new Map(
+      selectableBlocks.map((block) => [
+        block.key,
+        blockSelectionSignature(block),
+      ]),
+    );
+    setSelectedKeys(new Set(selectableBlocks.map((block) => block.key)));
+    lastSelectedKey.current = null;
+  };
+
+  const toggleBlockSelection = (
+    block: PreviewBlockView,
+    shiftKey: boolean,
+  ) => {
+    if (busy || block.blockIndex < 0) {
+      return;
+    }
+    const key = block.key;
+    setSelectedKeys((current) => {
+      const next = new Set(current);
+      if (shiftKey && lastSelectedKey.current) {
+        const from = selectableBlocks.findIndex(
+          (item) => item.key === lastSelectedKey.current,
+        );
+        const to = selectableBlocks.findIndex((item) => item.key === key);
+        if (from >= 0 && to >= 0) {
+          const start = Math.min(from, to);
+          const end = Math.max(from, to);
+          for (let index = start; index <= end; index += 1) {
+            const item = selectableBlocks[index];
+            next.add(item.key);
+            selectionSignatures.current.set(
+              item.key,
+              blockSelectionSignature(item),
+            );
+          }
+          lastSelectedKey.current = key;
+          return next;
+        }
+      }
+      if (next.has(key)) {
+        next.delete(key);
+        selectionSignatures.current.delete(key);
+      } else {
+        next.add(key);
+        selectionSignatures.current.set(
+          key,
+          blockSelectionSignature(block),
+        );
+      }
+      lastSelectedKey.current = key;
+      return next;
+    });
+  };
+
+  const sendBulkAction = (action: BulkAction) => {
+    if (busy) {
+      return;
+    }
+    const current = selectedBlocks.filter(
+      (block) =>
+        selectionSignatures.current.get(block.key) ===
+        blockSelectionSignature(block),
+    );
+    if (current.length !== selectedBlocks.length) {
+      showToast(text.preview.selection.changed, "info");
+      const nextKeys = new Set(current.map((block) => block.key));
+      setSelectedKeys(nextKeys);
+      for (const key of [...selectionSignatures.current.keys()]) {
+        if (!nextKeys.has(key)) {
+          selectionSignatures.current.delete(key);
+        }
+      }
+    }
+    const payload: BlockSelection[] = current.map((block) => ({
+      blockIndex: block.blockIndex,
+      ...(block.sourceHash ? { sourceHash: block.sourceHash } : {}),
+      ...(block.cacheId ? { cacheId: block.cacheId } : {}),
+      ...(block.cacheDst ? { cacheDst: block.cacheDst } : {}),
+      human: block.human,
+    }));
+    if (payload.length === 0) {
+      return;
+    }
+    switch (action) {
+      case "retranslate":
+        sendMessage({ type: "retranslateBlocks", blocks: payload });
+        break;
+      case "review":
+        sendMessage({ type: "reviewBlocks", blocks: payload });
+        break;
+      case "backTranslate":
+        sendMessage({ type: "backTranslateBlocks", blocks: payload });
+        break;
+      case "markSynced":
+        sendMessage({ type: "markSyncedBlocks", blocks: payload });
+        break;
+      case "deleteTranslation":
+        sendMessage({ type: "deleteTargetBlocks", blocks: payload });
+        break;
+      default:
+        break;
+    }
+  };
 
   const startEdit = (block: PreviewBlockView, side: Side) => {
-    if (busy) {
+    if (locked || selectionMode) {
       return;
     }
     if (layout === "split" && readonly[side]) {
@@ -4034,7 +4543,7 @@ export function App(props: { boot: BootData; text: UiCatalog }) {
   };
 
   const saveEdit = (draft: string) => {
-    if (!editing || busy) {
+    if (!editing || locked) {
       return;
     }
     if (layout === "split" && readonly[editing.side]) {
@@ -4077,7 +4586,7 @@ export function App(props: { boot: BootData; text: UiCatalog }) {
   };
 
   const startInsert = (afterBlockIndex: number, type: "source" | "target") => {
-    if (busy) {
+    if (locked || selectionMode) {
       return;
     }
     if (type === "target" && mode === "source") {
@@ -4090,7 +4599,7 @@ export function App(props: { boot: BootData; text: UiCatalog }) {
   };
 
   const saveInsert = (draft: string) => {
-    if (!insert || busy) {
+    if (!insert || locked) {
       return;
     }
     if (!draft.trim()) {
@@ -4106,7 +4615,7 @@ export function App(props: { boot: BootData; text: UiCatalog }) {
   };
 
   const openAnnotationsForBlock = (block: PreviewBlockView) => {
-    if (busy) {
+    if (busy || selectionMode) {
       return;
     }
     const node = Array.from(
@@ -4129,7 +4638,7 @@ export function App(props: { boot: BootData; text: UiCatalog }) {
     if (isStandalone) {
       if (includeTarget) {
         items.push(
-          { label: text.preview.actions.editTarget, icon: "edit", onSelect: () => startEdit(block, "target") },
+          { label: text.preview.actions.editTarget, icon: "edit", disabled: locked, onSelect: () => startEdit(block, "target") },
           { separator: true },
           {
             label: text.preview.actions.backTranslateTarget,
@@ -4139,6 +4648,7 @@ export function App(props: { boot: BootData; text: UiCatalog }) {
           {
             label: text.preview.actions.removeStandalone,
             icon: "trash",
+            disabled: locked,
             onSelect: () => sendMessage({ type: "deleteTargetOnlyBlock", standaloneId: block.standaloneTargetId! }),
           },
         );
@@ -4148,10 +4658,11 @@ export function App(props: { boot: BootData; text: UiCatalog }) {
     if (isPending) {
       if (includeSource) {
         items.push(
-          { label: text.preview.actions.editSource, icon: "edit", onSelect: () => startEdit(block, "source") },
+          { label: text.preview.actions.editSource, icon: "edit", disabled: locked, onSelect: () => startEdit(block, "source") },
           {
             label: text.preview.actions.removeInsert,
             icon: "trash",
+            disabled: locked,
             onSelect: () => sendMessage({ type: "removeSourceInsert", pendingId: block.pendingInsertId! }),
           },
         );
@@ -4163,6 +4674,7 @@ export function App(props: { boot: BootData; text: UiCatalog }) {
         items.push({
           label: text.preview.actions.undoDelete,
           icon: "history",
+          disabled: locked,
           onSelect: () => sendMessage({ type: "undoDeleteSourceBlock", blockIndex: block.blockIndex }),
         });
       }
@@ -4177,7 +4689,7 @@ export function App(props: { boot: BootData; text: UiCatalog }) {
     }
     if (includeSource) {
       items.push(
-        { label: text.preview.actions.editSource, icon: "edit", onSelect: () => startEdit(block, "source") },
+        { label: text.preview.actions.editSource, icon: "edit", disabled: locked, onSelect: () => startEdit(block, "source") },
       );
       if (block.canRetranslate) {
         items.push({
@@ -4198,6 +4710,7 @@ export function App(props: { boot: BootData; text: UiCatalog }) {
         items.push({
           label: text.preview.actions.undoDelete,
           icon: "history",
+          disabled: locked,
           onSelect: () => sendMessage({ type: "undoDeleteTargetBlock", blockIndex: block.blockIndex }),
         });
       } else {
@@ -4205,6 +4718,7 @@ export function App(props: { boot: BootData; text: UiCatalog }) {
           items.push({
             label: text.preview.actions.editTarget,
             icon: "edit",
+            disabled: locked,
             onSelect: () => startEdit(block, "target"),
           });
         }
@@ -4229,11 +4743,13 @@ export function App(props: { boot: BootData; text: UiCatalog }) {
           {
             label: `${text.preview.actions.insertBlock}: ${text.preview.actions.sourceChoice}`,
             icon: "diff-added",
+            disabled: locked,
             onSelect: () => startInsert(block.blockIndex, "source"),
           },
           {
             label: `${text.preview.actions.insertBlock}: ${text.preview.actions.targetChoice}`,
             icon: "diff-added",
+            disabled: locked,
             onSelect: () => startInsert(block.blockIndex, "target"),
           },
           { separator: true },
@@ -4246,7 +4762,7 @@ export function App(props: { boot: BootData; text: UiCatalog }) {
           {
             label: text.preview.actions.deleteBlock,
             icon: "trash",
-            disabled: block.sourceDeleted,
+            disabled: block.sourceDeleted || locked,
             onSelect: () => sendMessage({ type: "deleteSourceBlock", blockIndex: block.blockIndex }),
           },
         );
@@ -4273,8 +4789,8 @@ export function App(props: { boot: BootData; text: UiCatalog }) {
       // 分栏源单元格只提供源侧插入/删除；目标侧操作在译文单元格中。
       items.push(
         { separator: true },
-        { label: text.preview.actions.insertBlock, icon: "diff-added", onSelect: () => startInsert(block.blockIndex, "source") },
-        { label: text.preview.actions.deleteSourceBlock, icon: "trash", onSelect: () => sendMessage({ type: "deleteSourceBlock", blockIndex: block.blockIndex }) },
+        { label: text.preview.actions.insertBlock, icon: "diff-added", disabled: locked, onSelect: () => startInsert(block.blockIndex, "source") },
+        { label: text.preview.actions.deleteSourceBlock, icon: "trash", disabled: locked, onSelect: () => sendMessage({ type: "deleteSourceBlock", blockIndex: block.blockIndex }) },
       );
     }
     return items;
@@ -4285,13 +4801,13 @@ export function App(props: { boot: BootData; text: UiCatalog }) {
       {
         label: text.preview.toolbar.importTranslation,
         icon: "cloud-download",
-        disabled: busy,
+        disabled: locked,
         onSelect: () => sendMessage({ type: "importTranslation" }),
       },
       {
         label: text.preview.toolbar.checkConsistency,
         icon: "checklist",
-        disabled: !host.model.cacheExists || busy,
+        disabled: !host.model.cacheExists || locked,
         onSelect: () => sendMessage({ type: "checkConsistency" }),
       },
       {
@@ -4318,20 +4834,20 @@ export function App(props: { boot: BootData; text: UiCatalog }) {
       {
         label: text.preview.actions.insertAtStart,
         icon: "diff-added",
-        disabled: busy,
+        disabled: locked,
         onSelect: () => startInsert(-1, "source"),
       },
       { separator: true },
       {
         label: fmt(text.preview.actions.applySource, { count: host.model.pendingSourceCount }),
         icon: "check-all",
-        disabled: host.model.pendingSourceCount === 0 || busy,
+        disabled: host.model.pendingSourceCount === 0 || locked,
         onSelect: () => sendMessage({ type: "applySourceEdits" }),
       },
       {
         label: text.preview.actions.resetSource,
         icon: "trash",
-        disabled: host.model.pendingSourceCount === 0 || busy,
+        disabled: host.model.pendingSourceCount === 0 || locked,
         onSelect: () => sendMessage({ type: "discardSourceEdits" }),
       },
     ];
@@ -4376,7 +4892,7 @@ export function App(props: { boot: BootData; text: UiCatalog }) {
     setBriefDirty(true);
   };
   const saveBrief = () => {
-    if (busy) {
+    if (locked) {
       return;
     }
     if (!summaryDraft.trim()) {
@@ -4411,7 +4927,7 @@ export function App(props: { boot: BootData; text: UiCatalog }) {
     block: PreviewBlockView,
     side?: Side,
   ) => {
-    if (busy) {
+    if (busy || selectionMode) {
       return;
     }
     openMenu(event, blockMenuItems(block, side));
@@ -4433,11 +4949,17 @@ export function App(props: { boot: BootData; text: UiCatalog }) {
         model={host.model}
         text={text}
         busy={busy}
+        locked={locked}
+        selectionMode={selectionMode}
+        canSelect={selectableBlocks.length > 0}
+        taskActivity={taskActivity}
         onSync={() => sendMessage({ type: "sync" })}
         onReview={() => sendMessage({ type: "reviewMachineBlocks" })}
         onExport={() => sendMessage({ type: "export" })}
         onRefresh={() => sendMessage({ type: "refresh" })}
         toolbarMenu={toolbarMenu}
+        onToggleSelection={toggleSelectionMode}
+        onOpenTasks={() => sendMessage({ type: "openTaskPanel" })}
       />
       <ContextBar
         model={host.model}
@@ -4450,10 +4972,22 @@ export function App(props: { boot: BootData; text: UiCatalog }) {
         onLayout={handleLayout}
         onToggleSummary={() => setSummaryOpen((open) => !open)}
       />
+      {selectionMode ? (
+        <SelectionBar
+          text={text}
+          selectedCount={selectedBlocks.length}
+          counts={selectionCounts}
+          onAction={sendBulkAction}
+          onSelectAll={selectAllBlocks}
+          onClear={clearSelection}
+          onExit={exitSelection}
+        />
+      ) : null}
       <Notices
         model={host.model}
         text={text}
         busy={busy}
+        locked={locked}
         onApplySource={() => sendMessage({ type: "applySourceEdits" })}
         onDiscardSource={() => sendMessage({ type: "discardSourceEdits" })}
         onRetranslateStale={() => sendMessage({ type: "retranslateStale" })}
@@ -4464,6 +4998,7 @@ export function App(props: { boot: BootData; text: UiCatalog }) {
           summary={summary}
           open={summaryOpen}
           busy={busy}
+          locked={locked}
           stableTranslation={assist.stableTranslation}
           summaryContext={assist.summaryContext}
           summaryDraft={summaryDraft}
@@ -4489,7 +5024,7 @@ export function App(props: { boot: BootData; text: UiCatalog }) {
           }}
           onSave={saveBrief}
           onClear={() => {
-            if (busy) return;
+            if (locked) return;
             pendingBriefSave.current = null;
             setSummaryDirty(false);
             setBriefDirty(false);
@@ -4497,7 +5032,7 @@ export function App(props: { boot: BootData; text: UiCatalog }) {
             sendMessage({ type: "clearSummary" });
           }}
           onAssist={(key, value) => {
-            if (busy) return;
+            if (locked) return;
             setAssist((current) => ({ ...current, [key]: value }));
             sendMessage({ type: "setAssistToggle", key, value });
           }}
@@ -4519,9 +5054,12 @@ export function App(props: { boot: BootData; text: UiCatalog }) {
             text={text}
             mode={mode}
             readonly={readonly}
-            busy={busy}
+            busy={locked}
             editing={editing}
             insert={insert}
+            selectionMode={selectionMode}
+            selectedKeys={selectedKeys}
+            onToggleSelect={toggleBlockSelection}
             onMenu={openBlockMenu}
             onRetranslate={retranslateBlock}
             onAnnotations={openAnnotationsForBlock}
@@ -4538,6 +5076,7 @@ export function App(props: { boot: BootData; text: UiCatalog }) {
             {insert?.afterBlockIndex === -1 ? (
               <InsertEditor
                 type={insert.type}
+                busy={locked}
                 onSave={saveInsert}
                 onCancel={() => setInsert(null)}
               />
@@ -4549,10 +5088,13 @@ export function App(props: { boot: BootData; text: UiCatalog }) {
                 text={text}
                 sourceLanguage={host.model.sourceLanguage}
                 targetLanguage={host.model.targetLanguage}
-                busy={busy}
+                busy={locked}
                 readonly={false}
                 editing={editing}
                 insert={insert}
+                selectionMode={selectionMode}
+                selected={selectedKeys.has(block.key)}
+                onToggleSelect={toggleBlockSelection}
                 onMenu={(event, target, side) => openBlockMenu(event, target, side)}
                 onRetranslate={retranslateBlock}
                 onAnnotations={openAnnotationsForBlock}
@@ -4573,7 +5115,7 @@ export function App(props: { boot: BootData; text: UiCatalog }) {
           target={annotationTarget}
           block={activeAnnotationBlock}
           text={text}
-          busy={busy}
+          busy={locked}
           reviewSupported={host.model.reviewSupported}
           annotationsSupported={host.model.annotationsSupported}
           onClose={() => setAnnotationTarget(null)}

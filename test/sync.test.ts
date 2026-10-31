@@ -5,6 +5,7 @@ import { createDeletedMarker } from "../src/cache/deletedMarker";
 import { parseCacheDocument, serializeAnchor } from "../src/markdown/anchors";
 import { blockHash } from "../src/util/hash";
 import { syncDocument, SyncBlockedError } from "../src/sync/sync";
+import { MockTranslationProvider } from "../src/translation/mockProvider";
 import type {
   GlossaryEntry,
   TranslationItem,
@@ -80,6 +81,73 @@ describe("syncDocument", () => {
       (block) => block.anchor.id,
     );
     expect(afterIds).toEqual(beforeIds);
+  });
+
+  it("retranslates only selected blocks and can unlock human translations", async () => {
+    const initial = await translate();
+    const before = inspect(SOURCE, initial.cacheText);
+    const paragraph = before.alignment.blocks.find(
+      (block) => block.source.kind === "paragraph" && block.cache,
+    );
+    const human = replaceCachedBlock({
+      cacheText: initial.cacheText,
+      cache: before.cache,
+      target: paragraph!.cache!,
+      content: "人工译文。",
+      sourceHash: paragraph!.source.hash,
+      sourceKind: paragraph!.source.kind,
+      mode: "human",
+      md: before.md,
+    });
+
+    const result = await syncDocument({
+      md: makeMd(),
+      sourceText: SOURCE,
+      cacheText: human.text,
+      provider: new MockTranslationProvider(),
+      sourceLanguage: "en",
+      targetLanguage: "zh-CN",
+      retranslateStale: false,
+      retranslateAll: true,
+      allowPartial: true,
+      onlySourceIndexes: new Set([paragraph!.source.index]),
+      includeHuman: true,
+    });
+
+    expect(result.translatedCount).toBe(1);
+    expect(result.humanLockedCount).toBe(0);
+    const after = inspect(SOURCE, result.cacheText).alignment.blocks.find(
+      (block) => block.source.index === paragraph!.source.index,
+    );
+    expect(after?.cache?.anchor.mode).toBe("auto");
+    expect(after?.human).toBe(false);
+    expect(result.cacheText).not.toContain("人工译文。");
+  });
+
+  it("leaves unselected missing blocks out of a selective sync", async () => {
+    const result = await syncDocument({
+      md: makeMd(),
+      sourceText: SOURCE,
+      provider: new MockTranslationProvider(),
+      sourceLanguage: "en",
+      targetLanguage: "zh-CN",
+      retranslateStale: false,
+      retranslateAll: true,
+      allowPartial: true,
+      onlySourceIndexes: new Set([1]),
+      includeHuman: true,
+    });
+
+    expect(result.translatedCount).toBe(1);
+    const statuses = inspect(SOURCE, result.cacheText).alignment.blocks.map(
+      (block) => block.status,
+    );
+    expect(statuses.filter((status) => status === "translated")).toHaveLength(
+      1,
+    );
+    expect(statuses.filter((status) => status === "untranslated")).toHaveLength(
+      2,
+    );
   });
 
   it("preserves human-locked blocks when retranslating everything", async () => {

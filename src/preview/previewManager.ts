@@ -26,7 +26,8 @@
  * - `sourceWriteInFlight` 期间跳过一切刷新，避免读到写回中途的中间态；
  * - `updateVersion` 递增用于丢弃过期的异步渲染结果，只有最后一次 update 能落地；
  * - `webviewReady` 之前只写完整壳，之后只发 state 消息，绝不再重载页面；
- * - 每个消息都按字段做运行时校验，未知 type 静默忽略，业务错误统一走 toast/错误弹窗。
+ * - 每个消息都按字段做运行时校验，未知 type 静默忽略；长任务错误写入任务面板并只在预览内
+ *   toast，即时编辑错误仍走 toast/错误弹窗。
  */
 import { randomBytes } from "node:crypto";
 import * as path from "node:path";
@@ -63,7 +64,11 @@ import {
   translationBriefText,
 } from "../translation/types";
 import { languageSuffix } from "../util/language";
-import { buildPreviewModel, type PreviewModel } from "./previewModel";
+import {
+  buildPreviewModel,
+  type PreviewBlockView,
+  type PreviewModel,
+} from "./previewModel";
 import {
   normalizePreviewLayout,
   PREVIEW_LAYOUT_STATE_KEY,
@@ -71,7 +76,16 @@ import {
 } from "./layout";
 import { buildPreviewAppShell } from "./appShell";
 import type { PreviewHostMessage, PreviewNotice } from "./protocol";
-import { failedTaskPatch, type TranslationTaskMonitor } from "../status/taskMonitor";
+import type {
+  TaskOperation,
+  TranslationTaskMonitor,
+} from "../status/taskMonitor";
+import type {
+  EnqueuedOperation,
+  OperationOutcome,
+  OperationRunContext,
+  OperationScheduler,
+} from "../status/operationScheduler";
 import { tError } from "../i18n/errors";
 
 // ---- 模块级辅助 ----
@@ -135,6 +149,47 @@ function formatError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+/** 运行时校验上行批量块选择；忽略非法项并按块索引去重。 */
+function parseBlockSelections(raw: unknown): BlockSelectionInput[] {
+  if (!Array.isArray(raw)) {
+    return [];
+  }
+  const result: BlockSelectionInput[] = [];
+  const seen = new Set<number>();
+  for (const entry of raw) {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+      continue;
+    }
+    const value = entry as Record<string, unknown>;
+    const blockIndex =
+      typeof value.blockIndex === "number" &&
+      Number.isInteger(value.blockIndex) &&
+      value.blockIndex >= 0
+        ? value.blockIndex
+        : undefined;
+    if (blockIndex === undefined || seen.has(blockIndex)) {
+      continue;
+    }
+    seen.add(blockIndex);
+    result.push({
+      blockIndex,
+      ...(typeof value.sourceHash === "string"
+        ? { sourceHash: value.sourceHash }
+        : {}),
+      ...(typeof value.cacheId === "string"
+        ? { cacheId: value.cacheId }
+        : {}),
+      ...(typeof value.cacheDst === "string"
+        ? { cacheDst: value.cacheDst }
+        : {}),
+      ...(typeof value.human === "boolean"
+        ? { human: value.human }
+        : {}),
+    });
+  }
+  return result;
+}
+
 // ---- PreviewManager：面板注册表与布局偏好 ----
 
 /**
@@ -154,6 +209,7 @@ export class PreviewManager implements vscode.Disposable {
    * @param exportService 导出准备与提交服务。
    * @param output 扩展输出通道，用于记录错误与导出审计日志。
    * @param taskMonitor 状态栏任务监视器。
+   * @param scheduler 长操作调度器；预览发起的 AI/缓存操作统一入队。
    * @remarks 构造函数只读取布局偏好，不创建任何面板。
    */
   constructor(
@@ -162,6 +218,7 @@ export class PreviewManager implements vscode.Disposable {
     private readonly exportService: ExportService,
     private readonly output: vscode.OutputChannel,
     private readonly taskMonitor: TranslationTaskMonitor,
+    private readonly scheduler: OperationScheduler,
   ) {
     this.layout = normalizePreviewLayout(
       context.globalState.get(PREVIEW_LAYOUT_STATE_KEY),
@@ -276,6 +333,7 @@ export class PreviewManager implements vscode.Disposable {
       this.exportService,
       this.output,
       this.taskMonitor,
+      this.scheduler,
     );
     this.panels.set(key, session);
     panel.onDidDispose(() => {
@@ -343,7 +401,24 @@ export class PreviewManager implements vscode.Disposable {
 interface RetranslateExpectation {
   sourceHash?: string;
   cacheId?: string;
+  cacheDst?: string;
+  human?: boolean;
   requireMachine?: boolean;
+}
+
+/** 预览批量操作传入的块定位信息。 */
+interface BlockSelectionInput {
+  blockIndex: number;
+  sourceHash?: string;
+  cacheId?: string;
+  cacheDst?: string;
+  human?: boolean;
+}
+
+/** 当前模型块与上行选择信息的配对；执行时优先使用客户端捕获的校验值。 */
+interface SelectedBlock {
+  view: PreviewBlockView;
+  selection: BlockSelectionInput;
 }
 
 /** 等待原文写回确认后再执行的重译动作。 */
@@ -421,6 +496,14 @@ class PreviewPanelSession implements vscode.Disposable {
   private summaryContext: boolean;
   /** 摘要生成进行中；防止重复请求。 */
   private summaryGenerating = false;
+  /** 本面板发起的任务 ID；面板关闭时逐个取消。 */
+  private readonly ownedTasks = new Set<number>();
+  /** 已推送到 Webview 的活动任务计数，避免重复 postMessage。 */
+  private taskActivity = { running: 0, queued: 0 };
+  /** 最近的忙碌态；Webview 重载后需要重新下发，避免丢失独占锁。 */
+  private busyState: { busy: boolean; message?: string } = { busy: false };
+  /** 退订任务监视器；随面板销毁释放。 */
+  private readonly unsubscribeTasks: () => void;
 
   /**
    * 注册消息监听并触发首次渲染（不等待）。
@@ -432,6 +515,7 @@ class PreviewPanelSession implements vscode.Disposable {
    * @param exportService 导出服务。
    * @param output 输出通道。
    * @param taskMonitor 任务监视器。
+   * @param scheduler 操作调度器。
    */
   constructor(
     private readonly manager: PreviewManager,
@@ -442,16 +526,101 @@ class PreviewPanelSession implements vscode.Disposable {
     private readonly exportService: ExportService,
     private readonly output: vscode.OutputChannel,
     private readonly taskMonitor: TranslationTaskMonitor,
+    private readonly scheduler: OperationScheduler,
   ) {
     const assistDefaults = syncService.getAssistSettings();
     this.stableTranslation = assistDefaults.stableTranslation;
     this.summaryContext = assistDefaults.summaryContext;
+    this.unsubscribeTasks = taskMonitor.onDidChange(() =>
+      this.syncTaskActivity(),
+    );
     // Webview 消息可能乱序/恶意：统一交给 onMessage 做形状校验后再分发。
     this.panel.webview.onDidReceiveMessage((message: unknown) => {
       void this.onMessage(message);
     });
+    this.syncTaskActivity();
     // 首次渲染不阻塞构造函数；后续动作通过 await ready 等待这次渲染结束。
     this.ready = this.update();
+  }
+
+  /**
+   * 把本面板当前任务计数推送给 Webview，用于锁定编辑但保留“继续入队”。
+   * 仅在计数变化时发送，避免任务进度刷新造成额外消息。
+   */
+  private syncTaskActivity(force = false): void {
+    if (this.disposed) {
+      return;
+    }
+    const key = this.sourceUri.toString();
+    const active = this.taskMonitor
+      .snapshot()
+      .active.filter((task) => task.uri?.toString() === key);
+    const running = active.filter(
+      (task) => task.status === "running",
+    ).length;
+    const queued = active.length - running;
+    if (
+      !force &&
+      this.taskActivity.running === running &&
+      this.taskActivity.queued === queued
+    ) {
+      return;
+    }
+    this.taskActivity = { running, queued };
+    this.postToWebview({ type: "taskActivity", running, queued });
+  }
+
+  /**
+   * 把预览动作提交给调度器，并在排队/失败/取消时给出预览内提示。
+   * 成功与部分成功的提示由 runner 通过 update() 自行展示。
+   */
+  private enqueueTask<T>(options: {
+    operation: TaskOperation;
+    run: (context: OperationRunContext) => Promise<OperationOutcome<T> | void>;
+    cancelledText?: string;
+  }): EnqueuedOperation<T> {
+    const label = vscode.workspace.asRelativePath(this.sourceUri, false);
+    const job = this.scheduler.enqueue<T>({
+      label,
+      operation: options.operation,
+      uri: this.sourceUri,
+      run: options.run,
+    });
+    this.ownedTasks.add(job.taskId);
+    if (this.taskMonitor.getTask(job.taskId)?.status === "queued") {
+      const key = this.sourceUri.toString();
+      const queued = this.taskMonitor
+        .snapshot()
+        .active.filter(
+          (task) =>
+            task.status === "queued" && task.uri?.toString() === key,
+        ).length;
+      this.showToast(
+        queued > 1
+          ? formatText(UI_TEXT.notifications.queuedNotice, {
+              count: queued - 1,
+            })
+          : UI_TEXT.notifications.queuedNoticeSolo,
+        "info",
+      );
+    }
+    void job.done.then((settlement) => {
+      this.ownedTasks.delete(job.taskId);
+      this.syncTaskActivity();
+      if (settlement.status === "failed") {
+        this.showToast(
+          settlement.error?.trim() ||
+            UI_TEXT.notifications.operationFailed,
+          "error",
+        );
+      } else if (
+        settlement.status === "cancelled" &&
+        options.cancelledText
+      ) {
+        this.showToast(options.cancelledText, "info");
+      }
+    });
+    return job;
   }
 
   /**
@@ -846,6 +1015,11 @@ class PreviewPanelSession implements vscode.Disposable {
   /** 标记销毁并清空导出/暂存状态；之后不再向 Webview 发送任何消息。 */
   dispose(): void {
     this.disposed = true;
+    this.unsubscribeTasks();
+    for (const taskId of this.ownedTasks) {
+      this.scheduler.cancelTask(taskId);
+    }
+    this.ownedTasks.clear();
     this.pendingExport = undefined;
     this.exportConfirmPending = false;
     this.clearStagedSource();
@@ -979,13 +1153,24 @@ class PreviewPanelSession implements vscode.Disposable {
         ? message.key
         : undefined;
     const assistValue = message.value === true;
+    const blocks = parseBlockSelections(message.blocks);
     try {
       switch (type) {
         // ---- 原生预览握手：脚本完成首次挂载后，后续刷新改走 state 消息 ----
         case "ready":
           this.webviewReady = true;
           this.flushPendingMessages();
-          // Webview 可能被重新加载；用当前模型/待确认导出重新同步，避免旧快照。
+          // Webview 可能被重新加载：状态、任务活动和忙碌锁都必须重新下发。
+          this.syncTaskActivity(true);
+          if (this.busyState.busy) {
+            this.postToWebview({
+              type: "busy",
+              busy: true,
+              ...(this.busyState.message
+                ? { message: this.busyState.message }
+                : {}),
+            });
+          }
           void this.update(undefined, this.pendingExport?.confirmation);
           break;
         // ---- 布局与只读：只影响当前面板的渲染参数 ----
@@ -1237,6 +1422,26 @@ class PreviewPanelSession implements vscode.Disposable {
             await this.retranslateBlock(blockIndex);
           }
           break;
+        case "retranslateBlocks":
+          await this.retranslateBlocks(blocks);
+          break;
+        case "reviewBlocks":
+          await this.reviewSelectedBlocks(blocks);
+          break;
+        case "backTranslateBlocks":
+          await this.backTranslateBlocks(blocks);
+          break;
+        case "markSyncedBlocks":
+          await this.markSyncedBlocks(blocks);
+          break;
+        case "deleteTargetBlocks":
+          await this.deleteTargetBlocks(blocks);
+          break;
+        case "openTaskPanel":
+          await vscode.commands.executeCommand(
+            "workbench.view.extension.markdownBilingualSyncTasks",
+          );
+          break;
         case "markSynced":
           if (blockIndex !== undefined) {
             await this.markSynced(blockIndex);
@@ -1279,6 +1484,13 @@ class PreviewPanelSession implements vscode.Disposable {
    */
   private async retranslateStale(): Promise<void> {
     if (this.hasPendingSource()) {
+      if (this.hasActiveTasks()) {
+        this.showToast(
+          UI_TEXT.notifications.waitForTasksBeforeSource,
+          "info",
+        );
+        return;
+      }
       this.pendingRetranslate = { kind: "stale" };
       this.showToast(UI_TEXT.notifications.pendingSourceBeforeRetranslate, "info");
       await this.applySourceEdits();
@@ -1298,6 +1510,9 @@ class PreviewPanelSession implements vscode.Disposable {
     if (choice !== UI_TEXT.extension.confirmRetranslateStaleAction) {
       return;
     }
+    if (this.disposed) {
+      return;
+    }
     await this.runSync("stale");
   }
 
@@ -1307,6 +1522,13 @@ class PreviewPanelSession implements vscode.Disposable {
    */
   private async retranslateAll(): Promise<void> {
     if (this.hasPendingSource()) {
+      if (this.hasActiveTasks()) {
+        this.showToast(
+          UI_TEXT.notifications.waitForTasksBeforeSource,
+          "info",
+        );
+        return;
+      }
       this.pendingRetranslate = { kind: "all" };
       this.showToast(UI_TEXT.notifications.pendingSourceBeforeRetranslate, "info");
       await this.applySourceEdits();
@@ -1318,6 +1540,9 @@ class PreviewPanelSession implements vscode.Disposable {
       UI_TEXT.extension.confirmRetranslateAllAction,
     );
     if (choice !== UI_TEXT.extension.confirmRetranslateAllAction) {
+      return;
+    }
+    if (this.disposed) {
       return;
     }
     await this.runSync("all");
@@ -1493,76 +1718,74 @@ class PreviewPanelSession implements vscode.Disposable {
    * - 同一独占块重复回译会替换旧的暂存插入项。
    */
   private async backTranslateTargetOnly(targetId: string): Promise<void> {
-    const controller = new AbortController();
-    let cancelled = false;
-    this.setBusy(true, UI_TEXT.notifications.targetInsertBackTranslating);
-    try {
-      const result = await vscode.window.withProgress(
-        {
-          location: vscode.ProgressLocation.Notification,
-          title: "Markdown Bilingual Sync",
-          cancellable: true,
-        },
-        async (progress, token) => {
-          token.onCancellationRequested(() => {
-            cancelled = true;
-            controller.abort();
-          });
-          progress.report({
-            message: UI_TEXT.notifications.targetInsertBackTranslating,
-          });
-          return this.syncService.backTranslateTargetBlock(
-            this.sourceUri,
-            targetId,
-            controller.signal,
-            {
-              stableTranslation: this.stableTranslation,
-              summaryContext: this.summaryContext,
-            },
-          );
-        },
-      );
-      if (this.disposed) {
-        return;
-      }
-      // 暂存到原文前先确认回译结果确实只有一个块，避免破坏块级锚点。
-      const parsed = parseMarkdownDocument(result.text, this.md);
-      if (parsed.blocks.length !== 1) {
-        throw new Error(UI_TEXT.notifications.targetInsertMultiBlock);
-      }
-      const state = await this.syncService.loadPreviewState(this.sourceUri);
-      this.ensureSourceBase(state.sourceText);
-      // 同一独占块再次回译：先移除旧插入项，保持一一对应。
-      const existing = this.pendingTargetPromotions.get(targetId);
-      if (existing) {
-        this.pendingSourceInsertions = this.pendingSourceInsertions.filter(
-          (item) => item.id !== existing.sourceInsertId,
-        );
-      }
-      const sourceInsertId = randomBytes(6).toString("hex");
-      this.pendingSourceInsertions.push({
-        id: sourceInsertId,
-        afterIndex: result.afterIndex,
-        text: result.text,
-      });
-      this.pendingTargetPromotions.set(targetId, {
-        sourceInsertId,
-        generatedSourceText: result.text,
-      });
-      await this.update({
-        text: UI_TEXT.notifications.targetInsertSourceStaged,
-        kind: "info",
-      });
-    } catch (error) {
-      // 取消不是错误：给出提示并清掉可能残留的忙碌态。
-      if (cancelled || error instanceof CancelledError) {
-        this.showToast(UI_TEXT.notifications.backCancelled, "info");
-        return;
-      }
-      throw error;
-    } finally {
-      this.setBusy(false);
+    await this.ready;
+    if (this.disposed) {
+      return;
     }
+    if (this.hasPendingSource()) {
+      this.showToast(
+        UI_TEXT.notifications.pendingSourceBeforeBackTranslate,
+        "info",
+      );
+      return;
+    }
+    this.enqueueTask({
+      operation: "backtranslate",
+      cancelledText: UI_TEXT.notifications.backCancelled,
+      run: async ({ signal, report }) => {
+        report({
+          phase: UI_TEXT.notifications.targetInsertBackTranslating,
+          completed: 0,
+          total: 1,
+        });
+        const result = await this.syncService.backTranslateTargetBlock(
+          this.sourceUri,
+          targetId,
+          signal,
+          {
+            stableTranslation: this.stableTranslation,
+            summaryContext: this.summaryContext,
+          },
+        );
+        if (this.disposed) {
+          return { status: "success" };
+        }
+        // 暂存到原文前先确认回译结果确实只有一个块，避免破坏块级锚点。
+        const parsed = parseMarkdownDocument(result.text, this.md);
+        if (parsed.blocks.length !== 1) {
+          throw new Error(UI_TEXT.notifications.targetInsertMultiBlock);
+        }
+        const state = await this.syncService.loadPreviewState(this.sourceUri);
+        this.ensureSourceBase(state.sourceText);
+        // 同一独占块再次回译：先移除旧插入项，保持一一对应。
+        const existing = this.pendingTargetPromotions.get(targetId);
+        if (existing) {
+          this.pendingSourceInsertions = this.pendingSourceInsertions.filter(
+            (item) => item.id !== existing.sourceInsertId,
+          );
+        }
+        const sourceInsertId = randomBytes(6).toString("hex");
+        this.pendingSourceInsertions.push({
+          id: sourceInsertId,
+          afterIndex: result.afterIndex,
+          text: result.text,
+        });
+        this.pendingTargetPromotions.set(targetId, {
+          sourceInsertId,
+          generatedSourceText: result.text,
+        });
+        await this.update({
+          text: UI_TEXT.notifications.targetInsertSourceStaged,
+          kind: "info",
+        });
+        return {
+          status: "success",
+          phase: UI_TEXT.notifications.targetInsertSourceStaged,
+          completed: 1,
+          total: 1,
+        };
+      },
+    });
   }
 
   // ---- 块删除 / 插入 / 撤销（原文侧只暂存，译文侧直接写缓存） ----
@@ -1587,23 +1810,44 @@ class PreviewPanelSession implements vscode.Disposable {
         return;
       }
     }
-    this.setBusy(true, UI_TEXT.notifications.targetSkipping);
-    try {
-      const cacheText = await this.syncService.deleteTargetBlock(
-        this.sourceUri,
-        blockIndex,
-      );
-      await this.update(
-        {
-          text: UI_TEXT.notifications.targetSkipped,
-          kind: "info",
-        },
-        undefined,
-        cacheText,
-      );
-    } finally {
-      this.setBusy(false);
+    await this.ready;
+    if (this.disposed) {
+      return;
     }
+    this.enqueueTask({
+      operation: "deleteTranslation",
+      run: async ({ report }) => {
+        report({
+          phase: UI_TEXT.notifications.targetSkipping,
+          completed: 0,
+          total: 1,
+        });
+        const cacheText = await this.syncService.deleteTargetBlock(
+          this.sourceUri,
+          blockIndex,
+          {
+            sourceHash: view?.sourceHash,
+            cacheId: view?.cacheId,
+            cacheDst: view?.cacheDst,
+            human: view?.human,
+          },
+        );
+        await this.update(
+          {
+            text: UI_TEXT.notifications.targetSkipped,
+            kind: "info",
+          },
+          undefined,
+          cacheText,
+        );
+        return {
+          status: "success",
+          phase: UI_TEXT.notifications.targetSkipped,
+          completed: 1,
+          total: 1,
+        };
+      },
+    });
   }
 
   /**
@@ -2174,79 +2418,72 @@ class PreviewPanelSession implements vscode.Disposable {
 
   /** 审校单个块；只写本机 sidecar，不改缓存 Markdown。 */
   private async reviewBlock(blockIndex: number): Promise<void> {
-    this.setBusy(true, UI_TEXT.notifications.reviewingBlock);
-    const controller = new AbortController();
-    let cancelled = false;
-    try {
-      const result = await vscode.window.withProgress(
-        {
-          location: vscode.ProgressLocation.Notification,
-          title: "Markdown Bilingual Sync",
-          cancellable: true,
-        },
-        async (progress, token) => {
-          token.onCancellationRequested(() => {
-            cancelled = true;
-            controller.abort();
-          });
-          progress.report({
-            message: UI_TEXT.notifications.reviewingBlock,
-          });
-          return this.syncService.reviewBlock(
-            this.sourceUri,
-            blockIndex,
-            controller.signal,
-          );
-        },
-      );
-      await this.update({
-        text:
+    await this.ready;
+    if (this.disposed) {
+      return;
+    }
+    this.enqueueTask({
+      operation: "review",
+      cancelledText: UI_TEXT.notifications.reviewCancelled,
+      run: async ({ signal, report }) => {
+        report({
+          phase: UI_TEXT.notifications.reviewingBlock,
+          completed: 0,
+          total: 1,
+        });
+        const result = await this.syncService.reviewBlock(
+          this.sourceUri,
+          blockIndex,
+          signal,
+        );
+        const text =
           result.added > 0
             ? formatText(UI_TEXT.notifications.reviewDone, {
                 count: result.added,
               })
-            : UI_TEXT.notifications.reviewNoIssues,
-        kind: result.added > 0 ? "info" : "success",
-      });
-    } catch (error) {
-      if (cancelled || error instanceof CancelledError) {
-        this.showToast(UI_TEXT.notifications.reviewCancelled, "info");
-        return;
-      }
-      throw error;
-    } finally {
-      this.setBusy(false);
-    }
+            : UI_TEXT.notifications.reviewNoIssues;
+        await this.update({
+          text,
+          kind: result.added > 0 ? "info" : "success",
+        });
+        return {
+          status: "success",
+          phase: text,
+          completed: 1,
+          total: 1,
+        };
+      },
+    });
   }
 
   /** 审校全部机器译文；只写本机 sidecar。 */
   private async reviewMachineBlocks(): Promise<void> {
-    this.setBusy(true, UI_TEXT.notifications.reviewingAll);
-    const controller = new AbortController();
-    let cancelled = false;
-    try {
-      const result = await vscode.window.withProgress(
-        {
-          location: vscode.ProgressLocation.Notification,
-          title: "Markdown Bilingual Sync",
-          cancellable: true,
-        },
-        async (progress, token) => {
-          token.onCancellationRequested(() => {
-            cancelled = true;
-            controller.abort();
-          });
-          progress.report({
-            message: UI_TEXT.notifications.reviewingAll,
-          });
-          return this.syncService.reviewBlocks(
-            this.sourceUri,
-            controller.signal,
-          );
-        },
-      );
-      await this.update({
-        text:
+    await this.ready;
+    if (this.disposed) {
+      return;
+    }
+    this.enqueueTask({
+      operation: "review",
+      cancelledText: UI_TEXT.notifications.reviewCancelled,
+      run: async ({ signal, report }) => {
+        report({ phase: UI_TEXT.notifications.reviewingAll });
+        const result = await this.syncService.reviewBlocks(
+          this.sourceUri,
+          signal,
+          {
+            onProgress: (completed, total) => {
+              report({
+                phase: formatText(
+                  UI_TEXT.taskPanel.phases.reviewingProgress,
+                  { completed, total },
+                ),
+                completed,
+                total,
+              });
+            },
+          },
+        );
+        const text =
           result.reviewed === 0
             ? UI_TEXT.notifications.reviewNothing
             : result.added > 0
@@ -2256,18 +2493,19 @@ class PreviewPanelSession implements vscode.Disposable {
                 })
               : formatText(UI_TEXT.notifications.reviewNoIssuesAll, {
                   reviewed: result.reviewed,
-                }),
-        kind: result.added > 0 ? "info" : "success",
-      });
-    } catch (error) {
-      if (cancelled || error instanceof CancelledError) {
-        this.showToast(UI_TEXT.notifications.reviewCancelled, "info");
-        return;
-      }
-      throw error;
-    } finally {
-      this.setBusy(false);
-    }
+                });
+        await this.update({
+          text,
+          kind: result.added > 0 ? "info" : "success",
+        });
+        return {
+          status: "success",
+          phase: text,
+          completed: result.reviewed,
+          total: result.reviewed,
+        };
+      },
+    });
   }
 
   /** 保存用户批注。 */
@@ -2366,58 +2604,46 @@ class PreviewPanelSession implements vscode.Disposable {
 
   /**
    * 手动生成全文摘要。只由预览按钮触发，不会在打开/保存/同步时自动调用。
-   * 使用通知进度条支持取消；完成后把最新缓存文本交给 update。
+   * 通过调度器排队执行；完成后把最新缓存文本交给 update。
    */
   private async generateSummary(): Promise<void> {
     if (this.summaryGenerating) {
       return;
     }
-    this.summaryGenerating = true;
-    const controller = new AbortController();
-    let cancelled = false;
-    this.setBusy(true, UI_TEXT.notifications.summaryGenerating);
-    try {
-      const cacheText = await vscode.window.withProgress(
-        {
-          location: vscode.ProgressLocation.Notification,
-          title: "Markdown Bilingual Sync",
-          cancellable: true,
-        },
-        async (progress, token) => {
-          token.onCancellationRequested(() => {
-            cancelled = true;
-            controller.abort();
-          });
-          progress.report({
-            message: UI_TEXT.notifications.summaryGenerating,
-          });
-          return this.syncService.generateSummary(
-            this.sourceUri,
-            controller.signal,
-          );
-        },
-      );
-      if (this.disposed) {
-        return;
-      }
-      await this.update(
-        {
-          text: UI_TEXT.notifications.summaryGenerated,
-          kind: "success",
-        },
-        undefined,
-        cacheText,
-      );
-    } catch (error) {
-      if (cancelled || error instanceof CancelledError) {
-        this.showToast(UI_TEXT.notifications.summaryCancelled, "info");
-        return;
-      }
-      throw error;
-    } finally {
-      this.summaryGenerating = false;
-      this.setBusy(false);
+    await this.ready;
+    if (this.disposed) {
+      return;
     }
+    this.summaryGenerating = true;
+    const job = this.enqueueTask({
+      operation: "summary",
+      cancelledText: UI_TEXT.notifications.summaryCancelled,
+      run: async ({ signal, report }) => {
+        report({ phase: UI_TEXT.notifications.summaryGenerating });
+        const cacheText = await this.syncService.generateSummary(
+          this.sourceUri,
+          signal,
+        );
+        if (this.disposed) {
+          return { status: "success", phase: UI_TEXT.notifications.summaryGenerated };
+        }
+        await this.update(
+          {
+            text: UI_TEXT.notifications.summaryGenerated,
+            kind: "success",
+          },
+          undefined,
+          cacheText,
+        );
+        return {
+          status: "success",
+          phase: UI_TEXT.notifications.summaryGenerated,
+        };
+      },
+    });
+    void job.done.then(() => {
+      this.summaryGenerating = false;
+    });
   }
 
   /** 保存用户编辑后的摘要；空文本由服务层拒绝。 */
@@ -2548,88 +2774,679 @@ class PreviewPanelSession implements vscode.Disposable {
     }
   }
 
+  /**
+   * 把回译结果暂存为原文修改；单块与批量回译共用。
+   * @returns 展示文案与是否真正产生了暂存修改。
+   */
+  private async stageBackTranslation(
+    blockIndex: number,
+    backText: string,
+    cacheId: string,
+  ): Promise<{ text: string; staged: boolean }> {
+    const generated = parseMarkdownDocument(backText, this.md);
+    if (generated.blocks.length !== 1) {
+      throw new Error(UI_TEXT.notifications.backMultiBlock);
+    }
+    const state = await this.syncService.loadPreviewState(this.sourceUri);
+    this.ensureSourceBase(state.sourceText);
+    const source = parseMarkdownDocument(state.sourceText, this.md);
+    const block = source.blocks.find((item) => item.index === blockIndex);
+    if (!block) {
+      throw new Error(
+        tError("common.missingSourceBlock", { index: blockIndex + 1 }),
+      );
+    }
+    const normalized = backText.replace(/\r\n?/g, "\n").trimEnd();
+    if (normalized === block.raw.trimEnd()) {
+      this.pendingSourceEdits.delete(blockIndex);
+      this.pendingPairedLocks.delete(blockIndex);
+      if (!this.hasPendingSource()) {
+        this.pendingSourceBase = undefined;
+      }
+      return { text: UI_TEXT.notifications.backSame, staged: false };
+    }
+    // 同一块不能既删除又改写：先撤销删除标记。
+    this.pendingSourceDeletions.delete(blockIndex);
+    this.pendingSourceEdits.set(blockIndex, {
+      text: normalized,
+      sourceHash: block.hash,
+    });
+    // 记录待锁定锚点：写回成功后把该译文标记为 human，避免下次同步覆盖。
+    this.pendingPairedLocks.set(blockIndex, {
+      cacheId,
+      generatedSourceText: normalized,
+    });
+    return { text: UI_TEXT.notifications.backStaged, staged: true };
+  }
+
   private async backTranslateBlock(blockIndex: number): Promise<void> {
-    const controller = new AbortController();
-    let cancelled = false;
-    this.setBusy(true, UI_TEXT.notifications.backTranslating);
-    try {
-      const result = await vscode.window.withProgress(
-        {
-          location: vscode.ProgressLocation.Notification,
-          title: "Markdown Bilingual Sync",
-          cancellable: true,
-        },
-        async (progress, token) => {
-          token.onCancellationRequested(() => {
-            cancelled = true;
-            controller.abort();
-          });
-          progress.report({
-            message: UI_TEXT.notifications.backTranslating,
-          });
-          return this.syncService.backTranslateBlock(
+    await this.ready;
+    if (this.disposed) {
+      return;
+    }
+    if (this.hasPendingSource()) {
+      this.showToast(
+        UI_TEXT.notifications.pendingSourceBeforeBackTranslate,
+        "info",
+      );
+      return;
+    }
+    const view = this.lastModel?.blocks.find(
+      (block) => block.blockIndex === blockIndex,
+    );
+    this.enqueueTask({
+      operation: "backtranslate",
+      cancelledText: UI_TEXT.notifications.backCancelled,
+      run: async ({ signal, report }) => {
+        report({
+          phase: UI_TEXT.notifications.backTranslating,
+          completed: 0,
+          total: 1,
+        });
+        const result = await this.syncService.backTranslateBlock(
+          this.sourceUri,
+          blockIndex,
+          signal,
+          {
+            stableTranslation: this.stableTranslation,
+            summaryContext: this.summaryContext,
+          },
+          {
+            sourceHash: view?.sourceHash,
+            cacheId: view?.cacheId,
+            cacheDst: view?.cacheDst,
+            human: view?.human,
+          },
+        );
+        if (this.disposed) {
+          return { status: "success" };
+        }
+        const staged = await this.stageBackTranslation(
+          blockIndex,
+          result.backText,
+          result.cacheId,
+        );
+        await this.update({
+          text: staged.text,
+          kind: "info",
+        });
+        return {
+          status: "success",
+          phase: staged.text,
+          completed: 1,
+          total: 1,
+        };
+      },
+    });
+  }
+
+  // ---- 块级批量操作 ----
+
+  /** 把上行消息中的块定位去重并解析为当前模型中的真实块与原始选择信息。 */
+  private resolveSelection(
+    selections: readonly BlockSelectionInput[],
+  ): SelectedBlock[] {
+    const byIndex = new Map<number, PreviewBlockView>();
+    for (const block of this.lastModel?.blocks ?? []) {
+      if (block.blockIndex >= 0) {
+        byIndex.set(block.blockIndex, block);
+      }
+    }
+    const seen = new Set<number>();
+    const result: SelectedBlock[] = [];
+    for (const selection of selections) {
+      if (seen.has(selection.blockIndex)) {
+        continue;
+      }
+      seen.add(selection.blockIndex);
+      const view = byIndex.get(selection.blockIndex);
+      if (view) {
+        result.push({ view, selection });
+      }
+    }
+    return result;
+  }
+
+  /** 当前文件是否有排队或运行中的任务。 */
+  private hasActiveTasks(): boolean {
+    return this.taskActivity.running + this.taskActivity.queued > 0;
+  }
+
+  /** 批量操作前要求先处理原文暂存，避免基于磁盘旧文本执行。 */
+  private batchReady(): boolean {
+    if (this.hasPendingSource()) {
+      this.showToast(
+        UI_TEXT.notifications.pendingSourceBeforeBatch,
+        "info",
+      );
+      return false;
+    }
+    return true;
+  }
+
+  /** 追加“跳过 N 个不适用块”的说明。 */
+  private skippedSuffix(count: number): string {
+    return count > 0
+      ? ` ${formatText(UI_TEXT.notifications.batchSkipped, { count })}`
+      : "";
+  }
+
+  /**
+   * 批量重译选中块。人工锁定块也会被重译并解除锁定，与单块重译一致。
+   */
+  private async retranslateBlocks(
+    selections: readonly BlockSelectionInput[],
+  ): Promise<void> {
+    await this.ready;
+    if (this.disposed || !this.batchReady()) {
+      return;
+    }
+    const selected = this.resolveSelection(selections);
+    const eligible = selected.filter(
+      ({ view }) => view.canRetranslate && view.status !== "deleted",
+    );
+    if (eligible.length === 0) {
+      this.showToast(UI_TEXT.notifications.noEligibleBlocks, "info");
+      return;
+    }
+    const skipped = selections.length - eligible.length;
+    const locked = eligible.filter(({ view }) => view.human).length;
+    if (eligible.some(({ view }) => view.hasCache)) {
+      const choice = await vscode.window.showWarningMessage(
+        formatText(
+          locked > 0
+            ? UI_TEXT.notifications.confirmRetranslateBlocksHuman
+            : UI_TEXT.notifications.confirmRetranslateBlocks,
+          { count: eligible.length, locked },
+        ),
+        { modal: true },
+        UI_TEXT.notifications.confirmRetranslateBlocksAction,
+      );
+      if (choice !== UI_TEXT.notifications.confirmRetranslateBlocksAction) {
+        return;
+      }
+      if (this.disposed) {
+        return;
+      }
+    }
+    const total = eligible.length;
+    const targets = eligible.map(({ view, selection }) => ({
+      blockIndex: view.blockIndex,
+      sourceHash: selection.sourceHash ?? view.sourceHash,
+      cacheId: selection.cacheId ?? view.cacheId,
+      cacheDst: selection.cacheDst ?? view.cacheDst,
+      human: selection.human ?? view.human,
+    }));
+    this.enqueueTask({
+      operation: "retranslate",
+      cancelledText: UI_TEXT.notifications.retranslateCancelled,
+      run: async ({ signal, report }) => {
+        report({
+          phase: formatText(
+            UI_TEXT.taskPanel.phases.retranslatingProgress,
+            { completed: 0, total },
+          ),
+          completed: 0,
+          total,
+        });
+        let serviceResult: Awaited<
+          ReturnType<SyncService["retranslateBlocks"]>
+        >;
+        try {
+          serviceResult = await this.syncService.retranslateBlocks(
             this.sourceUri,
-            blockIndex,
-            controller.signal,
+            targets,
+            (message, detail) => {
+              report({
+                phase: detail
+                  ? formatText(
+                      UI_TEXT.taskPanel.phases.retranslatingProgress,
+                      {
+                        completed: detail.completed,
+                        total: detail.total,
+                      },
+                    )
+                  : message,
+                ...(detail ?? {}),
+              });
+            },
+            signal,
             {
               stableTranslation: this.stableTranslation,
               summaryContext: this.summaryContext,
             },
           );
-        },
-      );
-      if (this.disposed) {
-        return;
-      }
-      const generated = parseMarkdownDocument(result.backText, this.md);
-      if (generated.blocks.length !== 1) {
-        throw new Error(UI_TEXT.notifications.backMultiBlock);
-      }
-      const state = await this.syncService.loadPreviewState(this.sourceUri);
-      this.ensureSourceBase(state.sourceText);
-      const source = parseMarkdownDocument(state.sourceText, this.md);
-      const block = source.blocks.find((item) => item.index === blockIndex);
-      if (!block) {
-        throw new Error(tError("common.missingSourceBlock", { index: blockIndex + 1 }));
-      }
-      const normalized = result.backText.replace(/\r\n?/g, "\n").trimEnd();
-      // 回译结果与原文相同：视为无需修改，清掉该块的暂存与锁定。
-      if (normalized === block.raw.trimEnd()) {
-        this.pendingSourceEdits.delete(blockIndex);
-        this.pendingPairedLocks.delete(blockIndex);
-        if (!this.hasPendingSource()) {
-          this.pendingSourceBase = undefined;
+        } catch (error) {
+          if (signal.aborted || error instanceof CancelledError) {
+            await this.update();
+          }
+          throw error;
         }
-        await this.update({
-          text: UI_TEXT.notifications.backSame,
-          kind: "info",
-        });
-        return;
-      }
-      // 同一块不能既删除又改写：先撤销删除标记。
-      this.pendingSourceDeletions.delete(blockIndex);
-      this.pendingSourceEdits.set(blockIndex, {
-        text: normalized,
-        sourceHash: block.hash,
-      });
-      // 记录待锁定锚点：写回成功后把该译文标记为 human，避免下次同步覆盖。
-      this.pendingPairedLocks.set(blockIndex, {
-        cacheId: result.cacheId,
-        generatedSourceText: normalized,
-      });
-      await this.update({
-        text: UI_TEXT.notifications.backStaged,
-        kind: "info",
-      });
-    } catch (error) {
-      if (cancelled || error instanceof CancelledError) {
-        this.showToast(UI_TEXT.notifications.backCancelled, "info");
-        return;
-      }
-      throw error;
-    } finally {
-      this.setBusy(false);
+        const { outcome, skipped: staleSkipped } = serviceResult;
+        const result = outcome.result;
+        const failed = result.failedTaskCount + staleSkipped.length;
+        const partial = result.partial || failed > 0;
+        const text = partial
+          ? formatText(UI_TEXT.notifications.retranslateBlocksPartial, {
+              count: result.translatedCount,
+              failed,
+            })
+          : `${formatText(UI_TEXT.notifications.retranslateBlocksDone, {
+              count: result.translatedCount,
+            })}${this.skippedSuffix(skipped)}`;
+        await this.update({ text, kind: partial ? "error" : "success" });
+        const error = [...staleSkipped, ...result.failures].join("\n");
+        return {
+          status: partial ? "partial" : "success",
+          phase: text,
+          completed: result.translatedCount,
+          total,
+          failed,
+          ...(error ? { error } : {}),
+        };
+      },
+    });
+  }
+
+  /** 批量审校选中块；只审校非人工锁定的机器译文。 */
+  private async reviewSelectedBlocks(
+    selections: readonly BlockSelectionInput[],
+  ): Promise<void> {
+    await this.ready;
+    if (this.disposed || !this.batchReady()) {
+      return;
     }
+    const selected = this.resolveSelection(selections);
+    const eligible = selected.filter(
+      ({ view }) =>
+        view.hasCache &&
+        view.canRetranslate &&
+        !view.human &&
+        view.status !== "deleted" &&
+        view.status !== "untranslated" &&
+        Boolean(view.targetRaw.trim()),
+    );
+    if (eligible.length === 0) {
+      this.showToast(UI_TEXT.notifications.reviewBlocksNothing, "info");
+      return;
+    }
+    const skipped = selections.length - eligible.length;
+    const total = eligible.length;
+    this.enqueueTask({
+      operation: "review",
+      cancelledText: UI_TEXT.notifications.reviewCancelled,
+      run: async ({ signal, report }) => {
+        report({
+          phase: formatText(
+            UI_TEXT.taskPanel.phases.reviewingProgress,
+            { completed: 0, total },
+          ),
+          completed: 0,
+          total,
+        });
+        const result = await this.syncService.reviewBlocks(
+          this.sourceUri,
+          signal,
+          {
+            blockIds: new Set(
+              eligible
+                .map(
+                  ({ view, selection }) =>
+                    selection.cacheId ?? view.cacheId,
+                )
+                .filter((id): id is string => Boolean(id)),
+            ),
+            onProgress: (completed, chunkTotal) => {
+              report({
+                phase: formatText(
+                  UI_TEXT.taskPanel.phases.reviewingProgress,
+                  { completed, total: chunkTotal },
+                ),
+                completed,
+                total: chunkTotal,
+              });
+            },
+          },
+        );
+        const text =
+          result.reviewed === 0
+            ? UI_TEXT.notifications.reviewBlocksNothing
+            : result.added > 0
+              ? formatText(UI_TEXT.notifications.reviewBlocksDone, {
+                  reviewed: result.reviewed,
+                  count: result.added,
+                })
+              : formatText(UI_TEXT.notifications.reviewBlocksNoIssues, {
+                  reviewed: result.reviewed,
+                });
+        const withSkipped = `${text}${this.skippedSuffix(skipped)}`;
+        await this.update({ text: withSkipped, kind: "success" });
+        return {
+          status: "success",
+          phase: withSkipped,
+          completed: result.reviewed,
+          total,
+        };
+      },
+    });
+  }
+
+  /** 批量回译选中块，并暂存为原文修改。 */
+  private async backTranslateBlocks(
+    selections: readonly BlockSelectionInput[],
+  ): Promise<void> {
+    await this.ready;
+    if (this.disposed || !this.batchReady()) {
+      return;
+    }
+    const selected = this.resolveSelection(selections);
+    const eligible = selected.filter(({ view }) => view.canBackTranslate);
+    if (eligible.length === 0) {
+      this.showToast(UI_TEXT.notifications.noEligibleBlocks, "info");
+      return;
+    }
+    const skipped = selections.length - eligible.length;
+    const total = eligible.length;
+    this.enqueueTask({
+      operation: "backtranslate",
+      cancelledText: UI_TEXT.notifications.backCancelled,
+      run: async ({ signal, report }) => {
+        const failures: string[] = [];
+        let processed = 0;
+        let staged = 0;
+        try {
+          for (const { view, selection } of eligible) {
+            if (signal.aborted) {
+              throw new CancelledError();
+            }
+            report({
+              phase: formatText(
+                UI_TEXT.taskPanel.phases.backTranslatingProgress,
+                { completed: processed, total },
+              ),
+              completed: processed,
+              total,
+            });
+            try {
+              const result = await this.syncService.backTranslateBlock(
+                this.sourceUri,
+                view.blockIndex,
+                signal,
+                {
+                  stableTranslation: this.stableTranslation,
+                  summaryContext: this.summaryContext,
+                },
+                {
+                  sourceHash: selection.sourceHash ?? view.sourceHash,
+                  cacheId: selection.cacheId ?? view.cacheId,
+                  cacheDst: selection.cacheDst ?? view.cacheDst,
+                  human: selection.human ?? view.human,
+                },
+              );
+              if (this.disposed) {
+                return { status: "success" };
+              }
+              const stagedResult = await this.stageBackTranslation(
+                view.blockIndex,
+                result.backText,
+                result.cacheId,
+              );
+              if (stagedResult.staged) {
+                staged += 1;
+              }
+            } catch (error) {
+              if (signal.aborted || error instanceof CancelledError) {
+                throw error;
+              }
+              failures.push(formatError(error));
+            }
+            processed += 1;
+            report({
+              phase: formatText(
+                UI_TEXT.taskPanel.phases.backTranslatingProgress,
+                { completed: processed, total },
+              ),
+              completed: processed,
+              total,
+              failed: failures.length,
+            });
+          }
+        } catch (error) {
+          if (signal.aborted || error instanceof CancelledError) {
+            await this.update();
+          }
+          throw error;
+        }
+        const partial = failures.length > 0;
+        const text = partial
+          ? formatText(UI_TEXT.notifications.backTranslateBlocksPartial, {
+              count: staged,
+              failed: failures.length,
+            })
+          : staged > 0
+            ? formatText(UI_TEXT.notifications.backTranslateBlocksDone, {
+                count: staged,
+              }) + this.skippedSuffix(skipped)
+            : UI_TEXT.notifications.backSame;
+        await this.update({
+          text,
+          kind: partial ? "error" : "success",
+        });
+        return {
+          status: partial ? "partial" : "success",
+          phase: text,
+          completed: processed - failures.length,
+          total,
+          failed: failures.length,
+          ...(failures.length ? { error: failures.join("\n") } : {}),
+        };
+      },
+    });
+  }
+
+  /** 批量标记已同步；逐块写缓存，单块失败不影响其余块。 */
+  private async markSyncedBlocks(
+    selections: readonly BlockSelectionInput[],
+  ): Promise<void> {
+    await this.ready;
+    if (this.disposed || !this.batchReady()) {
+      return;
+    }
+    const selected = this.resolveSelection(selections);
+    const eligible = selected.filter(({ view }) => view.canMarkSynced);
+    if (eligible.length === 0) {
+      this.showToast(UI_TEXT.notifications.noEligibleBlocks, "info");
+      return;
+    }
+    const skipped = selections.length - eligible.length;
+    const choice = await vscode.window.showInformationMessage(
+      formatText(UI_TEXT.notifications.confirmMarkSyncedBlocks, {
+        count: eligible.length,
+      }),
+      { modal: true },
+      UI_TEXT.notifications.confirmMarkSyncedBlocksAction,
+    );
+    if (choice !== UI_TEXT.notifications.confirmMarkSyncedBlocksAction) {
+      return;
+    }
+    if (this.disposed) {
+      return;
+    }
+    const total = eligible.length;
+    this.enqueueTask({
+      operation: "markSynced",
+      run: async ({ signal, report }) => {
+        const failures: string[] = [];
+        let processed = 0;
+        try {
+          for (const { view, selection } of eligible) {
+            if (signal.aborted) {
+              throw new CancelledError();
+            }
+            report({
+              phase: formatText(
+                UI_TEXT.taskPanel.phases.markingSyncedProgress,
+                { completed: processed, total },
+              ),
+              completed: processed,
+              total,
+            });
+            try {
+              await this.syncService.markSynced(
+                this.sourceUri,
+                view.blockIndex,
+                {
+                  sourceHash: selection.sourceHash ?? view.sourceHash,
+                  cacheId: selection.cacheId ?? view.cacheId,
+                  cacheDst: selection.cacheDst ?? view.cacheDst,
+                  human: selection.human ?? view.human,
+                },
+              );
+              processed += 1;
+            } catch (error) {
+              if (signal.aborted || error instanceof CancelledError) {
+                throw error;
+              }
+              failures.push(formatError(error));
+            }
+            report({
+              phase: formatText(
+                UI_TEXT.taskPanel.phases.markingSyncedProgress,
+                { completed: processed + failures.length, total },
+              ),
+              completed: processed + failures.length,
+              total,
+              failed: failures.length,
+            });
+          }
+        } catch (error) {
+          if (signal.aborted || error instanceof CancelledError) {
+            await this.update();
+          }
+          throw error;
+        }
+        const partial = failures.length > 0;
+        const text = partial
+          ? formatText(UI_TEXT.notifications.markSyncedBlocksPartial, {
+              count: processed,
+              failed: failures.length,
+            })
+          : formatText(UI_TEXT.notifications.markSyncedBlocksDone, {
+              count: processed,
+            }) + this.skippedSuffix(skipped);
+        await this.update({ text, kind: partial ? "error" : "success" });
+        return {
+          status: partial ? "partial" : "success",
+          phase: text,
+          completed: processed,
+          total,
+          failed: failures.length,
+          ...(failures.length ? { error: failures.join("\n") } : {}),
+        };
+      },
+    });
+  }
+
+  /** 批量删除选中块的译文；保留墓碑，可逐块撤销。 */
+  private async deleteTargetBlocks(
+    selections: readonly BlockSelectionInput[],
+  ): Promise<void> {
+    await this.ready;
+    if (this.disposed || !this.batchReady()) {
+      return;
+    }
+    const selected = this.resolveSelection(selections);
+    const eligible = selected.filter(
+      ({ view }) => view.hasCache && view.status !== "deleted",
+    );
+    if (eligible.length === 0) {
+      this.showToast(UI_TEXT.notifications.noEligibleBlocks, "info");
+      return;
+    }
+    const skipped = selections.length - eligible.length;
+    const human = eligible.filter(({ view }) => view.human).length;
+    const choice = await vscode.window.showWarningMessage(
+      human > 0
+        ? formatText(UI_TEXT.notifications.confirmDeleteBlocksHuman, {
+            count: eligible.length,
+            human,
+          })
+        : formatText(UI_TEXT.notifications.confirmDeleteBlocks, {
+            count: eligible.length,
+          }),
+      { modal: true },
+      UI_TEXT.notifications.confirmDeleteBlocksAction,
+    );
+    if (choice !== UI_TEXT.notifications.confirmDeleteBlocksAction) {
+      return;
+    }
+    if (this.disposed) {
+      return;
+    }
+    const total = eligible.length;
+    this.enqueueTask({
+      operation: "deleteTranslation",
+      run: async ({ signal, report }) => {
+        const failures: string[] = [];
+        let processed = 0;
+        try {
+          for (const { view, selection } of eligible) {
+            if (signal.aborted) {
+              throw new CancelledError();
+            }
+            report({
+              phase: formatText(
+                UI_TEXT.taskPanel.phases.deletingTranslationsProgress,
+                { completed: processed + failures.length, total },
+              ),
+              completed: processed + failures.length,
+              total,
+            });
+            try {
+              await this.syncService.deleteTargetBlock(
+                this.sourceUri,
+                view.blockIndex,
+                {
+                  sourceHash: selection.sourceHash ?? view.sourceHash,
+                  cacheId: selection.cacheId ?? view.cacheId,
+                  cacheDst: selection.cacheDst ?? view.cacheDst,
+                  human: selection.human ?? view.human,
+                },
+              );
+              processed += 1;
+            } catch (error) {
+              if (signal.aborted || error instanceof CancelledError) {
+                throw error;
+              }
+              failures.push(formatError(error));
+            }
+          }
+        } catch (error) {
+          if (signal.aborted || error instanceof CancelledError) {
+            await this.update();
+          }
+          throw error;
+        }
+        const partial = failures.length > 0;
+        const text = partial
+          ? formatText(UI_TEXT.notifications.deleteBlocksPartial, {
+              count: processed,
+              failed: failures.length,
+            })
+          : formatText(UI_TEXT.notifications.deleteBlocksDone, {
+              count: processed,
+            }) + this.skippedSuffix(skipped);
+        await this.update({ text, kind: partial ? "error" : "success" });
+        return {
+          status: partial ? "partial" : "success",
+          phase: text,
+          completed: processed,
+          total,
+          failed: failures.length,
+          ...(failures.length ? { error: failures.join("\n") } : {}),
+        };
+      },
+    });
   }
 
   // ---- 导出提交 / 取消 ----
@@ -2730,85 +3547,71 @@ class PreviewPanelSession implements vscode.Disposable {
    * - `finally` 总会解除忙碌态。
    */
   private async runSync(mode: "sync" | "stale" | "all"): Promise<void> {
-    const controller = new AbortController();
-    const taskId = this.taskMonitor.create(
-      vscode.workspace.asRelativePath(this.sourceUri, false),
-      this.sourceUri,
-    );
-    this.taskMonitor.start(taskId);
-    this.taskMonitor.registerCancel(taskId, () => controller.abort());
-    this.setBusy(true, UI_TEXT.notifications.syncBusy);
-    try {
-      const report = (
-        message: string,
-        detail?: { completed: number; total: number },
-      ) => {
-        this.setBusy(true, message);
-        this.taskMonitor.update(taskId, {
-          phase: message,
-          ...(detail ?? {}),
-        });
-      };
-      const outcome =
-        mode === "all"
-          ? await this.syncService.retranslateAll(
-              this.sourceUri,
-              report,
-              controller.signal,
-              {
-                stableTranslation: this.stableTranslation,
-                summaryContext: this.summaryContext,
-              },
-            )
-          : await this.syncService.sync(
-              this.sourceUri,
-              mode === "stale",
-              report,
-              controller.signal,
-              true,
-              {
-                stableTranslation: this.stableTranslation,
-                summaryContext: this.summaryContext,
-              },
-            );
-      const { result } = outcome;
-      this.taskMonitor.finish(
-        taskId,
-        result.partial ? "partial" : "success",
-        {
-          completed: result.translatedCount,
-          total: result.translatedCount + result.failedTaskCount,
-          failed: result.failedTaskCount,
-          phase: result.partial
-            ? UI_TEXT.taskPanel.phases.partial
-            : UI_TEXT.taskPanel.phases.completed,
-          error:
-            result.partial && result.failures.length > 0
-              ? result.failures.join("\n")
-              : undefined,
-        },
-      );
-      await this.update();
-      for (const warning of result.warnings) {
-        this.output.appendLine(
-          `[${new Date().toISOString()}] sync warning: ${warning}`,
-        );
-      }
-    } catch (error) {
-      if (error instanceof CancelledError) {
-        this.taskMonitor.finish(taskId, "cancelled", {
-          phase: UI_TEXT.taskPanel.phases.cancelled,
-        });
-        return;
-      }
-      const message = formatError(error);
-      this.taskMonitor.finish(taskId, "failed", failedTaskPatch(message));
-      this.output.appendLine(
-        `[${new Date().toISOString()}] sync failed ${this.sourceUri.fsPath}: ${message}`,
-      );
-    } finally {
-      this.setBusy(false);
+    await this.ready;
+    if (this.disposed) {
+      return;
     }
+    this.enqueueTask({
+      operation: mode === "sync" ? "sync" : "retranslate",
+      run: async ({ signal, report }) => {
+        try {
+          const outcome =
+            mode === "all"
+              ? await this.syncService.retranslateAll(
+                  this.sourceUri,
+                  (message, detail) => {
+                    report({ phase: message, ...(detail ?? {}) });
+                  },
+                  signal,
+                  {
+                    stableTranslation: this.stableTranslation,
+                    summaryContext: this.summaryContext,
+                  },
+                )
+              : await this.syncService.sync(
+                  this.sourceUri,
+                  mode === "stale",
+                  (message, detail) => {
+                    report({ phase: message, ...(detail ?? {}) });
+                  },
+                  signal,
+                  true,
+                  {
+                    stableTranslation: this.stableTranslation,
+                    summaryContext: this.summaryContext,
+                  },
+                );
+          const { result } = outcome;
+          await this.update();
+          for (const warning of result.warnings) {
+            this.output.appendLine(
+              `[${new Date().toISOString()}] sync warning: ${warning}`,
+            );
+          }
+          return {
+            status: result.partial ? "partial" : "success",
+            phase: result.partial
+              ? UI_TEXT.taskPanel.phases.partial
+              : UI_TEXT.taskPanel.phases.completed,
+            completed: result.translatedCount,
+            total: result.translatedCount + result.failedTaskCount,
+            failed: result.failedTaskCount,
+            ...(result.partial && result.failures.length > 0
+              ? { error: result.failures.join("\n") }
+              : {}),
+          };
+        } catch (error) {
+          if (error instanceof CancelledError || signal.aborted) {
+            await this.update();
+          } else {
+            this.output.appendLine(
+              `[${new Date().toISOString()}] sync failed ${this.sourceUri.fsPath}: ${formatError(error)}`,
+            );
+          }
+          throw error;
+        }
+      },
+    });
   }
 
   /**
@@ -2917,6 +3720,13 @@ class PreviewPanelSession implements vscode.Disposable {
       (block) => block.blockIndex === blockIndex,
     );
     if (this.hasPendingSource()) {
+      if (this.hasActiveTasks()) {
+        this.showToast(
+          UI_TEXT.notifications.waitForTasksBeforeSource,
+          "info",
+        );
+        return;
+      }
       this.pendingRetranslate = {
         kind: "block",
         blockIndex,
@@ -2945,50 +3755,59 @@ class PreviewPanelSession implements vscode.Disposable {
         return;
       }
     }
-    this.setBusy(true, UI_TEXT.notifications.retranslateBlockBusy);
-    const controller = new AbortController();
-    let cancelled = false;
-    try {
-      const result = await vscode.window.withProgress(
-        {
-          location: vscode.ProgressLocation.Notification,
-          title: "Markdown Bilingual Sync",
-          cancellable: true,
-        },
-        async (progress, token) => {
-          token.onCancellationRequested(() => {
-            cancelled = true;
-            controller.abort();
-          });
-          progress.report({ message: UI_TEXT.notifications.retranslateBlockBusy });
-          return this.syncService.retranslateBlock(
+    await this.ready;
+    if (this.disposed) {
+      return;
+    }
+    const guard = {
+      ...(expected ?? {}),
+      sourceHash: expected?.sourceHash ?? view?.sourceHash,
+      cacheId: expected?.cacheId ?? view?.cacheId,
+      cacheDst: expected?.cacheDst ?? view?.cacheDst,
+      human: expected?.human ?? view?.human,
+    };
+    this.enqueueTask({
+      operation: "retranslate",
+      cancelledText: UI_TEXT.notifications.retranslateCancelled,
+      run: async ({ signal }) => {
+        let result: Awaited<
+          ReturnType<SyncService["retranslateBlock"]>
+        >;
+        try {
+          result = await this.syncService.retranslateBlock(
             this.sourceUri,
             blockIndex,
-            controller.signal,
+            signal,
             {
               stableTranslation: this.stableTranslation,
               summaryContext: this.summaryContext,
             },
-            expected,
+            guard,
           );
-        },
-      );
-      await this.update({
-        text:
-          result.mode === "sync"
-            ? UI_TEXT.notifications.retranslateBlockSynced
-            : UI_TEXT.notifications.retranslateBlockDone,
-        kind: result.mode === "sync" ? "info" : "success",
-      });
-    } catch (error) {
-      if (cancelled || error instanceof CancelledError) {
-        this.showToast(UI_TEXT.notifications.retranslateCancelled, "info");
-        return;
-      }
-      throw error;
-    } finally {
-      this.setBusy(false);
-    }
+        } catch (error) {
+          if (signal.aborted || error instanceof CancelledError) {
+            await this.update();
+          }
+          throw error;
+        }
+        await this.update({
+          text:
+            result.mode === "sync"
+              ? UI_TEXT.notifications.retranslateBlockSynced
+              : UI_TEXT.notifications.retranslateBlockDone,
+          kind: result.mode === "sync" ? "info" : "success",
+        });
+        return {
+          status: "success",
+          phase:
+            result.mode === "sync"
+              ? UI_TEXT.notifications.retranslateBlockSynced
+              : UI_TEXT.notifications.retranslateBlockDone,
+          completed: 1,
+          total: 1,
+        };
+      },
+    });
   }
 
   /**
@@ -3005,16 +3824,35 @@ class PreviewPanelSession implements vscode.Disposable {
     if (choice !== UI_TEXT.notifications.confirmMarkSyncedAction) {
       return;
     }
-    this.setBusy(true, UI_TEXT.notifications.markSyncedBusy);
-    try {
-      await this.syncService.markSynced(this.sourceUri, blockIndex);
-      await this.update({
-        text: UI_TEXT.notifications.markSyncedDone,
-        kind: "success",
-      });
-    } finally {
-      this.setBusy(false);
+    await this.ready;
+    if (this.disposed) {
+      return;
     }
+    const view = this.lastModel?.blocks.find(
+      (block) => block.blockIndex === blockIndex,
+    );
+    const guard = {
+      sourceHash: view?.sourceHash,
+      cacheId: view?.cacheId,
+      cacheDst: view?.cacheDst,
+      human: view?.human,
+    };
+    this.enqueueTask({
+      operation: "markSynced",
+      run: async () => {
+        await this.syncService.markSynced(this.sourceUri, blockIndex, guard);
+        await this.update({
+          text: UI_TEXT.notifications.markSyncedDone,
+          kind: "success",
+        });
+        return {
+          status: "success",
+          phase: UI_TEXT.notifications.markSyncedDone,
+          completed: 1,
+          total: 1,
+        };
+      },
+    });
   }
 
   // ---- 向 Webview 推送的 UI 状态 ----
@@ -3030,6 +3868,7 @@ class PreviewPanelSession implements vscode.Disposable {
     if (this.disposed) {
       return;
     }
+    this.busyState = { busy, ...(message ? { message } : {}) };
     this.postToWebview({ type: "busy", busy, message });
   }
 

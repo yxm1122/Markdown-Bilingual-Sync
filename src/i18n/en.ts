@@ -214,6 +214,23 @@ export const UI_TEXT = {
       resetSourceTitle:
         "Clear all staged source edits, inserts, and deletions",
     },
+    // Block multi-select: count, bulk action bar, and accessible labels.
+    selection: {
+      selected: "{count} selected",
+      selectAll: "Select all",
+      clear: "Clear",
+      exit: "Exit selection",
+      actionGroup: "Bulk actions",
+      selectBlock: "Select block {index}",
+      hint: "Shift-click to select a range; Escape to exit",
+      changed:
+        "The selected block content or lock state changed. Select the blocks again.",
+      retranslate: "Retranslate",
+      review: "Review",
+      backTranslate: "Back-translate",
+      markSynced: "Mark synchronized",
+      deleteTranslation: "Delete translation",
+    },
     summary: {
       title: "Document brief",
       placeholder:
@@ -408,6 +425,10 @@ export const UI_TEXT = {
         "Check glossary terms and protected Markdown in machine translations",
       reviewMachine: "Review entire document",
       reviewUnsupportedTitle: "The current provider does not support review",
+      selectBlocksTitle:
+        "Select blocks to retranslate, review, back-translate, mark, or delete in bulk",
+      taskActivity: "{running} running · {queued} queued",
+      taskActivityTitle: "Open task panel",
       export: "Export",
       exportDisabledTitle: "Generate a translation cache first",
       openCacheFolder: "Open cache folder",
@@ -503,9 +524,6 @@ export const UI_TEXT = {
     exportCancelled: "Export cancelled.",
     noPendingExport: "There is no export awaiting confirmation.",
     noStaleTranslations: "There are no stale machine translations.",
-    syncBusy: "Syncing translations…",
-    retranslateBlockBusy: "Retranslating this block…",
-    markSyncedBusy: "Updating sync status…",
     retranslateCancelled: "Retranslation cancelled.",
     confirmRetranslateBlock:
       "Retranslate this block? It already has a translation; any edits to it will be overwritten.",
@@ -560,6 +578,12 @@ export const UI_TEXT = {
       "The source file changed, so staged source edits were cleared. Please edit again.",
     pendingSourceBeforeRetranslate:
       "There are staged source changes. Confirm the source write-back first; retranslation continues automatically after it is applied.",
+    pendingSourceBeforeBatch:
+      "There are staged source changes. Apply or discard them before running a bulk action.",
+    pendingSourceBeforeBackTranslate:
+      "There are staged source changes. Apply or discard them before back-translating.",
+    waitForTasksBeforeSource:
+      "A task is in progress. Wait for it to finish before applying source changes.",
     sourceEditsDiscarded: "Staged source edits discarded.",
     sourceWriting: "Writing source…",
     sourceApplied: "Source changes written and saved.",
@@ -601,12 +625,53 @@ export const UI_TEXT = {
       "The back-translation contains multiple Markdown blocks and cannot be staged as a single source block.",
     pairedLockFailed:
       "Source written, but the translation could not be locked to the new source block.",
+    queuedNotice: "Added to the queue; {count} task(s) ahead.",
+    queuedNoticeSolo: "Added to the queue.",
+    operationFailed: "The operation failed.",
+    noEligibleBlocks: "None of the selected blocks support this action.",
+    batchSkipped:
+      "Skipped {count} block(s) that are inapplicable or have changed.",
+    confirmRetranslateBlocks:
+      "Retranslate the {count} selected blocks? Existing translations will be overwritten.",
+    confirmRetranslateBlocksHuman:
+      "Retranslate the {count} selected blocks? {locked} locked translation(s) will also be overwritten and unlocked.",
+    confirmRetranslateBlocksAction: "Retranslate selected",
+    retranslateBlocksDone: "Retranslated {count} block(s).",
+    retranslateBlocksPartial:
+      "Retranslation finished: {count} succeeded, {failed} failed.",
+    reviewBlocksNothing:
+      "The selected blocks have no machine translations to review.",
+    reviewBlocksDone:
+      "Review finished: {reviewed} block(s) reviewed, {count} annotation(s) added.",
+    reviewBlocksNoIssues:
+      "Review finished: {reviewed} block(s) reviewed, no issues found.",
+    backTranslateBlocksDone:
+      "Staged {count} back-translation result(s). Click “Apply source changes” to write the file.",
+    backTranslateBlocksPartial:
+      "Back-translation finished: {count} staged, {failed} failed.",
+    confirmMarkSyncedBlocks:
+      "Mark the {count} selected blocks as locked translations and accept the current source?",
+    confirmMarkSyncedBlocksAction: "Mark selected",
+    markSyncedBlocksDone:
+      "Marked {count} block(s) as locked translations.",
+    markSyncedBlocksPartial:
+      "Mark finished: {count} succeeded, {failed} failed.",
+    confirmDeleteBlocks:
+      "Delete the translations for the {count} selected blocks? Each block can still be restored.",
+    confirmDeleteBlocksHuman:
+      "{human} of the {count} selected blocks have locked translations. Deleting and locking them removes the locked content from the cache. Continue?",
+    confirmDeleteBlocksAction: "Delete selected translations",
+    deleteBlocksDone:
+      "Deleted the translations for {count} block(s); they can be restored.",
+    deleteBlocksPartial:
+      "Delete finished: {count} succeeded, {failed} failed.",
   },
   // Task view and status bar.
   taskPanel: {
     title: "Translation Tasks",
     empty: "No translation tasks",
-    emptyHint: "Tasks appear here after batch translation or sync.",
+    emptyHint:
+      "Sync, retranslate, review, back-translate, and summary operations appear here in queue order.",
     activeSection: "Active tasks",
     historySection: "Recently completed",
     overviewTitle: "Batch overview",
@@ -614,6 +679,7 @@ export const UI_TEXT = {
     concurrency: "Concurrency {active}/{limit} · waiting {waiting}",
     concurrencyLabel: "Concurrency",
     activeTasksLabel: "Active files",
+    queuedTasksLabel: "Queued tasks",
     activeBlocksLabel: "Active blocks",
     failedBlocksLabel: "Failed blocks",
     providerLabel: "Provider",
@@ -660,6 +726,14 @@ export const UI_TEXT = {
       completed: "Completed",
       translatingBlocks: "Translating {count} blocks…",
       translatingProgress: "Translating {completed}/{total} blocks…",
+      retranslatingProgress: "Retranslating {completed}/{total} blocks…",
+      reviewingProgress: "Reviewing {completed}/{total} blocks…",
+      backTranslatingProgress:
+        "Back-translating {completed}/{total} blocks…",
+      markingSyncedProgress:
+        "Marking {completed}/{total} blocks synchronized…",
+      deletingTranslationsProgress:
+        "Deleting translations {completed}/{total} blocks…",
     },
     statusLabels: {
       queued: "Queued",
@@ -669,14 +743,24 @@ export const UI_TEXT = {
       failed: "Failed",
       cancelled: "Cancelled",
     },
+    // Task operation labels; keep in sync with TaskOperation.
+    operations: {
+      sync: "Sync",
+      retranslate: "Retranslate",
+      review: "Review",
+      backtranslate: "Back-translate",
+      summary: "Summary",
+      markSynced: "Mark synchronized",
+      deleteTranslation: "Delete translation",
+    },
   },
   statusBar: {
     idle: "Translation Tasks",
-    active: "Translating {tasks} · {active}/{limit}",
-    failed: "Translation tasks · {failed} failed",
+    active: "{tasks} active · {queued} queued",
+    failed: "Tasks · {failed} failed",
     tooltipTitle: "Translation Tasks",
     tooltipHint: "Click to open the task panel",
-    taskLine: "{label}: {status} · {progress}{failed}",
+    taskLine: "{label}: {operation}{status} · {progress}{failed}",
     moreTasks: "… {count} more",
   },
   // Translation service display names shared by providers and the task view.

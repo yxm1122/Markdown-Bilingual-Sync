@@ -34,12 +34,22 @@ export interface BootData {
 
 export type InboundMessage = PreviewHostMessage;
 
+/** 块级批量操作的定位信息；宿主用它做排队期间的乐观校验。 */
+export interface BlockSelection {
+  blockIndex: number;
+  sourceHash?: string;
+  cacheId?: string;
+  cacheDst?: string;
+  human?: boolean;
+}
+
 /** Webview 可以发送给宿主的全部动作（与 PreviewManager.onMessage 对齐）。 */
 export type OutboundMessage =
   | { type: "ready" }
   | { type: "setLayout"; layout: PreviewLayout }
   | { type: "togglePaneReadonly"; pane: "source" | "target" }
   | { type: "sync" }
+  | { type: "openTaskPanel" }
   | { type: "importTranslation" }
   | { type: "checkConsistency" }
   | { type: "refresh" }
@@ -64,6 +74,11 @@ export type OutboundMessage =
   | { type: "deleteTargetBlock"; blockIndex: number }
   | { type: "undoDeleteTargetBlock"; blockIndex: number }
   | { type: "retranslateBlock"; blockIndex: number }
+  | { type: "retranslateBlocks"; blocks: BlockSelection[] }
+  | { type: "reviewBlocks"; blocks: BlockSelection[] }
+  | { type: "backTranslateBlocks"; blocks: BlockSelection[] }
+  | { type: "markSyncedBlocks"; blocks: BlockSelection[] }
+  | { type: "deleteTargetBlocks"; blocks: BlockSelection[] }
   | { type: "markSynced"; blockIndex: number }
   | { type: "backTranslate"; blockIndex: number }
   | { type: "revealSource"; blockIndex: number }

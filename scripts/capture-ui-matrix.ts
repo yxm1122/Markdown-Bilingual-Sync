@@ -788,6 +788,25 @@ async function main(): Promise<void> {
       console.log("  ✓ block-menu");
       await page.closeMenu();
 
+      await page.click(".pv-toolbar-actions .pv-icon-button");
+      await page.waitFor("document.querySelector('.pv-selection-bar')");
+      await page.click(".pv-select-box");
+      records.push(await page.shot(theme, "selection"));
+      console.log("  ✓ selection");
+      await page.click(".pv-selection-tools .pv-icon-button");
+      await page.waitFor("!document.querySelector('.pv-selection-bar')");
+
+      await page.evaluate(
+        "window.postMessage({ type: 'taskActivity', running: 1, queued: 2 }, '*')",
+      );
+      await page.waitFor("document.querySelector('.pv-task-activity')");
+      records.push(await page.shot(theme, "task-activity"));
+      console.log("  ✓ task-activity");
+      await page.evaluate(
+        "window.postMessage({ type: 'taskActivity', running: 0, queued: 0 }, '*')",
+      );
+      await page.waitFor("!document.querySelector('.pv-task-activity')");
+
       await page.select("split", "bilingual");
       await page.click('.pv-split-pane[data-pane="target"] .pv-pane-mode');
       await page.waitFor(

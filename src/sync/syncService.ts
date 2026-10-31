@@ -188,6 +188,21 @@ export interface BackTranslationResult extends LanguageSettings {
   cacheId: string;
 }
 
+/** 批量块级操作的定位信息；用于排队期间内容变化后的乐观校验。 */
+export interface BlockOperationTarget {
+  blockIndex: number;
+  sourceHash?: string;
+  cacheId?: string;
+  cacheDst?: string;
+  human?: boolean;
+}
+
+/** 批量重译结果：除同步结果外，报告因内容变化或状态不适用而跳过的块。 */
+export interface RetranslateBlocksOutcome {
+  outcome: SyncOutcome;
+  skipped: string[];
+}
+
 /** 用户取消操作（关闭保存提示、取消同步等）时抛出的可识别错误。 */
 export class CancelledError extends Error {
   /** @param message 展示给用户的取消说明，默认“操作已取消”。 */
@@ -770,10 +785,16 @@ export class SyncService {
   /**
    * 审校全部机器译文：跳过 human/deleted/未翻译块，按 6 块一批请求模型。
    * 只替换这些块的 AI 批注，用户批注保留；任一批失败则不写入新结果。
+   *
+   * `options.blockIds` 用于只审校预览中选中的块；`onProgress` 按已处理块数上报。
    */
   async reviewBlocks(
     sourceUri: vscode.Uri,
     signal?: AbortSignal,
+    options: {
+      blockIds?: ReadonlySet<string>;
+      onProgress?: (completed: number, total: number) => void;
+    } = {},
   ): Promise<{
     annotations: AnnotationRecord[];
     added: number;
@@ -781,7 +802,7 @@ export class SyncService {
   }> {
     const release = this.beginReview(sourceUri);
     try {
-      return await this.reviewBlocksInternal(sourceUri, signal);
+      return await this.reviewBlocksInternal(sourceUri, signal, options);
     } finally {
       release();
     }
@@ -790,6 +811,10 @@ export class SyncService {
   private async reviewBlocksInternal(
     sourceUri: vscode.Uri,
     signal?: AbortSignal,
+    options: {
+      blockIds?: ReadonlySet<string>;
+      onProgress?: (completed: number, total: number) => void;
+    } = {},
   ): Promise<{
     annotations: AnnotationRecord[];
     added: number;
@@ -816,7 +841,8 @@ export class SyncService {
         !aligned.human &&
         aligned.status !== "deleted" &&
         aligned.status !== "untranslated" &&
-        Boolean(aligned.cache?.block.raw.trim()),
+        Boolean(aligned.cache?.block.raw.trim()) &&
+        (!options.blockIds || options.blockIds.has(aligned.cache!.anchor.id)),
     );
     const existing = await this.annotationStore.read(
       sourceUri,
@@ -876,24 +902,31 @@ export class SyncService {
     if (signal?.aborted) {
       throw new CancelledError();
     }
+    let completed = 0;
+    options.onProgress?.(0, items.length);
     const settled = await Promise.allSettled(
       chunks.map(async (chunk) => {
-        const drafts = await this.provider.review!(
-          {
-            sourceLanguage: state.sourceLanguage,
-            targetLanguage: state.targetLanguage,
-            outputLanguage,
-            ...(summary ? { summary } : {}),
-            ...(brief ? { brief } : {}),
-            glossary: this.requestGlossary(glossary.entries, cache),
-            items: chunk,
-          },
-          signal,
-        );
-        const chunkHashes = new Map(
-          chunk.map((item) => [item.id, sourceHashById.get(item.id) ?? ""]),
-        );
-        return this.annotationRecordsFromDrafts(drafts, chunkHashes, now);
+        try {
+          const drafts = await this.provider.review!(
+            {
+              sourceLanguage: state.sourceLanguage,
+              targetLanguage: state.targetLanguage,
+              outputLanguage,
+              ...(summary ? { summary } : {}),
+              ...(brief ? { brief } : {}),
+              glossary: this.requestGlossary(glossary.entries, cache),
+              items: chunk,
+            },
+            signal,
+          );
+          const chunkHashes = new Map(
+            chunk.map((item) => [item.id, sourceHashById.get(item.id) ?? ""]),
+          );
+          return this.annotationRecordsFromDrafts(drafts, chunkHashes, now);
+        } finally {
+          completed += chunk.length;
+          options.onProgress?.(completed, items.length);
+        }
       }),
     );
     if (signal?.aborted) {
@@ -1390,6 +1423,121 @@ export class SyncService {
   }
 
   /**
+   * 批量重译预览中选中的块。
+   *
+   * 与全量重译不同：只处理选中的块，未选中的块（包括缺失块）保持不变；显式
+   * `human` 块也会被重译并改回 `auto`，与单块重译行为一致。排队期间原文或译文
+   * 发生变化的块会被跳过并返回原因。
+   */
+  async retranslateBlocks(
+    sourceUri: vscode.Uri,
+    targets: readonly BlockOperationTarget[],
+    onProgress?: SyncProgressReporter,
+    signal?: AbortSignal,
+    assist?: Partial<TranslationAssistSettings>,
+  ): Promise<RetranslateBlocksOutcome> {
+    try {
+      return await this.withLock(sourceUri, async () => {
+        const state = await this.loadState(sourceUri, true);
+        const source = parseMarkdownDocument(state.sourceText, this.md);
+        const cache = parseCacheDocument(state.cacheText ?? "", this.md);
+        const alignment = alignDocument(source.blocks, cache);
+        const byIndex = new Map(
+          alignment.blocks.map((item) => [item.source.index, item]),
+        );
+        const onlySourceIndexes = new Set<number>();
+        const skipped: string[] = [];
+        const seen = new Set<number>();
+        for (const target of targets) {
+          if (seen.has(target.blockIndex)) {
+            continue;
+          }
+          seen.add(target.blockIndex);
+          const aligned = byIndex.get(target.blockIndex);
+          if (!aligned) {
+            skipped.push(
+              tError("common.missingSourceBlock", {
+                index: target.blockIndex + 1,
+              }),
+            );
+            continue;
+          }
+          if (!aligned.source.translatable) {
+            skipped.push(tError("sync.blockNotTranslatable"));
+            continue;
+          }
+          if (aligned.cache?.anchor.mode === "deleted") {
+            skipped.push(
+              tError("sync.deletedBlockRetranslate", {
+                index: target.blockIndex + 1,
+              }),
+            );
+            continue;
+          }
+          if (
+            target.sourceHash &&
+            aligned.source.hash !== target.sourceHash
+          ) {
+            skipped.push(
+              tError("sync.sourceUpdatedRefresh"),
+            );
+            continue;
+          }
+          if (
+            target.cacheDst &&
+            aligned.cache?.anchor.dst !== target.cacheDst
+          ) {
+            skipped.push(
+              tError("sync.translationChangedRefresh"),
+            );
+            continue;
+          }
+          if (
+            target.human !== undefined &&
+            aligned.human !== target.human
+          ) {
+            skipped.push(
+              tError("sync.translationChangedRefresh"),
+            );
+            continue;
+          }
+          if (
+            target.cacheId &&
+            aligned.cache?.anchor.id !== target.cacheId
+          ) {
+            skipped.push(
+              tError("sync.translationChangedRefresh"),
+            );
+            continue;
+          }
+          onlySourceIndexes.add(target.blockIndex);
+        }
+        if (onlySourceIndexes.size === 0) {
+          throw new Error(tError("sync.noSelectedBlocks"));
+        }
+        return {
+          outcome: await this.syncInternal(
+            state,
+            true,
+            onProgress,
+            signal,
+            true,
+            true,
+            assist,
+            { onlySourceIndexes, includeHuman: true },
+          ),
+          skipped,
+        };
+      });
+    } catch (error) {
+      if (signal?.aborted) {
+        throw new CancelledError();
+      }
+      throw error;
+    }
+  }
+
+  /**
    * 只重译一个可翻译块。
    *
    * 没有缓存或该块尚未对齐到缓存时，退化为普通全量同步并返回 `mode: "sync"`；
@@ -1404,6 +1552,8 @@ export class SyncService {
     expected?: {
       sourceHash?: string;
       cacheId?: string;
+      cacheDst?: string;
+      human?: boolean;
       /** 质检/一致性检查使用：禁止覆盖人工译文，也不允许退化为全量同步。 */
       requireMachine?: boolean;
     },
@@ -1446,6 +1596,15 @@ export class SyncService {
         throw new Error(tError("sync.sourceUpdatedRefresh"));
       }
       if (expected?.cacheId && aligned.cache?.anchor.id !== expected.cacheId) {
+        throw new Error(tError("sync.translationChangedRefresh"));
+      }
+      if (expected?.cacheDst && aligned.cache?.anchor.dst !== expected.cacheDst) {
+        throw new Error(tError("sync.translationChangedRefresh"));
+      }
+      if (
+        expected?.human !== undefined &&
+        aligned.human !== expected.human
+      ) {
         throw new Error(tError("sync.translationChangedRefresh"));
       }
       if (expected?.requireMachine && !aligned.cache) {
@@ -1656,6 +1815,12 @@ export class SyncService {
   async deleteTargetBlock(
     sourceUri: vscode.Uri,
     blockIndex: number,
+    expected?: {
+      sourceHash?: string;
+      cacheId?: string;
+      cacheDst?: string;
+      human?: boolean;
+    },
   ): Promise<string> {
     return this.withLock(sourceUri, async () => {
       const state = await this.loadState(sourceUri, true);
@@ -1667,6 +1832,30 @@ export class SyncService {
       );
       if (!aligned) {
         throw new Error(tError("common.missingSourceBlock", { index: blockIndex + 1 }));
+      }
+      if (
+        expected?.sourceHash &&
+        aligned.source.hash !== expected.sourceHash
+      ) {
+        throw new Error(tError("sync.sourceUpdatedRefresh"));
+      }
+      if (
+        expected?.cacheId &&
+        aligned.cache?.anchor.id !== expected.cacheId
+      ) {
+        throw new Error(tError("sync.translationChangedRefresh"));
+      }
+      if (
+        expected?.cacheDst &&
+        aligned.cache?.anchor.dst !== expected.cacheDst
+      ) {
+        throw new Error(tError("sync.translationChangedRefresh"));
+      }
+      if (
+        expected?.human !== undefined &&
+        aligned.human !== expected.human
+      ) {
+        throw new Error(tError("sync.translationChangedRefresh"));
       }
       if (aligned.cache?.anchor.mode === "deleted") {
         return state.cacheText ?? "";
@@ -1835,6 +2024,12 @@ export class SyncService {
     blockIndex: number,
     signal?: AbortSignal,
     assist?: Partial<TranslationAssistSettings>,
+    expected?: {
+      sourceHash?: string;
+      cacheId?: string;
+      cacheDst?: string;
+      human?: boolean;
+    },
   ): Promise<BackTranslationResult> {
     if (signal?.aborted) {
       throw new CancelledError();
@@ -1862,6 +2057,30 @@ export class SyncService {
     }
     if (!aligned.cache) {
       throw new Error(tError("sync.noTranslationBack"));
+    }
+    if (
+      expected?.sourceHash &&
+      aligned.source.hash !== expected.sourceHash
+    ) {
+      throw new Error(tError("sync.sourceUpdatedRefresh"));
+    }
+    if (
+      expected?.cacheId &&
+      aligned.cache.anchor.id !== expected.cacheId
+    ) {
+      throw new Error(tError("sync.translationChangedRefresh"));
+    }
+    if (
+      expected?.cacheDst &&
+      aligned.cache.anchor.dst !== expected.cacheDst
+    ) {
+      throw new Error(tError("sync.translationChangedRefresh"));
+    }
+    if (
+      expected?.human !== undefined &&
+      aligned.human !== expected.human
+    ) {
+      throw new Error(tError("sync.translationChangedRefresh"));
     }
     const headingPaths = buildHeadingPaths(source.blocks);
     const assistSettings = this.resolveAssist(assist);
@@ -2945,7 +3164,16 @@ export class SyncService {
    *
    * 缓存不存在或该块没有译文时抛错；写入失败向上抛出。内部持有文件锁。
    */
-  async markSynced(sourceUri: vscode.Uri, blockIndex: number): Promise<void> {
+  async markSynced(
+    sourceUri: vscode.Uri,
+    blockIndex: number,
+    expected?: {
+      sourceHash?: string;
+      cacheId?: string;
+      cacheDst?: string;
+      human?: boolean;
+    },
+  ): Promise<void> {
     return this.withLock(sourceUri, async () => {
       const state = await this.loadState(sourceUri, true);
       if (!state.cacheText || !state.cacheText.trim()) {
@@ -2959,6 +3187,30 @@ export class SyncService {
       );
       if (!aligned?.cache) {
         throw new Error(tError("sync.noTranslationMarkSynced"));
+      }
+      if (
+        expected?.sourceHash &&
+        aligned.source.hash !== expected.sourceHash
+      ) {
+        throw new Error(tError("sync.sourceUpdatedRefresh"));
+      }
+      if (
+        expected?.cacheId &&
+        aligned.cache.anchor.id !== expected.cacheId
+      ) {
+        throw new Error(tError("sync.translationChangedRefresh"));
+      }
+      if (
+        expected?.cacheDst &&
+        aligned.cache.anchor.dst !== expected.cacheDst
+      ) {
+        throw new Error(tError("sync.translationChangedRefresh"));
+      }
+      if (
+        expected?.human !== undefined &&
+        aligned.human !== expected.human
+      ) {
+        throw new Error(tError("sync.translationChangedRefresh"));
       }
       const edited = markCachedBlockSynced({
         cacheText: state.cacheText,
@@ -3208,6 +3460,10 @@ export class SyncService {
     retranslateAll = false,
     allowPartial = false,
     assist?: Partial<TranslationAssistSettings>,
+    selective?: {
+      onlySourceIndexes: ReadonlySet<number>;
+      includeHuman?: boolean;
+    },
   ): Promise<SyncOutcome> {
     this.log(
       `sync ${path.basename(state.sourceUri.fsPath)} (${retranslateAll ? "all" : retranslateStale ? "stale" : "missing"}, partial=${allowPartial})`,
@@ -3259,6 +3515,12 @@ export class SyncService {
       targetLanguage: state.targetLanguage,
       retranslateStale,
       retranslateAll,
+      ...(selective
+        ? {
+            onlySourceIndexes: selective.onlySourceIndexes,
+            includeHuman: selective.includeHuman === true,
+          }
+        : {}),
       glossary: this.requestGlossary(glossary.entries, cache),
       annotations: syncAnnotations,
       assist: {

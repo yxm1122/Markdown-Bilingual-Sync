@@ -25,7 +25,6 @@
  */
 import * as vscode from "vscode";
 import { filterBatchMarkdownFiles, isFileInsideFolder } from "./batch/batchFiles";
-import { runWithConcurrency } from "./batch/concurrency";
 import { CacheStore } from "./cache/cacheStore";
 import { ExportService, type PreparedExport } from "./export/exportService";
 import {
@@ -38,7 +37,6 @@ import { SyncBlockedError } from "./sync/sync";
 import {
   CancelledError,
   SyncService,
-  type SyncOutcome,
 } from "./sync/syncService";
 import { formatSyncSummary } from "./sync/summary";
 import { isSupportedLanguageId } from "./util/language";
@@ -58,7 +56,8 @@ import {
 import { PROVIDER_PRESETS } from "./translation/presets";
 import { ConcurrencyLimiter } from "./translation/concurrency";
 import { BatchTranslationCoordinator } from "./translation/batchCoordinator";
-import { TranslationTaskMonitor, failedTaskPatch } from "./status/taskMonitor";
+import { OperationScheduler } from "./status/operationScheduler";
+import { TranslationTaskMonitor } from "./status/taskMonitor";
 import { TranslationStatusBar } from "./status/statusBar";
 import { TaskViewProvider } from "./status/taskViewProvider";
 import { tError } from "./i18n/errors";
@@ -357,6 +356,14 @@ export function activate(context: vscode.ExtensionContext): void {
     getTranslationConcurrency,
   );
   const taskMonitor = new TranslationTaskMonitor();
+  // 所有长操作统一排队：同文件串行、不同文件并行；任务级并发复用请求并发设置。
+  const operationScheduler = new OperationScheduler(
+    taskMonitor,
+    getTranslationConcurrency,
+  );
+  context.subscriptions.push({
+    dispose: () => operationScheduler.dispose(),
+  });
   // Provider 采用惰性配置：每次请求时才读取设置与 SecretStorage。
   const openAIProvider = new OpenAITranslationProvider({
     getConfig: () => loadOpenAIConfig(context),
@@ -392,6 +399,7 @@ export function activate(context: vscode.ExtensionContext): void {
     exportService,
     output,
     taskMonitor,
+    operationScheduler,
   );
   context.subscriptions.push(previewManager);
   // 任务视图只依赖快照与命令回调，不直接访问同步服务。
@@ -476,115 +484,91 @@ export function activate(context: vscode.ExtensionContext): void {
    * @param sourceUri 源 Markdown 文件
    * @param mode sync=只补缺失，stale=重译过期块，all=重译全部机器译文
    * @param openPreview 成功后是否新建/显示预览（否则只刷新已打开的预览）
-   * @sideeffect 创建任务、写缓存、刷新预览、写输出日志
-   * @failure 同步异常在内部捕获并写入任务终态；预览打开等后续 UI 异常仍可能向上传播
+   * @sideeffect 向调度器入队；写缓存、刷新预览、写输出日志在任务执行时发生
+   * @failure 同步异常由调度器写入任务终态；预览打开失败只记录日志，不改变翻译结果
    */
-  const runSync = async (
+  const runSync = (
     sourceUri: vscode.Uri,
     mode: "sync" | "stale" | "all",
     openPreview: boolean,
-  ): Promise<void> => {
-    // 每次运行独立的取消信号；任务面板的取消按钮会 abort 它。
-    const controller = new AbortController();
-    let outcome: SyncOutcome | undefined;
-    const taskId = taskMonitor.create(
-      vscode.workspace.asRelativePath(sourceUri, false),
-      sourceUri,
-    );
-    taskMonitor.start(taskId);
-    taskMonitor.registerCancel(taskId, () => controller.abort());
-    try {
-      taskMonitor.update(taskId, {
-        phase: UI_TEXT.extension.syncPreparing,
-      });
-      // 同步服务通过该回调上报阶段与块进度，直接映射到任务视图。
-      const report = (
-        message: string,
-        detail?: { completed: number; total: number },
-      ) => {
-        taskMonitor.update(taskId, {
-          phase: message,
-          ...(detail ?? {}),
-        });
-      };
-      outcome =
-        mode === "all"
-          ? await syncService.retranslateAll(
-              sourceUri,
-              report,
-              controller.signal,
-            )
-          : await syncService.sync(
-              sourceUri,
-              mode === "stale",
-              report,
-              controller.signal,
-              true,
+  ): void => {
+    const relative = vscode.workspace.asRelativePath(sourceUri, false);
+    operationScheduler.enqueue({
+      label: relative,
+      operation: mode === "sync" ? "sync" : "retranslate",
+      uri: sourceUri,
+      run: async ({ signal, report }) => {
+        report({ phase: UI_TEXT.extension.syncPreparing });
+        try {
+          const outcome =
+            mode === "all"
+              ? await syncService.retranslateAll(
+                  sourceUri,
+                  (message, detail) => {
+                    report({ phase: message, ...(detail ?? {}) });
+                  },
+                  signal,
+                )
+              : await syncService.sync(
+                  sourceUri,
+                  mode === "stale",
+                  (message, detail) => {
+                    report({ phase: message, ...(detail ?? {}) });
+                  },
+                  signal,
+                  true,
+                );
+          const { result } = outcome;
+          try {
+            if (openPreview) {
+              previewManager.open(sourceUri);
+            } else {
+              previewManager.refresh(sourceUri);
+            }
+          } catch (error) {
+            output.appendLine(
+              `[${new Date().toISOString()}] sync preview failed ${relative}: ${formatError(error)}`,
             );
-    } catch (error) {
-      // 取消：任务置为 cancelled，已有缓存由 SyncService 决定是否保留。
-      if (error instanceof CancelledError) {
-        taskMonitor.finish(taskId, "cancelled", {
-          phase: UI_TEXT.taskPanel.phases.cancelled,
-        });
-        return;
-      }
-      const message = formatError(error);
-      taskMonitor.finish(taskId, "failed", failedTaskPatch(message));
-      output.appendLine(
-        `[${new Date().toISOString()}] sync failed ${vscode.workspace.asRelativePath(sourceUri, false)}: ${message}`,
-      );
-      return;
-    }
-
-    // 理论上 try 中已赋值；保留防御分支，避免类型收窄遗漏。
-    if (!outcome) {
-      taskMonitor.finish(taskId, "cancelled", {
-        phase: UI_TEXT.taskPanel.phases.cancelled,
-      });
-      return;
-    }
-
-    const { result } = outcome;
-    // 部分成功（allowPartial=true 时保留了已成功块）也写入任务历史。
-    taskMonitor.finish(
-      taskId,
-      result.partial ? "partial" : "success",
-      {
-        completed: result.translatedCount,
-        total: result.translatedCount + result.failedTaskCount,
-        failed: result.failedTaskCount,
-        phase: result.partial
-          ? UI_TEXT.taskPanel.phases.partial
-          : UI_TEXT.taskPanel.phases.completed,
-        error:
-          result.partial && result.failures.length > 0
-            ? result.failures.join("\n")
-            : undefined,
+          }
+          // 摘要与警告只写输出通道，避免翻译完成时弹出过多通知。
+          const title =
+            mode === "all"
+              ? UI_TEXT.extension.syncTitleAll
+              : mode === "stale"
+                ? UI_TEXT.extension.syncTitleStale
+                : UI_TEXT.extension.syncTitleSync;
+          output.appendLine(
+            `[${new Date().toISOString()}] ${formatSyncSummary(result, title)}`,
+          );
+          for (const warning of result.warnings) {
+            output.appendLine(
+              `[${new Date().toISOString()}] sync warning: ${warning}`,
+            );
+          }
+          return {
+            status: result.partial ? "partial" : "success",
+            phase: result.partial
+              ? UI_TEXT.taskPanel.phases.partial
+              : UI_TEXT.taskPanel.phases.completed,
+            completed: result.translatedCount,
+            total: result.translatedCount + result.failedTaskCount,
+            failed: result.failedTaskCount,
+            ...(result.partial && result.failures.length > 0
+              ? { error: result.failures.join("\n") }
+              : {}),
+          };
+        } catch (error) {
+          if (error instanceof CancelledError) {
+            previewManager.refresh(sourceUri);
+          } else {
+            output.appendLine(
+              `[${new Date().toISOString()}] sync failed ${relative}: ${formatError(error)}`,
+            );
+          }
+          throw error;
+        }
       },
-    );
-
-    if (openPreview) {
-      previewManager.open(sourceUri);
-    } else {
-      previewManager.refresh(sourceUri);
-    }
-    // 摘要与警告只写输出通道，避免翻译完成时弹出过多通知。
-    const title =
-      mode === "all"
-        ? UI_TEXT.extension.syncTitleAll
-        : mode === "stale"
-          ? UI_TEXT.extension.syncTitleStale
-          : UI_TEXT.extension.syncTitleSync;
-    const summary = formatSyncSummary(result, title);
-    output.appendLine(
-      `[${new Date().toISOString()}] ${summary}`,
-    );
-    for (const warning of result.warnings) {
-      output.appendLine(
-        `[${new Date().toISOString()}] sync warning: ${warning}`,
-      );
-    }
+    });
   };
 
   /**
@@ -823,20 +807,6 @@ export function activate(context: vscode.ExtensionContext): void {
         `[${new Date().toISOString()}] batch translate start: files=${files.length}, concurrency=${concurrency}`,
       );
 
-      // 每个文件一个 AbortController：任务面板取消单个任务只中止本文件；
-      // “取消全部”由 TaskMonitor 遍历所有活动任务并逐一 abort。
-      const controllers = new Map<number, AbortController>();
-      // file.toString() -> taskId，供 worker 更新对应任务。
-      const taskIds = new Map<string, number>();
-      for (const file of files) {
-        const relative = vscode.workspace.asRelativePath(file, false);
-        const taskId = taskMonitor.create(relative, file);
-        const controller = new AbortController();
-        taskIds.set(file.toString(), taskId);
-        controllers.set(taskId, controller);
-        taskMonitor.registerCancel(taskId, () => controller.abort());
-      }
-      let cancelled = false;
       // 批量汇总只写输出日志，不逐文件弹通知（任务视图负责进度展示）。
       const summary = {
         processed: 0,
@@ -847,115 +817,88 @@ export function activate(context: vscode.ExtensionContext): void {
         failed: 0,
         failedBlocks: 0,
       };
-      // 文件级并发；signal 被 abort 后不再领取新文件，已运行的 worker 会收到取消错误。
-      await runWithConcurrency(
-        files,
-        concurrency,
-        async (file) => {
-          const relative = vscode.workspace.asRelativePath(file, false);
-          const taskId = taskIds.get(file.toString());
-          const controller =
-            taskId === undefined ? undefined : controllers.get(taskId);
-          // 排队期间被取消的任务不再启动；直接收尾为 cancelled。
-          if (!controller || controller.signal.aborted) {
-            if (taskId !== undefined && taskMonitor.isActive(taskId)) {
-              taskMonitor.finish(taskId, "cancelled", {
-                phase: UI_TEXT.taskPanel.phases.cancelled,
-              });
-            }
-            if (controller?.signal.aborted) {
-              cancelled = true;
-            }
-            return;
-          }
-          if (taskId !== undefined) {
-            taskMonitor.start(taskId);
-          }
-          try {
-            // allowPartial=true：保留单文件内已成功的块，失败块计入 failedTaskCount。
-            const outcome = await syncService.sync(
-              file,
-              false,
-              (message, detail) => {
-                if (taskId !== undefined) {
-                  taskMonitor.update(taskId, {
-                    phase: message,
-                    ...(detail ?? {}),
-                  });
-                }
-              },
-              controller.signal,
-              true,
-            );
-            summary.processed += 1;
-            summary.translated += outcome.result.translatedCount;
-            summary.copied += outcome.result.copiedCount;
-            summary.human += outcome.result.humanLockedCount;
-            summary.failedBlocks += outcome.result.failedTaskCount;
-            if (outcome.result.partial) {
-              summary.partial += 1;
-            }
-            if (taskId !== undefined) {
-              taskMonitor.finish(
-                taskId,
-                outcome.result.partial ? "partial" : "success",
-                {
-                  completed: outcome.result.translatedCount,
-                  total:
-                    outcome.result.translatedCount +
-                    outcome.result.failedTaskCount,
-                  failed: outcome.result.failedTaskCount,
-                  phase: outcome.result.partial
-                    ? UI_TEXT.taskPanel.phases.partial
-                    : UI_TEXT.taskPanel.phases.completed,
-                  error:
-                    outcome.result.partial &&
-                    outcome.result.failures.length > 0
-                      ? outcome.result.failures.join("\n")
-                      : undefined,
+      const jobs = files.map((file) => {
+        const relative = vscode.workspace.asRelativePath(file, false);
+        return operationScheduler.enqueue<{
+          translated: number;
+          copied: number;
+          human: number;
+          failedBlocks: number;
+          partial: boolean;
+        }>({
+          label: relative,
+          operation: "sync",
+          uri: file,
+          run: async ({ signal, report }) => {
+            try {
+              // allowPartial=true：保留单文件内已成功的块，失败块计入 failedTaskCount。
+              const outcome = await syncService.sync(
+                file,
+                false,
+                (message, detail) => {
+                  report({ phase: message, ...(detail ?? {}) });
                 },
+                signal,
+                true,
               );
-            }
-            output.appendLine(
-              `[${new Date().toISOString()}] batch translate ${relative}: translated=${outcome.result.translatedCount}, failed=${outcome.result.failedTaskCount}, partial=${outcome.result.partial}, copied=${outcome.result.copiedCount}, human=${outcome.result.humanLockedCount}`,
-            );
-          } catch (error) {
-            // 取消（本文件信号或 CancelledError）：只结束当前任务，其他文件继续。
-            if (
-              controller.signal.aborted ||
-              error instanceof CancelledError
-            ) {
-              cancelled = true;
-              if (taskId !== undefined) {
-                taskMonitor.finish(taskId, "cancelled", {
-                  phase: UI_TEXT.taskPanel.phases.cancelled,
-                });
+              const result = outcome.result;
+              output.appendLine(
+                `[${new Date().toISOString()}] batch translate ${relative}: translated=${result.translatedCount}, failed=${result.failedTaskCount}, partial=${result.partial}, copied=${result.copiedCount}, human=${result.humanLockedCount}`,
+              );
+              return {
+                status: result.partial ? "partial" : "success",
+                phase: result.partial
+                  ? UI_TEXT.taskPanel.phases.partial
+                  : UI_TEXT.taskPanel.phases.completed,
+                completed: result.translatedCount,
+                total: result.translatedCount + result.failedTaskCount,
+                failed: result.failedTaskCount,
+                ...(result.partial && result.failures.length > 0
+                  ? { error: result.failures.join("\n") }
+                  : {}),
+                result: {
+                  translated: result.translatedCount,
+                  copied: result.copiedCount,
+                  human: result.humanLockedCount,
+                  failedBlocks: result.failedTaskCount,
+                  partial: result.partial,
+                },
+              };
+            } catch (error) {
+              if (!(error instanceof CancelledError) && !signal.aborted) {
+                output.appendLine(
+                  `[${new Date().toISOString()}] batch translate failed ${relative}: ${formatError(error)}`,
+                );
               }
-              return;
+              throw error;
             }
-            // 非取消错误只影响当前文件，其余文件继续翻译。
-            summary.failed += 1;
-            const message = formatError(error);
-            if (taskId !== undefined) {
-              taskMonitor.finish(taskId, "failed", failedTaskPatch(message));
-            }
-            output.appendLine(
-              `[${new Date().toISOString()}] batch translate failed ${relative}: ${message}`,
-            );
-          }
-        },
-      );
+          },
+        });
+      });
 
+      const settlements = await Promise.all(
+        jobs.map((job) => job.done),
+      );
       previewManager.refreshAll();
-      if ([...controllers.values()].some((item) => item.signal.aborted)) {
-        cancelled = true;
-      }
-      // 收尾：取消后仍处于 queued/running 的任务（未领取或提前返回）统一标记为 cancelled。
-      for (const taskId of taskIds.values()) {
-        if (taskMonitor.isActive(taskId)) {
-          taskMonitor.finish(taskId, "cancelled", {
-            phase: UI_TEXT.taskPanel.phases.cancelled,
-          });
+      let cancelled = false;
+      for (const settlement of settlements) {
+        if (
+          (settlement.status === "success" ||
+            settlement.status === "partial") &&
+          settlement.result
+        ) {
+          summary.processed += 1;
+          summary.translated += settlement.result.translated;
+          summary.copied += settlement.result.copied;
+          summary.human += settlement.result.human;
+          summary.failedBlocks += settlement.result.failedBlocks;
+          if (settlement.result.partial) {
+            summary.partial += 1;
+          }
+        } else if (settlement.status === "failed") {
+          summary.failed += 1;
+        } else if (settlement.status === "cancelled") {
+          cancelled = true;
         }
       }
 

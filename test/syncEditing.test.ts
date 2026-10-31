@@ -250,6 +250,98 @@ describe("SyncService block editing and back-translation", () => {
     expect(cacheStore.text).toBe(written);
   });
 
+  it("retranslates selected human blocks without touching unselected blocks", async () => {
+    const uri = mocks.FakeUri.file(
+      "/project/demo.md",
+    ) as unknown as Uri;
+    const beforeHuman = inspect(
+      SOURCE,
+      cacheStore.text!,
+    ).alignment.blocks.find((block) => block.source.kind === "paragraph");
+    await service.saveTargetEdit(
+      uri,
+      beforeHuman!.source.index,
+      "人工译文。",
+    );
+    const locked = inspect(SOURCE, cacheStore.text!).alignment.blocks.find(
+      (block) => block.source.kind === "paragraph",
+    );
+    expect(locked?.status).toBe("human");
+    const otherBefore = inspect(
+      SOURCE,
+      cacheStore.text!,
+    ).alignment.blocks.find((block) => block.source.kind === "list");
+
+    const result = await service.retranslateBlocks(uri, [
+      {
+        blockIndex: locked!.source.index,
+        sourceHash: locked!.source.hash,
+        cacheId: locked!.cache!.anchor.id,
+        cacheDst: locked!.cache!.anchor.dst,
+        human: true,
+      },
+    ]);
+
+    expect(result.skipped).toEqual([]);
+    expect(result.outcome.result.translatedCount).toBe(1);
+    const after = inspect(SOURCE, cacheStore.text!).alignment.blocks.find(
+      (block) => block.source.index === locked!.source.index,
+    );
+    expect(after?.status).toBe("translated");
+    expect(after?.human).toBe(false);
+    expect(after?.cache?.anchor.mode).toBe("auto");
+    expect(after?.cache?.block.raw).not.toContain("人工译文。");
+
+    const otherAfter = inspect(
+      SOURCE,
+      cacheStore.text!,
+    ).alignment.blocks.find((block) => block.source.kind === "list");
+    expect(otherAfter?.cache?.block.raw).toBe(
+      otherBefore?.cache?.block.raw,
+    );
+  });
+
+  it("skips a block whose lock state changed after selection", async () => {
+    const uri = mocks.FakeUri.file(
+      "/project/demo.md",
+    ) as unknown as Uri;
+    const before = inspect(SOURCE, cacheStore.text!).alignment.blocks;
+    const paragraph = before.find((block) => block.source.kind === "paragraph");
+    const list = before.find((block) => block.source.kind === "list");
+    const paragraphTarget = {
+      blockIndex: paragraph!.source.index,
+      sourceHash: paragraph!.source.hash,
+      cacheId: paragraph!.cache!.anchor.id,
+      cacheDst: paragraph!.cache!.anchor.dst,
+      human: false,
+    };
+    const listTarget = {
+      blockIndex: list!.source.index,
+      sourceHash: list!.source.hash,
+      cacheId: list!.cache!.anchor.id,
+      cacheDst: list!.cache!.anchor.dst,
+      human: false,
+    };
+
+    await service.saveTargetEdit(
+      uri,
+      paragraph!.source.index,
+      "选择后锁定。",
+    );
+    const result = await service.retranslateBlocks(uri, [
+      paragraphTarget,
+      listTarget,
+    ]);
+
+    expect(result.skipped).toHaveLength(1);
+    expect(result.outcome.result.translatedCount).toBe(1);
+    const after = inspect(SOURCE, cacheStore.text!).alignment.blocks.find(
+      (block) => block.source.index === paragraph!.source.index,
+    );
+    expect(after?.status).toBe("human");
+    expect(after?.cache?.block.raw).toContain("选择后锁定。");
+  });
+
   it("persists partial results through SyncService", async () => {
     const store = new FakeCacheStore();
     store.text = undefined;

@@ -432,6 +432,61 @@ describe("TaskViewProvider tree mapping", () => {
     provider.dispose();
   });
 
+  it("shows operation labels and queued count", () => {
+    const snapshot: TaskSnapshot = {
+      activeCount: 2,
+      recentFailure: false,
+      active: [
+        {
+          id: 1,
+          label: "docs/a.md",
+          status: "running",
+          operation: "retranslate",
+          phase: "正在重译 1/3 个块…",
+          completed: 1,
+          total: 3,
+          failed: 0,
+          startedAt: Date.now() - 2_000,
+        },
+        {
+          id: 2,
+          label: "docs/a.md",
+          status: "queued",
+          operation: "review",
+          phase: "等待开始",
+          completed: 0,
+          total: 0,
+          failed: 0,
+        },
+      ],
+      finished: [],
+    };
+    const { provider } = createProvider(snapshot);
+    const sections = provider.getChildren();
+    const overview = provider.getChildren(sections[0] as never);
+    const queued = overview.find(
+      (item) => (item as { id: string }).id === "overview:queued",
+    ) as { label: string; description: string };
+    expect(queued.label).toBe(UI_TEXT.taskPanel.queuedTasksLabel);
+    expect(queued.description).toBe("1");
+
+    const activeTasks = provider.getChildren(sections[1] as never);
+    const description = (node: unknown) =>
+      (provider.getTreeItem(node as never) as unknown as {
+        description?: string;
+      }).description ?? "";
+    expect(description(activeTasks[0])).toContain(
+      UI_TEXT.taskPanel.operations.retranslate,
+    );
+    expect(description(activeTasks[1])).toContain(
+      UI_TEXT.taskPanel.operations.review,
+    );
+    expect(description(activeTasks[1])).toContain(
+      UI_TEXT.taskPanel.statusLabels.queued,
+    );
+    provider.dispose();
+  });
+
   it("shows an empty hint when there are no active tasks", () => {
     const { provider } = createProvider({
       active: [],

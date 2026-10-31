@@ -19,6 +19,7 @@ import type {
   TranslationTaskView,
   TranslationTaskMonitor,
 } from "./taskMonitor";
+import { operationLabel } from "./taskViewProvider";
 
 const T = UI_TEXT.statusBar;
 const PANEL = UI_TEXT.taskPanel;
@@ -40,8 +41,10 @@ function taskLine(task: TranslationTaskView): string {
     task.failed > 0
       ? formatText(PANEL.failedSuffix, { failed: task.failed })
       : "";
+  const operation = operationLabel(task.operation);
   return formatText(T.taskLine, {
     label: task.label,
+    operation: operation ? `${operation} · ` : "",
     status,
     progress,
     failed,
@@ -139,12 +142,14 @@ export class TranslationStatusBar implements vscode.Disposable {
     ).length;
 
     if (snapshot.activeCount > 0) {
+      const queued = snapshot.active.filter(
+        (task) => task.status === "queued",
+      ).length;
       this.item.text = `${running ? "$(sync~spin)" : "$(clock)"} ${formatText(
         T.active,
         {
           tasks: snapshot.activeCount,
-          active: activeRequests,
-          limit,
+          queued,
         },
       )}`;
       this.item.backgroundColor = undefined;

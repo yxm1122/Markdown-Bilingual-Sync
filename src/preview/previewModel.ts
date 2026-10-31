@@ -93,6 +93,8 @@ export interface PreviewBlockView {
   sourceHash: string;
   /** 对应缓存锚点 id；无缓存时为空。 */
   cacheId?: string;
+  /** 对应缓存锚点的译文哈希；用于排队期间校验译文内容是否已变化。 */
+  cacheDst?: string;
   /** 原文存在未应用的暂存修改（编辑或删除）。 */
   sourcePending: boolean;
   /** 原文块已被暂存删除（尚未写回源文件）。 */
@@ -662,6 +664,7 @@ export function buildPreviewModel(input: PreviewModelInput): PreviewModel {
       targetRaw: deletedBlock ? "" : aligned.cache?.block.raw ?? "",
       sourceHash: aligned.source.hash,
       cacheId: aligned.cache?.anchor.id,
+      cacheDst: aligned.cache?.anchor.dst,
       sourcePending,
       sourceDeleted,
       human: aligned.human,
