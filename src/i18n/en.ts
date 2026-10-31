@@ -221,8 +221,7 @@ export const UI_TEXT = {
       clear: "Clear",
       exit: "Exit selection",
       actionGroup: "Bulk actions",
-      selectBlock: "Select block {index}",
-      hint: "Shift-click to select a range; Escape to exit",
+      hint: "Click or drag over blocks to select; Shift-click for a range; Escape to exit",
       changed:
         "The selected block content or lock state changed. Select the blocks again.",
       retranslate: "Retranslate",
@@ -711,10 +710,15 @@ export const UI_TEXT = {
     activeTaskCount: "Tasks: {count}",
     activeTaskBadgeTooltip: "Active translation tasks",
     languageUpdateFailed: "Failed to change languages: {message}",
-    openSource: "Open source file",
+    openPreview: "Open preview",
     progress: "{completed}/{total} blocks",
     noBlocks: "No blocks to translate",
     failedSuffix: " · {failed} blocks failed",
+    retryCount: "Retried {count} time(s)",
+    smallTaskGroup: "{count} block tasks",
+    smallTaskGroupHint:
+      "Consecutive block tasks are grouped. Expand to inspect them.",
+    blockLabel: "Block {index}",
     elapsed: "{duration} elapsed",
     noActive: "No tasks are currently running",
     phases: {

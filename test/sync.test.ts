@@ -83,6 +83,48 @@ describe("syncDocument", () => {
     expect(afterIds).toEqual(beforeIds);
   });
 
+  it("forwards provider retry diagnostics to the operation", async () => {
+    const base = new MockTranslationProvider();
+    const retries: Array<{
+      attempt: number;
+      reasons: readonly string[];
+      itemIds?: readonly string[];
+    }> = [];
+    const provider = {
+      ...base,
+      label: base.label,
+      async translate(
+        request: Parameters<typeof base.translate>[0],
+        signal?: AbortSignal,
+        onProgress?: Parameters<typeof base.translate>[2],
+        onChunk?: Parameters<typeof base.translate>[3],
+      ) {
+        request.onRetry?.({
+          reasons: ["http"],
+          attempt: 2,
+          batchSize: request.items.length,
+          itemIds: request.items.map((item) => item.id),
+        });
+        return base.translate(request, signal, onProgress, onChunk);
+      },
+    };
+
+    await syncDocument({
+      md: makeMd(),
+      sourceText: SOURCE,
+      provider,
+      sourceLanguage: "en",
+      targetLanguage: "zh-CN",
+      retranslateStale: false,
+      onRetry: (info) => retries.push(info),
+    });
+
+    expect(retries).toHaveLength(1);
+    expect(retries[0].attempt).toBe(2);
+    expect(retries[0].reasons).toEqual(["http"]);
+    expect(retries[0].itemIds).toHaveLength(3);
+  });
+
   it("retranslates only selected blocks and can unlock human translations", async () => {
     const initial = await translate();
     const before = inspect(SOURCE, initial.cacheText);

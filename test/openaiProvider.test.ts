@@ -946,7 +946,7 @@ describe("OpenAITranslationProvider", () => {
       { id: "b1", text: "下面的表格汇总了状态。" },
     ]);
     expect(retries).toEqual([
-      { reasons: ["glossary"], attempt: 2, batchSize: 1 },
+      { reasons: ["glossary"], attempt: 2, batchSize: 1, itemIds: ["b1"] },
     ]);
   });
 
@@ -986,7 +986,7 @@ describe("OpenAITranslationProvider", () => {
     expect(annotations).toHaveLength(1);
     expect(annotations[0]?.id).toBe("b1");
     expect(retries).toEqual([
-      { reasons: ["review-parse"], attempt: 2, batchSize: 1 },
+      { reasons: ["review-parse"], attempt: 2, batchSize: 1, itemIds: ["b1"] },
     ]);
   });
 
@@ -1013,6 +1013,7 @@ describe("OpenAITranslationProvider", () => {
         reasons: ["http"],
         attempt: 2,
         batchSize: 1,
+        itemIds: ["b1"],
         delayMs: 0,
         status: 500,
       },
@@ -1039,7 +1040,7 @@ describe("OpenAITranslationProvider", () => {
       request([item("b1", "Translate this.")]),
     );
     expect(validationRetries).toEqual([
-      { reasons: ["validation"], attempt: 2, batchSize: 1 },
+      { reasons: ["validation"], attempt: 2, batchSize: 1, itemIds: ["b1"] },
     ]);
   });
 

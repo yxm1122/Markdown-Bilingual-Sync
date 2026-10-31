@@ -276,6 +276,43 @@ describe("BatchTranslationCoordinator", () => {
     ).resolves.toEqual({ summary: "摘要：全文", glossary: [] });
   });
 
+  it("routes merged retry diagnostics to the calls that own the batch", async () => {
+    const retriesA: string[] = [];
+    const retriesB: string[] = [];
+    const delegate: TranslationProvider = {
+      id: "fake",
+      label: "Fake",
+      async translate(requested) {
+        requested.onRetry?.({
+          reasons: ["http"],
+          attempt: 2,
+          batchSize: 2,
+          itemIds: [requested.items[0].id],
+        });
+        return requested.items.map((entry) => ({
+          id: entry.id,
+          text: `译:${entry.text}`,
+        }));
+      },
+    };
+    const coordinator = new BatchTranslationCoordinator(delegate, {
+      flushDelayMs: 0,
+    });
+    await Promise.all([
+      coordinator.translate({
+        ...request([item("a1", "A1"), item("a2", "A2")]),
+        onRetry: () => retriesA.push("retry"),
+      }),
+      coordinator.translate({
+        ...request([item("b1", "B1"), item("b2", "B2")]),
+        onRetry: () => retriesB.push("retry"),
+      }),
+    ]);
+
+    expect(retriesA).toEqual(["retry"]);
+    expect(retriesB).toEqual([]);
+  });
+
   it("rejects summary generation when the delegate does not support it", async () => {
     const delegate: TranslationProvider = {
       id: "plain",

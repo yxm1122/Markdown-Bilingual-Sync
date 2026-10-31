@@ -820,6 +820,17 @@ export class GenericHttpTranslationProvider implements TranslationProvider {
           attempt < 1
         ) {
           attempt += 1;
+          try {
+            request.onRetry?.({
+              reasons: ["http"],
+              attempt: attempt + 1,
+              batchSize: 1,
+              itemIds: [item.id],
+              delayMs: this.retryDelayMs,
+            });
+          } catch {
+            /* 诊断不应中断翻译 */
+          }
           await delay(this.retryDelayMs, signal);
           continue;
         }

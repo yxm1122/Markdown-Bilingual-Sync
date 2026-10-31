@@ -156,6 +156,43 @@ describe("OperationScheduler", () => {
     scheduler.dispose();
   });
 
+  it("carries task target metadata", async () => {
+    const monitor = new TranslationTaskMonitor();
+    const scheduler = new OperationScheduler(monitor, () => 1);
+    const job = scheduler.enqueue({
+      label: "target",
+      operation: "review",
+      uri: file("a.md"),
+      target: { scope: "block", blockKey: "3" },
+      run: async () => undefined,
+    });
+
+    await job.done;
+    expect(monitor.getTask(job.taskId)).toMatchObject({
+      scope: "block",
+      blockKey: "3",
+    });
+    scheduler.dispose();
+  });
+
+  it("records retry counts on the task", async () => {
+    const monitor = new TranslationTaskMonitor();
+    const scheduler = new OperationScheduler(monitor, () => 1);
+    const job = scheduler.enqueue({
+      label: "retry",
+      operation: "retranslate",
+      uri: file("a.md"),
+      run: async ({ recordRetry }) => {
+        recordRetry();
+        recordRetry(2);
+      },
+    });
+
+    await job.done;
+    expect(monitor.getTask(job.taskId)?.retries).toBe(3);
+    scheduler.dispose();
+  });
+
   it("cancels queued and running tasks on dispose", async () => {
     const monitor = new TranslationTaskMonitor();
     const scheduler = new OperationScheduler(monitor, () => 1);

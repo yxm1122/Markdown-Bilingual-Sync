@@ -407,7 +407,18 @@ export function activate(context: vscode.ExtensionContext): void {
     monitor: taskMonitor,
     limiter: translationLimiter,
     output,
-    openPreview: (uri) => previewManager.open(uri),
+    openTask: (task) => {
+      if (!task.uri) {
+        return;
+      }
+      if (task.blockKey) {
+        previewManager.openAt(task.uri, { blockKey: task.blockKey });
+      } else if (task.revealFirstBlock) {
+        previewManager.openAt(task.uri, { first: true });
+      } else {
+        previewManager.open(task.uri);
+      }
+    },
     // 每次推送状态时重新读取设置，保证“运行状态”区与当前配置一致。
     getSystemInfo: () => {
       const config = vscode.workspace.getConfiguration(
@@ -497,7 +508,11 @@ export function activate(context: vscode.ExtensionContext): void {
       label: relative,
       operation: mode === "sync" ? "sync" : "retranslate",
       uri: sourceUri,
-      run: async ({ signal, report }) => {
+      target:
+        mode === "sync"
+          ? { scope: "file" }
+          : { scope: "fileBatch", revealFirstBlock: true },
+      run: async ({ signal, report, recordRetry }) => {
         report({ phase: UI_TEXT.extension.syncPreparing });
         try {
           const outcome =
@@ -508,6 +523,8 @@ export function activate(context: vscode.ExtensionContext): void {
                     report({ phase: message, ...(detail ?? {}) });
                   },
                   signal,
+                  undefined,
+                  () => recordRetry(),
                 )
               : await syncService.sync(
                   sourceUri,
@@ -517,6 +534,8 @@ export function activate(context: vscode.ExtensionContext): void {
                   },
                   signal,
                   true,
+                  undefined,
+                  () => recordRetry(),
                 );
           const { result } = outcome;
           try {
@@ -829,7 +848,8 @@ export function activate(context: vscode.ExtensionContext): void {
           label: relative,
           operation: "sync",
           uri: file,
-          run: async ({ signal, report }) => {
+          target: { scope: "fileBatch", revealFirstBlock: true },
+          run: async ({ signal, report, recordRetry }) => {
             try {
               // allowPartial=true：保留单文件内已成功的块，失败块计入 failedTaskCount。
               const outcome = await syncService.sync(
@@ -840,6 +860,8 @@ export function activate(context: vscode.ExtensionContext): void {
                 },
                 signal,
                 true,
+                undefined,
+                () => recordRetry(),
               );
               const result = outcome.result;
               output.appendLine(

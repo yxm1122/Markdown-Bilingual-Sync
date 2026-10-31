@@ -78,6 +78,7 @@ import { buildPreviewAppShell } from "./appShell";
 import type { PreviewHostMessage, PreviewNotice } from "./protocol";
 import type {
   TaskOperation,
+  TaskTarget,
   TranslationTaskMonitor,
 } from "../status/taskMonitor";
 import type {
@@ -245,6 +246,21 @@ export class PreviewManager implements vscode.Disposable {
     for (const session of this.panels.values()) {
       void session.update();
     }
+  }
+
+  /**
+   * 打开（或复用）指定源文件的预览面板，并在渲染完成后定位到块。
+   * @param sourceUri 源 Markdown 文件。
+   * @param target blockKey 定位指定块；first 定位第一个块。
+   */
+  openAt(
+    sourceUri: vscode.Uri,
+    target: { blockKey?: string; first?: boolean },
+  ): void {
+    const existing = this.panels.get(sourceUri.toString());
+    const session = existing ?? this.ensureSession(sourceUri);
+    session.panel.reveal(undefined, true);
+    session.reveal(target);
   }
 
   /**
@@ -502,6 +518,8 @@ class PreviewPanelSession implements vscode.Disposable {
   private taskActivity = { running: 0, queued: 0 };
   /** 最近的忙碌态；Webview 重载后需要重新下发，避免丢失独占锁。 */
   private busyState: { busy: boolean; message?: string } = { busy: false };
+  /** 待执行的块定位请求；渲染完成后发送给 Webview。 */
+  private pendingReveal?: { blockKey?: string; first?: boolean };
   /** 退订任务监视器；随面板销毁释放。 */
   private readonly unsubscribeTasks: () => void;
 
@@ -543,6 +561,29 @@ class PreviewPanelSession implements vscode.Disposable {
     this.ready = this.update();
   }
 
+  /** 请求在渲染完成后定位到块；重复请求以最后一次为准。 */
+  reveal(target: { blockKey?: string; first?: boolean }): void {
+    this.pendingReveal = target;
+    void this.ready.then(() => this.flushReveal());
+  }
+
+  private async flushReveal(): Promise<void> {
+    if (this.disposed || !this.pendingReveal) {
+      return;
+    }
+    const target = this.pendingReveal;
+    this.pendingReveal = undefined;
+    await this.update();
+    if (this.disposed) {
+      return;
+    }
+    this.postToWebview({
+      type: "revealBlock",
+      ...(target.blockKey ? { blockKey: target.blockKey } : {}),
+      ...(target.first ? { first: true } : {}),
+    });
+  }
+
   /**
    * 把本面板当前任务计数推送给 Webview，用于锁定编辑但保留“继续入队”。
    * 仅在计数变化时发送，避免任务进度刷新造成额外消息。
@@ -576,6 +617,7 @@ class PreviewPanelSession implements vscode.Disposable {
    */
   private enqueueTask<T>(options: {
     operation: TaskOperation;
+    target?: TaskTarget;
     run: (context: OperationRunContext) => Promise<OperationOutcome<T> | void>;
     cancelledText?: string;
   }): EnqueuedOperation<T> {
@@ -584,6 +626,7 @@ class PreviewPanelSession implements vscode.Disposable {
       label,
       operation: options.operation,
       uri: this.sourceUri,
+      ...(options.target ? { target: options.target } : {}),
       run: options.run,
     });
     this.ownedTasks.add(job.taskId);
@@ -1729,10 +1772,17 @@ class PreviewPanelSession implements vscode.Disposable {
       );
       return;
     }
+    const targetView = this.lastModel?.blocks.find(
+      (block) => block.standaloneTargetId === targetId,
+    );
     this.enqueueTask({
       operation: "backtranslate",
+      target: {
+        scope: "block",
+        ...(targetView ? { blockKey: targetView.key } : {}),
+      },
       cancelledText: UI_TEXT.notifications.backCancelled,
-      run: async ({ signal, report }) => {
+      run: async ({ signal, report, recordRetry }) => {
         report({
           phase: UI_TEXT.notifications.targetInsertBackTranslating,
           completed: 0,
@@ -1746,6 +1796,7 @@ class PreviewPanelSession implements vscode.Disposable {
             stableTranslation: this.stableTranslation,
             summaryContext: this.summaryContext,
           },
+          () => recordRetry(),
         );
         if (this.disposed) {
           return { status: "success" };
@@ -1816,6 +1867,7 @@ class PreviewPanelSession implements vscode.Disposable {
     }
     this.enqueueTask({
       operation: "deleteTranslation",
+      target: { scope: "block", ...(view ? { blockKey: view.key } : {}) },
       run: async ({ report }) => {
         report({
           phase: UI_TEXT.notifications.targetSkipping,
@@ -2422,10 +2474,14 @@ class PreviewPanelSession implements vscode.Disposable {
     if (this.disposed) {
       return;
     }
+    const view = this.lastModel?.blocks.find(
+      (block) => block.blockIndex === blockIndex,
+    );
     this.enqueueTask({
       operation: "review",
+      target: { scope: "block", ...(view ? { blockKey: view.key } : {}) },
       cancelledText: UI_TEXT.notifications.reviewCancelled,
-      run: async ({ signal, report }) => {
+      run: async ({ signal, report, recordRetry }) => {
         report({
           phase: UI_TEXT.notifications.reviewingBlock,
           completed: 0,
@@ -2435,6 +2491,7 @@ class PreviewPanelSession implements vscode.Disposable {
           this.sourceUri,
           blockIndex,
           signal,
+          () => recordRetry(),
         );
         const text =
           result.added > 0
@@ -2464,8 +2521,9 @@ class PreviewPanelSession implements vscode.Disposable {
     }
     this.enqueueTask({
       operation: "review",
+      target: { scope: "file" },
       cancelledText: UI_TEXT.notifications.reviewCancelled,
-      run: async ({ signal, report }) => {
+      run: async ({ signal, report, recordRetry }) => {
         report({ phase: UI_TEXT.notifications.reviewingAll });
         const result = await this.syncService.reviewBlocks(
           this.sourceUri,
@@ -2481,6 +2539,7 @@ class PreviewPanelSession implements vscode.Disposable {
                 total,
               });
             },
+            onRetry: () => recordRetry(),
           },
         );
         const text =
@@ -2617,6 +2676,7 @@ class PreviewPanelSession implements vscode.Disposable {
     this.summaryGenerating = true;
     const job = this.enqueueTask({
       operation: "summary",
+      target: { scope: "file" },
       cancelledText: UI_TEXT.notifications.summaryCancelled,
       run: async ({ signal, report }) => {
         report({ phase: UI_TEXT.notifications.summaryGenerating });
@@ -2836,8 +2896,9 @@ class PreviewPanelSession implements vscode.Disposable {
     );
     this.enqueueTask({
       operation: "backtranslate",
+      target: { scope: "block", ...(view ? { blockKey: view.key } : {}) },
       cancelledText: UI_TEXT.notifications.backCancelled,
-      run: async ({ signal, report }) => {
+      run: async ({ signal, report, recordRetry }) => {
         report({
           phase: UI_TEXT.notifications.backTranslating,
           completed: 0,
@@ -2857,6 +2918,7 @@ class PreviewPanelSession implements vscode.Disposable {
             cacheDst: view?.cacheDst,
             human: view?.human,
           },
+          () => recordRetry(),
         );
         if (this.disposed) {
           return { status: "success" };
@@ -2979,8 +3041,9 @@ class PreviewPanelSession implements vscode.Disposable {
     }));
     this.enqueueTask({
       operation: "retranslate",
+      target: { scope: "blocks", blockKey: eligible[0]?.view.key },
       cancelledText: UI_TEXT.notifications.retranslateCancelled,
-      run: async ({ signal, report }) => {
+      run: async ({ signal, report, recordRetry }) => {
         report({
           phase: formatText(
             UI_TEXT.taskPanel.phases.retranslatingProgress,
@@ -3015,6 +3078,7 @@ class PreviewPanelSession implements vscode.Disposable {
               stableTranslation: this.stableTranslation,
               summaryContext: this.summaryContext,
             },
+            () => recordRetry(),
           );
         } catch (error) {
           if (signal.aborted || error instanceof CancelledError) {
@@ -3074,8 +3138,9 @@ class PreviewPanelSession implements vscode.Disposable {
     const total = eligible.length;
     this.enqueueTask({
       operation: "review",
+      target: { scope: "blocks", blockKey: eligible[0]?.view.key },
       cancelledText: UI_TEXT.notifications.reviewCancelled,
-      run: async ({ signal, report }) => {
+      run: async ({ signal, report, recordRetry }) => {
         report({
           phase: formatText(
             UI_TEXT.taskPanel.phases.reviewingProgress,
@@ -3106,6 +3171,7 @@ class PreviewPanelSession implements vscode.Disposable {
                 total: chunkTotal,
               });
             },
+            onRetry: () => recordRetry(),
           },
         );
         const text =
@@ -3149,8 +3215,9 @@ class PreviewPanelSession implements vscode.Disposable {
     const total = eligible.length;
     this.enqueueTask({
       operation: "backtranslate",
+      target: { scope: "blocks", blockKey: eligible[0]?.view.key },
       cancelledText: UI_TEXT.notifications.backCancelled,
-      run: async ({ signal, report }) => {
+      run: async ({ signal, report, recordRetry }) => {
         const failures: string[] = [];
         let processed = 0;
         let staged = 0;
@@ -3182,6 +3249,7 @@ class PreviewPanelSession implements vscode.Disposable {
                   cacheDst: selection.cacheDst ?? view.cacheDst,
                   human: selection.human ?? view.human,
                 },
+                () => recordRetry(),
               );
               if (this.disposed) {
                 return { status: "success" };
@@ -3275,6 +3343,7 @@ class PreviewPanelSession implements vscode.Disposable {
     const total = eligible.length;
     this.enqueueTask({
       operation: "markSynced",
+      target: { scope: "blocks", blockKey: eligible[0]?.view.key },
       run: async ({ signal, report }) => {
         const failures: string[] = [];
         let processed = 0;
@@ -3386,6 +3455,7 @@ class PreviewPanelSession implements vscode.Disposable {
     const total = eligible.length;
     this.enqueueTask({
       operation: "deleteTranslation",
+      target: { scope: "blocks", blockKey: eligible[0]?.view.key },
       run: async ({ signal, report }) => {
         const failures: string[] = [];
         let processed = 0;
@@ -3553,7 +3623,11 @@ class PreviewPanelSession implements vscode.Disposable {
     }
     this.enqueueTask({
       operation: mode === "sync" ? "sync" : "retranslate",
-      run: async ({ signal, report }) => {
+      target:
+        mode === "sync"
+          ? { scope: "file" }
+          : { scope: "fileBatch", revealFirstBlock: true },
+      run: async ({ signal, report, recordRetry }) => {
         try {
           const outcome =
             mode === "all"
@@ -3567,6 +3641,7 @@ class PreviewPanelSession implements vscode.Disposable {
                     stableTranslation: this.stableTranslation,
                     summaryContext: this.summaryContext,
                   },
+                  () => recordRetry(),
                 )
               : await this.syncService.sync(
                   this.sourceUri,
@@ -3580,6 +3655,7 @@ class PreviewPanelSession implements vscode.Disposable {
                     stableTranslation: this.stableTranslation,
                     summaryContext: this.summaryContext,
                   },
+                  () => recordRetry(),
                 );
           const { result } = outcome;
           await this.update();
@@ -3768,8 +3844,9 @@ class PreviewPanelSession implements vscode.Disposable {
     };
     this.enqueueTask({
       operation: "retranslate",
+      target: { scope: "block", ...(view ? { blockKey: view.key } : {}) },
       cancelledText: UI_TEXT.notifications.retranslateCancelled,
-      run: async ({ signal }) => {
+      run: async ({ signal, recordRetry }) => {
         let result: Awaited<
           ReturnType<SyncService["retranslateBlock"]>
         >;
@@ -3783,6 +3860,7 @@ class PreviewPanelSession implements vscode.Disposable {
               summaryContext: this.summaryContext,
             },
             guard,
+            () => recordRetry(),
           );
         } catch (error) {
           if (signal.aborted || error instanceof CancelledError) {
@@ -3839,6 +3917,7 @@ class PreviewPanelSession implements vscode.Disposable {
     };
     this.enqueueTask({
       operation: "markSynced",
+      target: { scope: "block", ...(view ? { blockKey: view.key } : {}) },
       run: async () => {
         await this.syncService.markSynced(this.sourceUri, blockIndex, guard);
         await this.update({

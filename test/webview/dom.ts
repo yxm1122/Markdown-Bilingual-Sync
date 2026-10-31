@@ -61,6 +61,12 @@ export function installDomPolyfills(): void {
   } else if (typeof css.escape !== "function") {
     css.escape = (value) => value;
   }
+  if (
+    typeof HTMLElement !== "undefined" &&
+    typeof HTMLElement.prototype.scrollIntoView !== "function"
+  ) {
+    HTMLElement.prototype.scrollIntoView = function scrollIntoView() {};
+  }
   if (typeof HTMLDialogElement !== "undefined") {
     HTMLDialogElement.prototype.showModal = function showModal() {
       this.setAttribute("open", "");

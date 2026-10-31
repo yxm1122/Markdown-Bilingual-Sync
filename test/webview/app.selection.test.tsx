@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 /** 测试：块多选、批量动作、任务活动锁定与任务面板入口。 */
-import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   cleanup,
   fireEvent,
@@ -69,19 +69,26 @@ function enterSelection(container: Element): void {
     screen.getByTitle(harness.text.preview.toolbar.selectBlocksTitle),
   );
   expect(container.querySelector(".pv-selection-bar")).toBeTruthy();
+  expect(container.querySelector(".pv-select-box")).toBeNull();
+  expect(
+    container.querySelector(".pv-app")?.classList.contains("is-selecting"),
+  ).toBe(true);
+}
+
+function blockAt(container: Element, index: number): HTMLElement {
+  return container.querySelectorAll(".pv-block")[index] as HTMLElement;
 }
 
 describe("block multi-select", () => {
-  it("selects blocks and sends one bulk retranslate selection including locked human blocks", () => {
+  it("selects blocks by clicking and sends one bulk retranslate selection including locked human blocks", () => {
     const { container } = render(
       <harness.App boot={makeBoot(selectionModel())} text={harness.text} />,
     );
     const text = harness.text.preview;
     enterSelection(container);
 
-    const checkboxes = screen.getAllByRole("checkbox");
-    fireEvent.click(checkboxes[0]);
-    fireEvent.click(checkboxes[1]);
+    fireEvent.click(blockAt(container, 0));
+    fireEvent.click(blockAt(container, 1));
     expect(screen.getByText("已选 2 块")).toBeTruthy();
 
     fireEvent.click(screen.getByTitle(text.selection.retranslate));
@@ -111,13 +118,51 @@ describe("block multi-select", () => {
     );
     enterSelection(container);
 
-    fireEvent.click(screen.getAllByRole("checkbox")[0]);
-    const thirdContent = container
-      .querySelectorAll(".pv-block")[2]
-      .querySelector(".pv-md");
-    fireEvent.click(thirdContent as HTMLElement, { shiftKey: true });
+    fireEvent.click(blockAt(container, 0));
+    fireEvent.click(blockAt(container, 2), { shiftKey: true });
 
     expect(screen.getByText("已选 3 块")).toBeTruthy();
+  });
+
+  it("selects a range by dragging across blocks", () => {
+    const { container } = render(
+      <harness.App boot={makeBoot(selectionModel())} text={harness.text} />,
+    );
+    enterSelection(container);
+    const first = blockAt(container, 0);
+    const third = blockAt(container, 2);
+
+    fireEvent.pointerDown(first, {
+      pointerId: 1,
+      button: 0,
+      buttons: 1,
+      clientX: 20,
+      clientY: 20,
+    });
+    fireEvent.pointerMove(third, {
+      pointerId: 1,
+      buttons: 1,
+      clientX: 20,
+      clientY: 260,
+    });
+    fireEvent.pointerUp(third, {
+      pointerId: 1,
+      button: 0,
+      clientX: 20,
+      clientY: 260,
+    });
+
+    expect(screen.getByText("已选 3 块")).toBeTruthy();
+  });
+
+  it("does not enter editing while selecting", () => {
+    const { container } = render(
+      <harness.App boot={makeBoot(selectionModel())} text={harness.text} />,
+    );
+    enterSelection(container);
+    fireEvent.click(blockAt(container, 0).querySelector(".pv-md") as HTMLElement);
+    expect(container.querySelector("textarea")).toBeNull();
+    expect(screen.getByText("已选 1 块")).toBeTruthy();
   });
 
   it("sends each bulk action with the same selectors", () => {
@@ -126,7 +171,7 @@ describe("block multi-select", () => {
     );
     const text = harness.text.preview;
     enterSelection(container);
-    fireEvent.click(screen.getAllByRole("checkbox")[0]);
+    fireEvent.click(blockAt(container, 0));
 
     fireEvent.click(screen.getByTitle(text.selection.review));
     fireEvent.click(screen.getByTitle(text.selection.backTranslate));
@@ -157,7 +202,7 @@ describe("block multi-select", () => {
       <harness.App boot={boot} text={harness.text} />,
     );
     enterSelection(container);
-    fireEvent.click(screen.getAllByRole("checkbox")[0]);
+    fireEvent.click(blockAt(container, 0));
     expect(screen.getByText("已选 1 块")).toBeTruthy();
 
     const blocks = boot.state.model.blocks.map((block, index) =>
@@ -173,7 +218,7 @@ describe("block multi-select", () => {
     expect(screen.getByText("已选 0 块")).toBeTruthy();
   });
 
-  it("keeps one selection checkbox per block in split view", () => {
+  it("selects blocks in split view from either pane", () => {
     const { container } = render(
       <harness.App
         boot={makeBoot(selectionModel(), { layout: "split" })}
@@ -181,18 +226,43 @@ describe("block multi-select", () => {
       />,
     );
     enterSelection(container);
-    expect(screen.getAllByRole("checkbox")).toHaveLength(3);
-
     const sourcePane = container.querySelector(
       '.pv-split-pane[data-pane="source"]',
     ) as HTMLElement;
+    fireEvent.click(
+      sourcePane.querySelector('.pv-cell[data-key="0"]') as HTMLElement,
+    );
+    expect(screen.getByText("已选 1 块")).toBeTruthy();
+
     fireEvent.click(
       within(sourcePane).getByTitle(
         harness.text.preview.actions.readonlyPreviewTitle,
       ),
     );
     expect(sourcePane.className).toContain("is-readonly");
-    expect(screen.getAllByRole("checkbox")).toHaveLength(3);
+    const targetPane = container.querySelector(
+      '.pv-split-pane[data-pane="target"]',
+    ) as HTMLElement;
+    fireEvent.click(
+      targetPane.querySelector('.pv-cell[data-key="1"]') as HTMLElement,
+    );
+    expect(screen.getByText("已选 2 块")).toBeTruthy();
+  });
+});
+
+describe("task target reveal", () => {
+  it("scrolls to the requested block", () => {
+    const spy = vi
+      .spyOn(HTMLElement.prototype, "scrollIntoView")
+      .mockImplementation(() => undefined);
+    const { container } = render(
+      <harness.App boot={makeBoot(selectionModel())} text={harness.text} />,
+    );
+    postHostMessage({ type: "revealBlock", blockKey: "1" });
+    expect(spy).toHaveBeenCalled();
+    const revealed = container.querySelector(".pv-block.is-revealed");
+    expect(revealed?.getAttribute("data-key")).toBe("1");
+    spy.mockRestore();
   });
 });
 

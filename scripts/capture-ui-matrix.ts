@@ -790,7 +790,7 @@ async function main(): Promise<void> {
 
       await page.click(".pv-toolbar-actions .pv-icon-button");
       await page.waitFor("document.querySelector('.pv-selection-bar')");
-      await page.click(".pv-select-box");
+      await page.click(".pv-block");
       records.push(await page.shot(theme, "selection"));
       console.log("  ✓ selection");
       await page.click(".pv-selection-tools .pv-icon-button");

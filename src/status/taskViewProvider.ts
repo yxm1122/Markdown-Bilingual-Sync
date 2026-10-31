@@ -62,16 +62,35 @@ interface TaskNode {
   task: TranslationTaskView;
   section: "active" | "finished";
   children: DetailNode[];
+  /** 分组内的紧凑标签；为空时使用文件路径。 */
+  compactLabel?: string;
 }
 
-export type TaskTreeNode = SectionNode | StatNode | DetailNode | TaskNode;
+interface TaskGroupNode {
+  kind: "group";
+  id: string;
+  label: string;
+  section: "active" | "finished";
+  tasks: TranslationTaskView[];
+  children: TaskNode[];
+  /** 后面是否出现了大任务；用于默认折叠。 */
+  hasLargeAfter: boolean;
+}
+
+export type TaskTreeNode =
+  | SectionNode
+  | StatNode
+  | DetailNode
+  | TaskNode
+  | TaskGroupNode;
 
 /** 视图配置：不包含 extensionUri，TreeView 不需要自行加载 Webview 资源。 */
 export interface TaskViewProviderOptions {
   monitor: TranslationTaskMonitor;
   limiter: ConcurrencyLimiter;
   output: vscode.OutputChannel;
-  openPreview: (uri: vscode.Uri) => void;
+  /** 按任务元数据打开预览：块级任务定位到块，批量任务定位第一个块。 */
+  openTask: (task: TranslationTaskView) => void;
   getSystemInfo: () => {
     provider: string;
     model: string;
@@ -116,6 +135,60 @@ function statusIcon(status: TranslationTaskStatus): {
         color: new vscode.ThemeColor("disabledForeground"),
       };
   }
+}
+
+/** 任务图标按操作/作用域区分；状态颜色沿用任务状态。 */
+function taskIcon(task: TranslationTaskView): {
+  icon: string;
+  color: vscode.ThemeColor;
+} {
+  const color = statusIcon(task.status).color;
+  if (task.scope === "blocks") {
+    return { icon: "layers", color };
+  }
+  if (task.scope === "fileBatch") {
+    return { icon: "files", color };
+  }
+  switch (task.operation) {
+    case "summary":
+      return { icon: "book", color };
+    case "review":
+      return {
+        icon: task.scope === "block" ? "comment" : "comment-discussion",
+        color,
+      };
+    case "backtranslate":
+      return { icon: "arrow-swap", color };
+    case "markSynced":
+      return { icon: "check", color };
+    case "deleteTranslation":
+      return { icon: "trash", color };
+    case "retranslate":
+      return {
+        icon: task.scope === "block" ? "symbol-field" : "refresh",
+        color,
+      };
+    case "sync":
+      return { icon: "sync", color };
+    default:
+      return statusIcon(task.status);
+  }
+}
+
+function groupColor(tasks: readonly TranslationTaskView[]): vscode.ThemeColor {
+  if (tasks.some((task) => task.status === "failed" || task.status === "partial")) {
+    return new vscode.ThemeColor("errorForeground");
+  }
+  if (tasks.some((task) => task.status === "running")) {
+    return new vscode.ThemeColor("charts.blue");
+  }
+  if (tasks.some((task) => task.status === "queued")) {
+    return new vscode.ThemeColor("descriptionForeground");
+  }
+  if (tasks.every((task) => task.status === "success")) {
+    return new vscode.ThemeColor("testing.iconPassed");
+  }
+  return new vscode.ThemeColor("disabledForeground");
 }
 
 function statusLabel(status: TranslationTaskStatus): string {
@@ -176,9 +249,12 @@ function taskProgress(task: TranslationTaskView): string {
   return "";
 }
 
-function taskDescription(task: TranslationTaskView): string {
+function taskDescription(
+  task: TranslationTaskView,
+  includeOperation = true,
+): string {
   const parts: string[] = [];
-  const operation = operationLabel(task.operation);
+  const operation = includeOperation ? operationLabel(task.operation) : "";
   if (operation) {
     parts.push(operation);
   }
@@ -201,6 +277,13 @@ function taskDescription(task: TranslationTaskView): string {
       formatText(UI_TEXT.taskPanel.failedSuffix, {
         failed: task.failed,
       }).replace(/^\s*·\s*/, ""),
+    );
+  }
+  if ((task.retries ?? 0) > 0) {
+    parts.push(
+      formatText(UI_TEXT.taskPanel.retryCount, {
+        count: task.retries ?? 0,
+      }),
     );
   }
   return parts.join(" · ");
@@ -226,6 +309,14 @@ function taskTooltip(task: TranslationTaskView): vscode.MarkdownString {
     tooltip.appendMarkdown("  \n");
     tooltip.appendText(task.error);
   }
+  if ((task.retries ?? 0) > 0) {
+    tooltip.appendMarkdown("  \n");
+    tooltip.appendText(
+      formatText(UI_TEXT.taskPanel.retryCount, {
+        count: task.retries ?? 0,
+      }),
+    );
+  }
   if (task.startedAt) {
     tooltip.appendMarkdown("  \n");
     tooltip.appendText(
@@ -248,6 +339,8 @@ export class TaskViewProvider
   private updateTimer?: ReturnType<typeof setTimeout>;
   private readonly unsubscribers: Array<() => void> = [];
   private readonly commandDisposables: vscode.Disposable[] = [];
+  private readonly expandedGroups = new Set<string>();
+  private readonly collapsedGroups = new Set<string>();
   private languageUpdateQueue: Promise<void> = Promise.resolve();
   private readonly sections: SectionNode[] = [
     {
@@ -332,25 +425,90 @@ export class TaskViewProvider
         return item;
       }
       case "task": {
-        const icon = statusIcon(node.task.status);
+        const icon = taskIcon(node.task);
         const item = new vscode.TreeItem(
-          node.task.label,
+          node.compactLabel ?? node.task.label,
           node.children.length > 0
             ? vscode.TreeItemCollapsibleState.Collapsed
             : vscode.TreeItemCollapsibleState.None,
         );
         item.id = node.id;
-        item.description = taskDescription(node.task);
+        item.description = taskDescription(
+          node.task,
+          !node.compactLabel,
+        );
         item.tooltip = taskTooltip(node.task);
         item.iconPath = new vscode.ThemeIcon(icon.icon, icon.color);
         item.contextValue = node.section === "active" ? "taskActive" : "taskFinished";
         if (node.task.uri) {
           item.command = {
-            command: "markdownBilingualSync.task.openSource",
-            title: UI_TEXT.taskPanel.openSource,
+            command: "markdownBilingualSync.task.openPreview",
+            title: UI_TEXT.taskPanel.openPreview,
             arguments: [node],
           };
         }
+        return item;
+      }
+      case "group": {
+        const auto = node.hasLargeAfter
+          ? vscode.TreeItemCollapsibleState.Collapsed
+          : vscode.TreeItemCollapsibleState.Expanded;
+        const state = this.expandedGroups.has(node.id)
+          ? vscode.TreeItemCollapsibleState.Expanded
+          : this.collapsedGroups.has(node.id)
+            ? vscode.TreeItemCollapsibleState.Collapsed
+            : auto;
+        const item = new vscode.TreeItem(node.label, state);
+        item.id = node.id;
+        const running = node.tasks.filter(
+          (task) => task.status === "running",
+        ).length;
+        const queued = node.tasks.filter(
+          (task) => task.status === "queued",
+        ).length;
+        item.description = [
+          formatText(UI_TEXT.taskPanel.smallTaskGroup, {
+            count: node.tasks.length,
+          }),
+          ...(running > 0
+            ? [`${running} ${UI_TEXT.taskPanel.statusLabels.running}`]
+            : []),
+          ...(queued > 0
+            ? [`${queued} ${UI_TEXT.taskPanel.statusLabels.queued}`]
+            : []),
+        ].join(" · ");
+        const tooltip = new vscode.MarkdownString();
+        tooltip.appendText(node.label);
+        tooltip.appendMarkdown("\n\n");
+        tooltip.appendText(
+          formatText(UI_TEXT.taskPanel.smallTaskGroup, {
+            count: node.tasks.length,
+          }),
+        );
+        tooltip.appendMarkdown("  \n");
+        tooltip.appendText(UI_TEXT.taskPanel.smallTaskGroupHint);
+        for (const child of node.children.slice(0, 8)) {
+          tooltip.appendMarkdown("\n- ");
+          tooltip.appendText(child.compactLabel ?? child.task.label);
+          tooltip.appendText(" · ");
+          tooltip.appendText(
+            taskDescription(child.task, !child.compactLabel),
+          );
+        }
+        if (node.children.length > 8) {
+          tooltip.appendMarkdown("\n");
+          tooltip.appendText(
+            formatText(UI_TEXT.statusBar.moreTasks, {
+              count: node.children.length - 8,
+            }),
+          );
+        }
+        item.tooltip = tooltip;
+        item.iconPath = new vscode.ThemeIcon(
+          "list-selection",
+          groupColor(node.tasks),
+        );
+        item.contextValue = "taskGroup";
         return item;
       }
     }
@@ -385,6 +543,7 @@ export class TaskViewProvider
       case "section":
         return this.sectionChildren(node.id);
       case "task":
+      case "group":
         return node.children;
       default:
         return [];
@@ -473,7 +632,7 @@ export class TaskViewProvider
             },
           ];
         }
-        return snapshot.active.map((task) => this.taskNode(task, "active"));
+        return this.groupTaskNodes(snapshot.active, "active");
       case "history":
         if (snapshot.finished.length === 0) {
           return [
@@ -487,7 +646,7 @@ export class TaskViewProvider
             },
           ];
         }
-        return snapshot.finished.map((task) => this.taskNode(task, "finished"));
+        return this.groupTaskNodes(snapshot.finished, "finished");
       case "system": {
         const info = this.options.getSystemInfo();
         return [
@@ -526,9 +685,65 @@ export class TaskViewProvider
     }
   }
 
+  /** 连续的同文件块级小任务合并为可折叠组；大任务出现后默认折叠。 */
+  private groupTaskNodes(
+    tasks: readonly TranslationTaskView[],
+    section: "active" | "finished",
+  ): TaskTreeNode[] {
+    const nodes: TaskTreeNode[] = [];
+    let run: TranslationTaskView[] = [];
+    const flush = () => {
+      if (run.length === 0) {
+        return;
+      }
+      if (run.length === 1) {
+        nodes.push(this.taskNode(run[0], section));
+      } else {
+        const first = run[0];
+        const last = run[run.length - 1];
+        nodes.push({
+          kind: "group",
+          id: `group:${section}:${first.label}:${first.id}-${last.id}`,
+          label: first.label,
+          section,
+          tasks: [...run],
+          children: run.map((task) => this.taskNode(task, section, true)),
+          hasLargeAfter: false,
+        });
+      }
+      run = [];
+    };
+    for (const task of tasks) {
+      if (task.scope === "block") {
+        if (run.length > 0 && run[0].label !== task.label) {
+          flush();
+        }
+        run.push(task);
+      } else {
+        flush();
+        nodes.push(this.taskNode(task, section));
+      }
+    }
+    flush();
+
+    let largeAfter = false;
+    for (let index = nodes.length - 1; index >= 0; index -= 1) {
+      const node = nodes[index];
+      if (node.kind === "group") {
+        node.hasLargeAfter = largeAfter;
+        // 大任务出现/消失时换一个 TreeItem id，让 VS Code 重新采用默认折叠状态。
+        node.id = `${node.id}:${largeAfter ? "folded" : "open"}`;
+      } else if (node.kind === "task" && node.task.scope !== "block") {
+        largeAfter = true;
+      }
+    }
+    return nodes;
+  }
+
   private taskNode(
     task: TranslationTaskView,
     section: "active" | "finished",
+    compact = false,
   ): TaskNode {
     const children: DetailNode[] = [];
     if (task.error) {
@@ -554,6 +769,23 @@ export class TaskViewProvider
       task,
       section,
       children,
+      ...(compact
+        ? {
+            compactLabel:
+              [
+                operationLabel(task.operation),
+                ...(task.blockKey && /^\d+$/.test(task.blockKey)
+                  ? [
+                      formatText(UI_TEXT.taskPanel.blockLabel, {
+                        index: Number(task.blockKey) + 1,
+                      }),
+                    ]
+                  : []),
+              ]
+                .filter(Boolean)
+                .join(" · ") || task.label,
+          }
+        : {}),
     };
   }
 
@@ -561,6 +793,20 @@ export class TaskViewProvider
 
   setTreeView(view: vscode.TreeView<TaskTreeNode>): void {
     this.treeView = view;
+    this.commandDisposables.push(
+      view.onDidExpandElement((event) => {
+        if (event.element.kind === "group") {
+          this.expandedGroups.add(event.element.id);
+          this.collapsedGroups.delete(event.element.id);
+        }
+      }),
+      view.onDidCollapseElement((event) => {
+        if (event.element.kind === "group") {
+          this.collapsedGroups.add(event.element.id);
+          this.expandedGroups.delete(event.element.id);
+        }
+      }),
+    );
     this.updateViewMeta();
   }
 
@@ -683,7 +929,7 @@ export class TaskViewProvider
     register("markdownBilingualSync.task.openPreview", (arg) => {
       const task = this.resolveTask(arg);
       if (task?.uri) {
-        this.options.openPreview(task.uri);
+        this.options.openTask(task);
       }
     });
     register("markdownBilingualSync.task.cancel", (arg) => {

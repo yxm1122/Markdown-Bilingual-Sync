@@ -16,6 +16,7 @@ import { UI_TEXT } from "../i18n";
 import {
   failedTaskPatch,
   type TaskOperation,
+  type TaskTarget,
   type TranslationTaskMonitor,
   type TranslationTaskStatus,
 } from "./taskMonitor";
@@ -32,6 +33,8 @@ export interface OperationReport {
 export interface OperationRunContext {
   readonly signal: AbortSignal;
   report(patch: OperationReport): void;
+  /** 记录一次 Provider 自动重试；用于任务悬浮详情。 */
+  recordRetry(count?: number): void;
 }
 
 /** 任务最终状态（不含活动态）。 */
@@ -60,6 +63,8 @@ export interface OperationRequest<T = unknown> {
   operation: TaskOperation;
   /** 文件 URI；同一 URI 的任务串行执行。省略时任务不参与文件互斥。 */
   uri?: vscode.Uri;
+  /** 任务作用域与预览跳转目标。 */
+  target?: TaskTarget;
   run(context: OperationRunContext): Promise<OperationOutcome<T> | void>;
 }
 
@@ -125,6 +130,7 @@ export class OperationScheduler {
       request.label,
       request.uri,
       request.operation,
+      request.target,
     );
     const controller = new AbortController();
     let resolve!: (settlement: OperationSettlement<unknown>) => void;
@@ -224,6 +230,8 @@ export class OperationScheduler {
     const context: OperationRunContext = {
       signal: item.controller.signal,
       report: (patch) => this.monitor.update(item.taskId, patch),
+      recordRetry: (count = 1) =>
+        this.monitor.recordRetry(item.taskId, count),
     };
 
     void (async () => {

@@ -238,7 +238,26 @@ export interface ReviewRequest {
   brief?: TranslationBrief;
   glossary: GlossaryEntry[];
   items: ReviewItem[];
+  /** 自动重试诊断；Provider 在重试前调用。 */
+  onRetry?: TranslationRetryReporter;
 }
+
+/** Provider 自动重试的诊断信息；用于任务悬浮详情。 */
+export interface TranslationRetryInfo {
+  reasons: readonly string[];
+  /** 即将发出的尝试序号（1 基）。 */
+  attempt: number;
+  batchSize?: number;
+  /** 本次重试涉及的块 id；合并请求中为复合 id。 */
+  itemIds?: readonly string[];
+  delayMs?: number;
+  status?: number;
+}
+
+/** Provider 自动重试回调；回调异常不得影响翻译。 */
+export type TranslationRetryReporter = (
+  info: TranslationRetryInfo,
+) => void;
 
 /** 一次翻译请求；items/glossary/summary 视为只读，Provider 不得修改调用方数据。 */
 export interface TranslationRequest {
@@ -255,6 +274,8 @@ export interface TranslationRequest {
   brief?: TranslationBrief;
   /** 可选只读邻块上下文；只用于单块请求。 */
   context?: TranslationContext;
+  /** 自动重试诊断；Provider 在重试前调用。 */
+  onRetry?: TranslationRetryReporter;
 }
 
 /** 从相对路径与 frontmatter 白名单提取的只读文档元数据。 */
@@ -289,6 +310,8 @@ export interface SummaryRequest {
   documentMetadata?: DocumentMetadata;
   /** 用户全局/工作区术语表；生成文档术语表时应优先沿用这些目标词。 */
   glossary?: GlossaryEntry[];
+  /** 自动重试诊断；Provider 在重试前调用。 */
+  onRetry?: TranslationRetryReporter;
 }
 
 /** 摘要生成结果：摘要正文 + 随摘要生成的文档术语表 + 可选翻译要求。 */

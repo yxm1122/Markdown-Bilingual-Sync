@@ -1,6 +1,6 @@
 /** 测试：任务 TreeView 的语言切换、节点映射与作用域。 */
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { UI_TEXT } from "../src/i18n";
+import { formatText, UI_TEXT } from "../src/i18n";
 import { TaskViewProvider } from "../src/status/taskViewProvider";
 import type { TaskSnapshot } from "../src/status/taskMonitor";
 
@@ -32,6 +32,7 @@ const mocks = vi.hoisted(() => {
     workspaceValues: {},
   };
   const showErrorMessage = vi.fn();
+  const commandHandlers = new Map<string, (...args: unknown[]) => unknown>();
   const getConfiguration = vi.fn(() => ({
     get(key: string, fallback?: unknown) {
       const value = (state as unknown as Record<string, unknown>)[key];
@@ -61,6 +62,7 @@ const mocks = vi.hoisted(() => {
     state,
     showErrorMessage,
     getConfiguration,
+    commandHandlers,
   };
 });
 
@@ -76,6 +78,16 @@ vi.mock("vscode", async (importOriginal) => {
     window: {
       ...actual.vscodeStub.window,
       showErrorMessage: mocks.showErrorMessage,
+    },
+    commands: {
+      ...actual.vscodeStub.commands,
+      registerCommand: (
+        id: string,
+        handler: (...args: unknown[]) => unknown,
+      ) => {
+        mocks.commandHandlers.set(id, handler);
+        return { dispose() {} };
+      },
     },
   };
 });
@@ -103,12 +115,12 @@ function createProvider(snapshot: TaskSnapshot = EMPTY_SNAPSHOT) {
     limit: 8,
   };
   const output = { appendLine: vi.fn(), show: vi.fn() };
-  const openPreview = vi.fn();
+  const openTask = vi.fn();
   const provider = new TaskViewProvider({
     monitor: monitor as never,
     limiter: limiter as never,
     output: output as never,
-    openPreview,
+    openTask,
     getSystemInfo: () => ({
       provider: "Mock",
       model: "Mock",
@@ -116,7 +128,7 @@ function createProvider(snapshot: TaskSnapshot = EMPTY_SNAPSHOT) {
       batchSize: 50,
     }),
   });
-  return { provider, monitor, output, openPreview };
+  return { provider, monitor, output, openTask };
 }
 
 function resetLanguageState(): void {
@@ -322,7 +334,7 @@ describe("TaskViewProvider tree mapping", () => {
     expect(runningItem.contextValue).toBe("taskActive");
     expect(runningItem.collapsibleState).toBe(1);
     expect(runningItem.command?.command).toBe(
-      "markdownBilingualSync.task.openSource",
+      "markdownBilingualSync.task.openPreview",
     );
     expect(runningItem.iconPath.id).toBe("sync~spin");
     expect(runningItem.iconPath.color?.id).toBe("charts.blue");
@@ -483,6 +495,160 @@ describe("TaskViewProvider tree mapping", () => {
     );
     expect(description(activeTasks[1])).toContain(
       UI_TEXT.taskPanel.statusLabels.queued,
+    );
+    provider.dispose();
+  });
+
+  it("shows retry counts and operation-specific icons", () => {
+    const snapshot: TaskSnapshot = {
+      activeCount: 1,
+      recentFailure: false,
+      active: [
+        {
+          id: 31,
+          label: "docs/retry.md",
+          status: "running",
+          operation: "retranslate",
+          scope: "block",
+          blockKey: "2",
+          retries: 2,
+          phase: "正在重新翻译",
+          completed: 0,
+          total: 1,
+          failed: 0,
+          startedAt: Date.now() - 1_000,
+        },
+      ],
+      finished: [],
+    };
+    const { provider } = createProvider(snapshot);
+    const sections = provider.getChildren();
+    const activeTasks = provider.getChildren(sections[1] as never);
+    const item = provider.getTreeItem(activeTasks[0] as never) as unknown as {
+      description: string;
+      iconPath: { id: string };
+    };
+    expect(item.description).toContain(
+      formatText(UI_TEXT.taskPanel.retryCount, { count: 2 }),
+    );
+    expect(item.iconPath.id).toBe("symbol-field");
+    provider.dispose();
+  });
+
+  it("groups consecutive small block tasks and folds them after a large task", () => {
+    const now = Date.now();
+    const snapshot: TaskSnapshot = {
+      activeCount: 3,
+      recentFailure: false,
+      active: [
+        {
+          id: 41,
+          label: "docs/a.md",
+          status: "queued",
+          operation: "retranslate",
+          scope: "block",
+          blockKey: "0",
+          phase: "等待开始",
+          completed: 0,
+          total: 0,
+          failed: 0,
+        },
+        {
+          id: 42,
+          label: "docs/a.md",
+          status: "queued",
+          operation: "review",
+          scope: "block",
+          blockKey: "1",
+          phase: "等待开始",
+          completed: 0,
+          total: 0,
+          failed: 0,
+        },
+        {
+          id: 43,
+          label: "docs/a.md",
+          status: "running",
+          operation: "sync",
+          scope: "file",
+          phase: "正在同步",
+          completed: 0,
+          total: 0,
+          failed: 0,
+          startedAt: now - 1_000,
+        },
+      ],
+      finished: [],
+    };
+    const { provider } = createProvider(snapshot);
+    const sections = provider.getChildren();
+    const activeNodes = provider.getChildren(sections[1] as never);
+    const group = activeNodes[0] as unknown as {
+      kind: string;
+      id: string;
+      children: unknown[];
+    };
+    expect(group.kind).toBe("group");
+    expect(group.children).toHaveLength(2);
+    const groupItem = provider.getTreeItem(group as never) as unknown as {
+      description: string;
+      collapsibleState: number;
+      iconPath: { id: string };
+    };
+    expect(groupItem.description).toContain(
+      formatText(UI_TEXT.taskPanel.smallTaskGroup, { count: 2 }),
+    );
+    expect(groupItem.description).toContain(
+      UI_TEXT.taskPanel.statusLabels.queued,
+    );
+    expect(groupItem.iconPath.id).toBe("list-selection");
+    expect(groupItem.collapsibleState).toBe(1);
+
+    const firstChild = provider.getTreeItem(
+      group.children[0] as never,
+    ) as unknown as { label: string };
+    expect(firstChild.label).toBe(
+      `${UI_TEXT.taskPanel.operations.retranslate} · ${formatText(
+        UI_TEXT.taskPanel.blockLabel,
+        { index: 1 },
+      )}`,
+    );
+    provider.dispose();
+  });
+
+  it("routes row clicks through openTask with block metadata", () => {
+    const snapshot: TaskSnapshot = {
+      activeCount: 1,
+      recentFailure: false,
+      active: [
+        {
+          id: 51,
+          label: "docs/a.md",
+          uri: { fsPath: "/docs/a.md" } as never,
+          status: "running",
+          operation: "retranslate",
+          scope: "block",
+          blockKey: "4",
+          phase: "正在重新翻译",
+          completed: 0,
+          total: 1,
+          failed: 0,
+          startedAt: Date.now() - 1_000,
+        },
+      ],
+      finished: [],
+    };
+    const { provider, openTask } = createProvider(snapshot);
+    provider.registerCommands();
+    const sections = provider.getChildren();
+    const node = provider.getChildren(sections[1] as never)[0];
+    const handler = mocks.commandHandlers.get(
+      "markdownBilingualSync.task.openPreview",
+    );
+    expect(handler).toBeTruthy();
+    handler?.(node);
+    expect(openTask).toHaveBeenCalledWith(
+      expect.objectContaining({ blockKey: "4" }),
     );
     provider.dispose();
   });

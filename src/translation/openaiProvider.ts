@@ -102,6 +102,8 @@ export interface OpenAIRetryInfo {
   attempt: number;
   /** 翻译批次或审校分片的条目数；其他请求可能省略。 */
   batchSize?: number;
+  /** 本次重试涉及的块 id；用于把重试事件路由回对应任务。 */
+  itemIds?: readonly string[];
   /** 重试前等待毫秒数；仅 HTTP/网络/超时重试有值。 */
   delayMs?: number;
   /** HTTP 状态码；仅 HTTP 重试有值。 */
@@ -1385,6 +1387,22 @@ export class OpenAITranslationProvider implements TranslationProvider {
     }
   }
 
+  /** 同时通知全局诊断与当前请求；后者用于把重试次数记到任务上。 */
+  private notifyRequestRetry(
+    request: { onRetry?: (info: OpenAIRetryInfo) => void },
+    info: OpenAIRetryInfo,
+  ): void {
+    this.notifyRetry(info);
+    if (!request.onRetry) {
+      return;
+    }
+    try {
+      request.onRetry(info);
+    } catch {
+      /* 诊断不应中断翻译 */
+    }
+  }
+
   /**
    * 分批翻译并增量交付。
    *
@@ -1619,10 +1637,11 @@ export class OpenAITranslationProvider implements TranslationProvider {
           error.retryWithHint
         ) {
           hint = REVIEW_RETRY_HINT;
-          this.notifyRetry({
+          this.notifyRequestRetry(request, {
             reasons: ["review-parse"],
             attempt: attempt + 2,
             batchSize: request.items.length,
+            itemIds: request.items.map((item) => item.id),
           });
           continue;
         }
@@ -1842,6 +1861,7 @@ export class OpenAITranslationProvider implements TranslationProvider {
     let glossaryAttempt = false;
     let extraHint: string | undefined;
     let requestAttempt = 0;
+    const itemIds = batch.map((item) => item.id);
     for (;;) {
       requestAttempt += 1;
       let batchResults: TranslationResultItem[];
@@ -1865,10 +1885,11 @@ export class OpenAITranslationProvider implements TranslationProvider {
           httpAttempt < 1
         ) {
           httpAttempt += 1;
-          this.notifyRetry({
+          this.notifyRequestRetry(request, {
             reasons: ["http"],
             attempt: requestAttempt + 1,
             batchSize: batch.length,
+            itemIds,
             delayMs: this.retryDelayMs,
             ...(error.status !== undefined ? { status: error.status } : {}),
           });
@@ -1881,10 +1902,11 @@ export class OpenAITranslationProvider implements TranslationProvider {
           !hintAttempt
         ) {
           hintAttempt = true;
-          this.notifyRetry({
+          this.notifyRequestRetry(request, {
             reasons: ["validation"],
             attempt: requestAttempt + 1,
             batchSize: batch.length,
+            itemIds,
           });
           continue;
         }
@@ -1902,10 +1924,11 @@ export class OpenAITranslationProvider implements TranslationProvider {
         if (!hintAttempt) {
           hintAttempt = true;
           extraHint = formatValidationHint(batch, batchResults) ?? extraHint;
-          this.notifyRetry({
+          this.notifyRequestRetry(request, {
             reasons: ["validation"],
             attempt: requestAttempt + 1,
             batchSize: batch.length,
+            itemIds,
           });
           continue;
         }
@@ -1934,10 +1957,11 @@ export class OpenAITranslationProvider implements TranslationProvider {
       }
       if (hints.length > 0) {
         extraHint = hints.join("\n");
-        this.notifyRetry({
+        this.notifyRequestRetry(request, {
           reasons: retryReasons,
           attempt: requestAttempt + 1,
           batchSize: batch.length,
+            itemIds,
         });
         continue;
       }

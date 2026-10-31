@@ -88,6 +88,39 @@ function blockSelectionSignature(block: PreviewBlockView): string {
   ].join("|");
 }
 
+/** 多选/拖选时命中的块 key；只认带 data-key 的块或分栏单元格。 */
+function selectionKeyFromTarget(target: EventTarget | null): string | null {
+  if (!(target instanceof Element)) {
+    return null;
+  }
+  const node = target.closest<HTMLElement>(
+    ".pv-block[data-key], .pv-cell[data-key]",
+  );
+  return node?.dataset.key ?? null;
+}
+
+/** 交互控件不参与块选择，避免误触链接、按钮和编辑器。 */
+function isSelectionInteractiveTarget(target: EventTarget | null): boolean {
+  return (
+    target instanceof Element &&
+    Boolean(
+      target.closest(
+        "a,button,input,textarea,select,label,summary,dialog",
+      ),
+    )
+  );
+}
+
+interface DragSelectionState {
+  pointerId: number;
+  mode: "select" | "deselect";
+  anchorKey: string;
+  lastKey: string;
+  startX: number;
+  startY: number;
+  started: boolean;
+}
+
 interface EditingState {
   key: string;
   side: Side;
@@ -1462,6 +1495,14 @@ function Toolbar(props: {
           <Icon name="comment-discussion" size={14} />
           {text.preview.toolbar.reviewMachine}
         </Button>
+        <Button
+          disabled={locked || !model.cacheExists}
+          title={model.cacheExists ? undefined : text.preview.toolbar.exportDisabledTitle}
+          onClick={props.onExport}
+        >
+          <Icon name="export" size={14} />
+          {text.preview.toolbar.export}
+        </Button>
         <IconButton
           icon="checklist"
           title={
@@ -1473,14 +1514,6 @@ function Toolbar(props: {
           disabled={busy || !props.canSelect}
           onClick={props.onToggleSelection}
         />
-        <Button
-          disabled={locked || !model.cacheExists}
-          title={model.cacheExists ? undefined : text.preview.toolbar.exportDisabledTitle}
-          onClick={props.onExport}
-        >
-          <Icon name="export" size={14} />
-          {text.preview.toolbar.export}
-        </Button>
         <IconButton
           icon="refresh"
           title={text.preview.toolbar.refresh}
@@ -1662,7 +1695,7 @@ function SelectionBar(props: {
       role="region"
       aria-label={t.actionGroup}
     >
-      <div class="pv-selection-summary">
+      <div class="pv-selection-summary" title={t.hint}>
         <Icon name="checklist" size={14} />
         <strong>{fmt(t.selected, { count: props.selectedCount })}</strong>
         <span class="pv-selection-hint">{t.hint}</span>
@@ -3133,28 +3166,10 @@ function BlockHead(props: {
   onAnnotations?: () => void;
   showLine?: boolean;
   selectionMode?: boolean;
-  selected?: boolean;
-  onToggleSelect?: (block: PreviewBlockView, shiftKey: boolean) => void;
 }) {
   const { block, text } = props;
   return (
     <header class="pv-block-head">
-      {props.selectionMode && block.blockIndex >= 0 ? (
-        <input
-          type="checkbox"
-          class="pv-select-box"
-          checked={Boolean(props.selected)}
-          aria-label={fmt(text.preview.selection.selectBlock, {
-            index: block.sourceLine || block.blockIndex + 1,
-          })}
-          onClick={(event) => {
-            event.preventDefault();
-            event.stopPropagation();
-            props.onToggleSelect?.(block, event.shiftKey);
-          }}
-          onChange={() => undefined}
-        />
-      ) : null}
       <span class="pv-kind">{text.preview.kindLabels[block.kind] ?? block.kind}</span>
       <span class="pv-status" style={`--status-color:${statusColor(block)}`}>
         <Icon name={statusIcon(block)} />
@@ -3212,7 +3227,6 @@ function PairedBlock(props: {
   insert: InsertState | null;
   selectionMode: boolean;
   selected: boolean;
-  onToggleSelect: (block: PreviewBlockView, shiftKey: boolean) => void;
   onMenu: (event: MouseEvent, block: PreviewBlockView, side?: Side) => void;
   onRetranslate: (block: PreviewBlockView) => void;
   onAnnotations: (block: PreviewBlockView) => void;
@@ -3228,30 +3242,12 @@ function PairedBlock(props: {
     props.insert && props.insert.afterBlockIndex === block.blockIndex
       ? props.insert
       : null;
-  const toggleFromSurface = (event: MouseEvent) => {
-    if (!props.selectionMode) {
-      return;
-    }
-    const selection = window.getSelection();
-    if (selection && !selection.isCollapsed && selection.toString().trim()) {
-      return;
-    }
-    const target = event.target;
-    if (
-      target instanceof Element &&
-      target.closest("a,button,input,textarea,select,label,summary")
-    ) {
-      return;
-    }
-    props.onToggleSelect(block, event.shiftKey);
-  };
   return (
     <Fragment>
       <article
         class={`pv-block${props.selected ? " is-selected" : ""}`}
         data-status={block.status}
         data-key={block.key}
-        onClick={toggleFromSurface}
       >
         <BlockHead
           block={block}
@@ -3259,8 +3255,6 @@ function PairedBlock(props: {
           actions
           showLine
           selectionMode={props.selectionMode}
-          selected={props.selected}
-          onToggleSelect={props.onToggleSelect}
           onMenu={(event) => props.onMenu(event, block)}
           onRetranslate={() => props.onRetranslate(block)}
           onAnnotations={() => props.onAnnotations(block)}
@@ -3310,8 +3304,6 @@ function SplitCell(props: {
   editing: EditingState | null;
   selectionMode: boolean;
   selected: boolean;
-  showSelection: boolean;
-  onToggleSelect: (block: PreviewBlockView, shiftKey: boolean) => void;
   onMenu: (event: MouseEvent, block: PreviewBlockView, side: Side) => void;
   onStartEdit: (block: PreviewBlockView, side: Side) => void;
   onRetranslate: (block: PreviewBlockView) => void;
@@ -3325,49 +3317,15 @@ function SplitCell(props: {
   const hidden =
     (isTarget && Boolean(block.pendingInsertId)) ||
     (!isTarget && Boolean(block.standaloneTargetId));
-  const toggleFromSurface = (event: MouseEvent) => {
-    if (!props.selectionMode) {
-      return;
-    }
-    const selection = window.getSelection();
-    if (selection && !selection.isCollapsed && selection.toString().trim()) {
-      return;
-    }
-    const target = event.target;
-    if (
-      target instanceof Element &&
-      target.closest("a,button,input,textarea,select,label,summary")
-    ) {
-      return;
-    }
-    props.onToggleSelect(block, event.shiftKey);
-  };
   return (
     <article
       class={`pv-cell${props.selected ? " is-selected" : ""}`}
       data-status={block.status}
       data-key={block.key}
       data-sync-key={block.key}
-      onClick={toggleFromSurface}
     >
       {props.readonly ? null : (
         <header class="pv-cell-head">
-          {props.showSelection && block.blockIndex >= 0 ? (
-            <input
-              type="checkbox"
-              class="pv-select-box"
-              checked={props.selected}
-              aria-label={fmt(text.preview.selection.selectBlock, {
-                index: block.sourceLine || block.blockIndex + 1,
-              })}
-              onClick={(event) => {
-                event.preventDefault();
-                event.stopPropagation();
-                props.onToggleSelect(block, event.shiftKey);
-              }}
-              onChange={() => undefined}
-            />
-          ) : null}
           <span class="pv-kind">{text.preview.kindLabels[block.kind] ?? block.kind}</span>
           <span class="pv-status" style={`--status-color:${statusColor(block)}`}>
             <Icon name={statusIcon(block)} />
@@ -3445,7 +3403,6 @@ function SplitView(props: {
   onToggleReadonly: (side: Side) => void;
   selectionMode: boolean;
   selectedKeys: ReadonlySet<string>;
-  onToggleSelect: (block: PreviewBlockView, shiftKey: boolean) => void;
 }) {
   const { model, text, mode, readonly } = props;
   const sourceRef = useRef<HTMLDivElement>(null);
@@ -3696,8 +3653,6 @@ function SplitView(props: {
                 editing={props.editing}
                 selectionMode={props.selectionMode}
                 selected={props.selectedKeys.has(block.key)}
-                showSelection={props.selectionMode && !readonly.source && mode !== "target"}
-                onToggleSelect={props.onToggleSelect}
                 onMenu={props.onMenu}
                 onStartEdit={props.onStartEdit}
                 onRetranslate={props.onRetranslate}
@@ -3751,8 +3706,6 @@ function SplitView(props: {
                 editing={props.editing}
                 selectionMode={props.selectionMode}
                 selected={props.selectedKeys.has(block.key)}
-                showSelection={props.selectionMode && (readonly.source || mode === "target")}
-                onToggleSelect={props.onToggleSelect}
                 onMenu={props.onMenu}
                 onStartEdit={props.onStartEdit}
                 onRetranslate={props.onRetranslate}
@@ -4026,6 +3979,8 @@ export function App(props: { boot: BootData; text: UiCatalog }) {
   );
   const selectionSignatures = useRef<Map<string, string>>(new Map());
   const lastSelectedKey = useRef<string | null>(null);
+  const dragSelectionRef = useRef<DragSelectionState | null>(null);
+  const suppressSelectionClick = useRef(false);
   const locked = busy || taskActivity.running + taskActivity.queued > 0;
   const [summaryOpen, setSummaryOpen] = useState(false);
   const [summaryDraft, setSummaryDraft] = useState(props.boot.state.model.assist.summary.text);
@@ -4047,6 +4002,10 @@ export function App(props: { boot: BootData; text: UiCatalog }) {
   const [menu, setMenu] = useState<MenuState | null>(null);
   const [annotationTarget, setAnnotationTarget] =
     useState<AnnotationTarget | null>(null);
+  const [revealRequest, setRevealRequest] = useState<{
+    blockKey?: string;
+    first?: boolean;
+  } | null>(null);
   const [toasts, setToasts] = useState<Toast[]>([]);
   const [exportDialog, setExportDialog] = useState<ExportDialogState | null>(
     props.boot.exportConfirmation
@@ -4156,6 +4115,14 @@ export function App(props: { boot: BootData; text: UiCatalog }) {
           setTaskActivity({ running, queued });
           break;
         }
+        case "revealBlock":
+          setRevealRequest({
+            ...(typeof message.blockKey === "string"
+              ? { blockKey: message.blockKey }
+              : {}),
+            ...(message.first === true ? { first: true } : {}),
+          });
+          break;
         case "toast":
           showToast(String(message.text || ""), message.kind || "info");
           break;
@@ -4268,6 +4235,49 @@ export function App(props: { boot: BootData; text: UiCatalog }) {
     () => selectableBlocks.filter((block) => selectedKeys.has(block.key)),
     [selectableBlocks, selectedKeys],
   );
+  const blockByKey = useMemo(
+    () =>
+      new Map(selectableBlocks.map((block) => [block.key, block])),
+    [selectableBlocks],
+  );
+
+  useEffect(() => {
+    if (!revealRequest || host.model.blocks.length === 0) {
+      return;
+    }
+    const target = revealRequest.first
+      ? host.model.blocks.find((block) => block.blockIndex >= 0)
+      : host.model.blocks.find(
+          (block) => block.key === revealRequest.blockKey,
+        );
+    if (!target) {
+      setRevealRequest(null);
+      return;
+    }
+    const nodes = Array.from(
+      document.querySelectorAll<HTMLElement>(
+        `.pv-block[data-key="${CSS.escape(target.key)}"], .pv-cell[data-key="${CSS.escape(target.key)}"]`,
+      ),
+    );
+    if (nodes.length === 0) {
+      const timer = window.setTimeout(() => {
+        setRevealRequest((current) => (current ? { ...current } : current));
+      }, 16);
+      return () => window.clearTimeout(timer);
+    }
+    const reduceMotion =
+      window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches ===
+      true;
+    for (const node of nodes) {
+      node.scrollIntoView({
+        block: "center",
+        behavior: reduceMotion ? "auto" : "smooth",
+      });
+      node.classList.add("is-revealed");
+      window.setTimeout(() => node.classList.remove("is-revealed"), 1400);
+    }
+    setRevealRequest(null);
+  }, [host.model.blocks, revealRequest]);
   const selectionCounts = useMemo<Record<BulkAction, number>>(() => {
     const reviewable = (block: PreviewBlockView) =>
       block.hasCache &&
@@ -4353,6 +4363,8 @@ export function App(props: { boot: BootData; text: UiCatalog }) {
   }, [annotationTarget, editing, insert, menu, selectionMode]);
 
   const clearSelection = () => {
+    dragSelectionRef.current = null;
+    suppressSelectionClick.current = false;
     setSelectedKeys(new Set());
     selectionSignatures.current.clear();
     lastSelectedKey.current = null;
@@ -4433,6 +4445,166 @@ export function App(props: { boot: BootData; text: UiCatalog }) {
       lastSelectedKey.current = key;
       return next;
     });
+  };
+
+  const applyDragRange = (
+    fromKey: string,
+    toKey: string,
+    mode: "select" | "deselect",
+  ) => {
+    const from = selectableBlocks.findIndex((block) => block.key === fromKey);
+    const to = selectableBlocks.findIndex((block) => block.key === toKey);
+    if (from < 0 || to < 0) {
+      return;
+    }
+    const start = Math.min(from, to);
+    const end = Math.max(from, to);
+    const range = selectableBlocks.slice(start, end + 1);
+    for (const block of range) {
+      if (mode === "select") {
+        selectionSignatures.current.set(
+          block.key,
+          blockSelectionSignature(block),
+        );
+      } else {
+        selectionSignatures.current.delete(block.key);
+      }
+    }
+    setSelectedKeys((current) => {
+      const next = new Set(current);
+      for (const block of range) {
+        if (mode === "select") {
+          next.add(block.key);
+        } else {
+          next.delete(block.key);
+        }
+      }
+      return next;
+    });
+    lastSelectedKey.current = toKey;
+  };
+
+  const handleBodyClick = (event: JSX.TargetedMouseEvent<HTMLDivElement>) => {
+    if (!selectionMode || busy) {
+      return;
+    }
+    if (suppressSelectionClick.current) {
+      suppressSelectionClick.current = false;
+      return;
+    }
+    if (isSelectionInteractiveTarget(event.target)) {
+      return;
+    }
+    const key = selectionKeyFromTarget(event.target);
+    const block = key ? blockByKey.get(key) : undefined;
+    if (!block) {
+      return;
+    }
+    toggleBlockSelection(block, event.shiftKey);
+  };
+
+  const handleBodyPointerDown = (
+    event: JSX.TargetedPointerEvent<HTMLDivElement>,
+  ) => {
+    if (!selectionMode || busy || event.button !== 0) {
+      return;
+    }
+    if (isSelectionInteractiveTarget(event.target)) {
+      return;
+    }
+    const key = selectionKeyFromTarget(event.target);
+    const block = key ? blockByKey.get(key) : undefined;
+    if (!key || !block) {
+      return;
+    }
+    suppressSelectionClick.current = false;
+    dragSelectionRef.current = {
+      pointerId: event.pointerId,
+      mode: selectedKeys.has(key) ? "deselect" : "select",
+      anchorKey: key,
+      lastKey: key,
+      startX: event.clientX,
+      startY: event.clientY,
+      started: false,
+    };
+  };
+
+  const handleBodyPointerMove = (
+    event: JSX.TargetedPointerEvent<HTMLDivElement>,
+  ) => {
+    const drag = dragSelectionRef.current;
+    if (
+      !selectionMode ||
+      !drag ||
+      drag.pointerId !== event.pointerId
+    ) {
+      return;
+    }
+    if (event.pointerType === "mouse" && event.buttons === 0) {
+      dragSelectionRef.current = null;
+      if (drag.started) {
+        window.setTimeout(() => {
+          suppressSelectionClick.current = false;
+        }, 0);
+      }
+      return;
+    }
+    if (isSelectionInteractiveTarget(event.target)) {
+      return;
+    }
+    const key = selectionKeyFromTarget(event.target);
+    if (!key) {
+      return;
+    }
+    if (!drag.started) {
+      if (
+        Math.hypot(
+          event.clientX - drag.startX,
+          event.clientY - drag.startY,
+        ) < 4
+      ) {
+        return;
+      }
+      drag.started = true;
+      suppressSelectionClick.current = true;
+      applyDragRange(drag.anchorKey, drag.anchorKey, drag.mode);
+    }
+    applyDragRange(drag.lastKey, key, drag.mode);
+    drag.lastKey = key;
+    event.preventDefault();
+  };
+
+  const handleBodyPointerUp = (
+    event: JSX.TargetedPointerEvent<HTMLDivElement>,
+  ) => {
+    const drag = dragSelectionRef.current;
+    if (!drag || drag.pointerId !== event.pointerId) {
+      return;
+    }
+    dragSelectionRef.current = null;
+    if (drag.started) {
+      window.setTimeout(() => {
+        suppressSelectionClick.current = false;
+      }, 0);
+    }
+  };
+
+  const handleBodyPointerCancel = () => {
+    dragSelectionRef.current = null;
+    suppressSelectionClick.current = false;
+  };
+
+  const handleBodyPointerLeave = () => {
+    const drag = dragSelectionRef.current;
+    if (!drag) {
+      return;
+    }
+    dragSelectionRef.current = null;
+    if (drag.started) {
+      window.setTimeout(() => {
+        suppressSelectionClick.current = false;
+      }, 0);
+    }
   };
 
   const sendBulkAction = (action: BulkAction) => {
@@ -4941,7 +5113,9 @@ export function App(props: { boot: BootData; text: UiCatalog }) {
 
   return (
     <div
-      class={`pv-app${busy ? " is-busy" : ""}`}
+      class={`pv-app${busy ? " is-busy" : ""}${
+        selectionMode ? " is-selecting" : ""
+      }`}
       data-layout={layout}
       data-mode={mode}
     >
@@ -5038,7 +5212,16 @@ export function App(props: { boot: BootData; text: UiCatalog }) {
           }}
         />
       )}
-      <div ref={bodyRef} class={`pv-body${layout === "split" ? " is-split" : ""}`}>
+      <div
+        ref={bodyRef}
+        class={`pv-body${layout === "split" ? " is-split" : ""}`}
+        onClick={handleBodyClick}
+        onPointerDown={handleBodyPointerDown}
+        onPointerMove={handleBodyPointerMove}
+        onPointerUp={handleBodyPointerUp}
+        onPointerCancel={handleBodyPointerCancel}
+        onPointerLeave={handleBodyPointerLeave}
+      >
         {blocks.length === 0 ? (
           <div class="pv-empty">
             <Icon name="book" size={32} />
@@ -5059,7 +5242,6 @@ export function App(props: { boot: BootData; text: UiCatalog }) {
             insert={insert}
             selectionMode={selectionMode}
             selectedKeys={selectedKeys}
-            onToggleSelect={toggleBlockSelection}
             onMenu={openBlockMenu}
             onRetranslate={retranslateBlock}
             onAnnotations={openAnnotationsForBlock}
@@ -5094,7 +5276,6 @@ export function App(props: { boot: BootData; text: UiCatalog }) {
                 insert={insert}
                 selectionMode={selectionMode}
                 selected={selectedKeys.has(block.key)}
-                onToggleSelect={toggleBlockSelection}
                 onMenu={(event, target, side) => openBlockMenu(event, target, side)}
                 onRetranslate={retranslateBlock}
                 onAnnotations={openAnnotationsForBlock}

@@ -443,6 +443,21 @@ export class BatchTranslationCoordinator implements TranslationProvider {
           ...(calls[0].request.context
             ? { context: calls[0].request.context }
             : {}),
+          onRetry: (info) => {
+            const ids = info.itemIds;
+            const targets = ids?.length
+              ? calls.filter((call) =>
+                  ids.some((id) => id.startsWith(`mbsq_${call.id}_`)),
+                )
+              : calls;
+            for (const call of targets) {
+              try {
+                call.request.onRetry?.(info);
+              } catch {
+                /* 诊断不应中断翻译 */
+              }
+            }
+          },
         },
         controller.signal,
         undefined,

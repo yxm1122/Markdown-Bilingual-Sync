@@ -83,6 +83,7 @@ import {
   type ReviewItem,
   type TranslationBrief,
   type TranslationProvider,
+  type TranslationRetryReporter,
 } from "../translation/types";
 import { estimateTokenCount } from "../translation/batching";
 import {
@@ -644,10 +645,16 @@ export class SyncService {
     sourceUri: vscode.Uri,
     blockIndex: number,
     signal?: AbortSignal,
+    onRetry?: TranslationRetryReporter,
   ): Promise<{ annotations: AnnotationRecord[]; added: number }> {
     const release = this.beginReview(sourceUri);
     try {
-      return await this.reviewBlockInternal(sourceUri, blockIndex, signal);
+      return await this.reviewBlockInternal(
+        sourceUri,
+        blockIndex,
+        signal,
+        onRetry,
+      );
     } finally {
       release();
     }
@@ -657,6 +664,7 @@ export class SyncService {
     sourceUri: vscode.Uri,
     blockIndex: number,
     signal?: AbortSignal,
+    onRetry?: TranslationRetryReporter,
   ): Promise<{ annotations: AnnotationRecord[]; added: number }> {
     if (signal?.aborted) {
       throw new CancelledError();
@@ -724,6 +732,7 @@ export class SyncService {
             ...(context ? { context } : {}),
           },
         ],
+        ...(onRetry ? { onRetry } : {}),
       },
       signal,
     );
@@ -794,6 +803,7 @@ export class SyncService {
     options: {
       blockIds?: ReadonlySet<string>;
       onProgress?: (completed: number, total: number) => void;
+      onRetry?: TranslationRetryReporter;
     } = {},
   ): Promise<{
     annotations: AnnotationRecord[];
@@ -814,6 +824,7 @@ export class SyncService {
     options: {
       blockIds?: ReadonlySet<string>;
       onProgress?: (completed: number, total: number) => void;
+      onRetry?: TranslationRetryReporter;
     } = {},
   ): Promise<{
     annotations: AnnotationRecord[];
@@ -916,6 +927,9 @@ export class SyncService {
               ...(brief ? { brief } : {}),
               glossary: this.requestGlossary(glossary.entries, cache),
               items: chunk,
+              ...(options.onRetry
+                ? { onRetry: options.onRetry }
+                : {}),
             },
             signal,
           );
@@ -1353,6 +1367,7 @@ export class SyncService {
     signal?: AbortSignal,
     allowPartial = false,
     assist?: Partial<TranslationAssistSettings>,
+    onRetry?: TranslationRetryReporter,
   ): Promise<SyncOutcome> {
     try {
       return await this.withLock(sourceUri, async () => {
@@ -1365,6 +1380,7 @@ export class SyncService {
           false,
           allowPartial,
           assist,
+          onRetry,
         );
       });
     } catch (error) {
@@ -1385,8 +1401,17 @@ export class SyncService {
     onProgress?: SyncProgressReporter,
     signal?: AbortSignal,
     assist?: Partial<TranslationAssistSettings>,
+    onRetry?: TranslationRetryReporter,
   ): Promise<SyncOutcome> {
-    return this.sync(sourceUri, true, onProgress, signal, true, assist);
+    return this.sync(
+      sourceUri,
+      true,
+      onProgress,
+      signal,
+      true,
+      assist,
+      onRetry,
+    );
   }
 
   /**
@@ -1400,6 +1425,7 @@ export class SyncService {
     onProgress?: SyncProgressReporter,
     signal?: AbortSignal,
     assist?: Partial<TranslationAssistSettings>,
+    onRetry?: TranslationRetryReporter,
   ): Promise<SyncOutcome> {
     try {
       return await this.withLock(sourceUri, async () => {
@@ -1412,6 +1438,7 @@ export class SyncService {
           true,
           true,
           assist,
+          onRetry,
         );
       });
     } catch (error) {
@@ -1435,6 +1462,7 @@ export class SyncService {
     onProgress?: SyncProgressReporter,
     signal?: AbortSignal,
     assist?: Partial<TranslationAssistSettings>,
+    onRetry?: TranslationRetryReporter,
   ): Promise<RetranslateBlocksOutcome> {
     try {
       return await this.withLock(sourceUri, async () => {
@@ -1524,6 +1552,7 @@ export class SyncService {
             true,
             true,
             assist,
+            onRetry,
             { onlySourceIndexes, includeHuman: true },
           ),
           skipped,
@@ -1557,6 +1586,7 @@ export class SyncService {
       /** 质检/一致性检查使用：禁止覆盖人工译文，也不允许退化为全量同步。 */
       requireMachine?: boolean;
     },
+    onRetry?: TranslationRetryReporter,
   ): Promise<{ mode: "sync" | "block"; outcome?: SyncOutcome }> {
     return this.withLock(sourceUri, async () => {
       const state = await this.loadState(sourceUri, true);
@@ -1574,6 +1604,7 @@ export class SyncService {
             false,
             false,
             assist,
+            onRetry,
           ),
         };
       }
@@ -1621,6 +1652,7 @@ export class SyncService {
             false,
             false,
             assist,
+            onRetry,
           ),
         };
       }
@@ -1687,6 +1719,7 @@ export class SyncService {
           ...(summary ? { summary } : {}),
           ...(brief ? { brief } : {}),
           ...(context ? { context } : {}),
+          ...(onRetry ? { onRetry } : {}),
         },
         signal,
       );
@@ -2030,6 +2063,7 @@ export class SyncService {
       cacheDst?: string;
       human?: boolean;
     },
+    onRetry?: TranslationRetryReporter,
   ): Promise<BackTranslationResult> {
     if (signal?.aborted) {
       throw new CancelledError();
@@ -2122,6 +2156,7 @@ export class SyncService {
         ...(summary ? { summary } : {}),
         ...(brief ? { brief } : {}),
         ...(context ? { context } : {}),
+        ...(onRetry ? { onRetry } : {}),
       },
       signal,
     );
@@ -2161,6 +2196,7 @@ export class SyncService {
     text: string,
     signal?: AbortSignal,
     summary?: string,
+    onRetry?: TranslationRetryReporter,
   ): Promise<string> {
     if (signal?.aborted) {
       throw new CancelledError();
@@ -2184,6 +2220,7 @@ export class SyncService {
         items: [item],
         glossary: [],
         ...(summary?.trim() ? { summary } : {}),
+        ...(onRetry ? { onRetry } : {}),
       },
       signal,
     );
@@ -2871,6 +2908,7 @@ export class SyncService {
     targetId: string,
     signal?: AbortSignal,
     assist?: Partial<TranslationAssistSettings>,
+    onRetry?: TranslationRetryReporter,
   ): Promise<{ text: string; afterIndex: number }> {
     const state = await this.loadState(sourceUri, false);
     const source = parseMarkdownDocument(state.sourceText, this.md);
@@ -2888,6 +2926,7 @@ export class SyncService {
       target.block.raw,
       signal,
       summary,
+      onRetry,
     );
     const parsed = parseMarkdownDocument(generated, this.md);
     if (parsed.blocks.length !== 1) {
@@ -3460,6 +3499,7 @@ export class SyncService {
     retranslateAll = false,
     allowPartial = false,
     assist?: Partial<TranslationAssistSettings>,
+    onRetry?: TranslationRetryReporter,
     selective?: {
       onlySourceIndexes: ReadonlySet<number>;
       includeHuman?: boolean;
@@ -3530,6 +3570,7 @@ export class SyncService {
       },
       signal,
       onProgress,
+      ...(onRetry ? { onRetry } : {}),
       allowPartial,
       // 只有部分模式需要中间落盘；失败错误会由 syncDocument 回传给调用方。
       onCacheCommit: allowPartial

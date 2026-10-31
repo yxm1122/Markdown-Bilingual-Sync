@@ -26,6 +26,18 @@ export type TranslationTaskStatus =
   | "failed"
   | "cancelled";
 
+/** 任务作用域：单块、批量块、单文件或单文件批量。 */
+export type TaskScope = "block" | "blocks" | "file" | "fileBatch";
+
+/** 任务的预览定位信息；用于点击任务时跳到块或第一个块。 */
+export interface TaskTarget {
+  scope?: TaskScope;
+  /** 块级任务在预览模型中的唯一 key。 */
+  blockKey?: string;
+  /** 同文件批量任务跳到第一个块。 */
+  revealFirstBlock?: boolean;
+}
+
 /** 任务对应的操作类型；用于任务面板区分同步、块级重译、审校等。 */
 export type TaskOperation =
   | "sync"
@@ -72,6 +84,14 @@ export interface TranslationTaskView {
   uri?: vscode.Uri;
   /** 操作类型；旧调用方未提供时为空。 */
   operation?: TaskOperation;
+  /** 作用域；旧调用方未提供时按文件级处理。 */
+  scope?: TaskScope;
+  /** 块级任务的预览定位 key。 */
+  blockKey?: string;
+  /** 同文件批量任务点击后跳到第一个块。 */
+  revealFirstBlock?: boolean;
+  /** 自动重试次数；没有重试时为空。 */
+  retries?: number;
   status: TranslationTaskStatus;
   /** 当前阶段文案（如“正在翻译 2/5 个块…”）。 */
   phase: string;
@@ -146,6 +166,7 @@ export class TranslationTaskMonitor {
     label: string,
     uri?: vscode.Uri,
     operation?: TaskOperation,
+    target?: TaskTarget,
   ): number {
     const id = this.nextId;
     this.nextId += 1;
@@ -154,6 +175,11 @@ export class TranslationTaskMonitor {
       label,
       ...(uri ? { uri } : {}),
       ...(operation ? { operation } : {}),
+      ...(target?.scope ? { scope: target.scope } : {}),
+      ...(target?.blockKey ? { blockKey: target.blockKey } : {}),
+      ...(target?.revealFirstBlock
+        ? { revealFirstBlock: true }
+        : {}),
       status: "queued",
       phase: UI_TEXT.taskPanel.phases.waiting,
       completed: 0,
@@ -162,6 +188,16 @@ export class TranslationTaskMonitor {
     });
     this.emit();
     return id;
+  }
+
+  /** 记录一次自动重试；仅活动任务有效，重试次数用于任务悬浮详情。 */
+  recordRetry(id: number, count = 1): void {
+    const task = this.tasks.get(id);
+    if (!task || isTerminalStatus(task.status)) {
+      return;
+    }
+    task.retries = (task.retries ?? 0) + Math.max(0, count);
+    this.emit();
   }
 
   /**

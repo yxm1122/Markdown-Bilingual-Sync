@@ -49,6 +49,7 @@ import {
   type TranslationItem,
   type TranslationProvider,
   type TranslationResultItem,
+  type TranslationRetryReporter,
 } from "../translation/types";
 import { restoreProtectedSyntax } from "../util/protectedSyntax";
 import { tError } from "../i18n/errors";
@@ -128,6 +129,8 @@ export interface SyncOptions {
   annotations?: readonly SyncAnnotationInput[];
   signal?: AbortSignal;
   onProgress?: SyncProgressReporter;
+  /** Provider 自动重试诊断；用于任务悬浮详情。 */
+  onRetry?: TranslationRetryReporter;
   /**
    * 允许 Provider 分批返回并保留成功部分；此模式下缺失块的旧译文（若有）会保留。
    */
@@ -808,6 +811,7 @@ export async function syncDocument(options: SyncOptions): Promise<SyncResult> {
           ...(options.assist?.brief
             ? { brief: options.assist.brief }
             : {}),
+          ...(options.onRetry ? { onRetry: options.onRetry } : {}),
         },
         signal,
         (completed, total) => {
