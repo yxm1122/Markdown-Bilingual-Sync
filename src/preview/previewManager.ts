@@ -60,6 +60,11 @@ import { SyncBlockedError } from "../sync/sync";
 import type { ConsistencyIssue } from "../quality/consistency";
 import { estimateTokenCount } from "../translation/batching";
 import {
+  BRIEF_FIELD_KEYS,
+  type BriefField,
+  type SummaryLockTarget,
+} from "../translation/summaryLocks";
+import {
   normalizeTranslationBrief,
   translationBriefText,
 } from "../translation/types";
@@ -1011,6 +1016,7 @@ class PreviewPanelSession implements vscode.Disposable {
             briefFilledCount: Object.values(summary?.brief ?? {}).filter(
               (value) => typeof value === "string" && value.trim(),
             ).length,
+            locks: summary?.locks ?? {},
             canGenerate: this.syncService.summarySupported,
             glossaryText: formatDocumentGlossary(summary?.glossary ?? []),
             glossaryCount: summary?.glossary?.length ?? 0,
@@ -1161,6 +1167,16 @@ class PreviewPanelSession implements vscode.Disposable {
       !Array.isArray(message.brief)
         ? normalizeTranslationBrief(message.brief)
         : undefined;
+    const rawLockTarget =
+      typeof message.target === "string" ? message.target : undefined;
+    const summaryLockTarget: SummaryLockTarget | undefined =
+      rawLockTarget === "summary" ||
+      rawLockTarget === "glossary" ||
+      BRIEF_FIELD_KEYS.includes(rawLockTarget as BriefField)
+        ? (rawLockTarget as SummaryLockTarget)
+        : undefined;
+    const summaryLockValue =
+      typeof message.locked === "boolean" ? message.locked : undefined;
     const annotationId =
       typeof message.annotationId === "string"
         ? message.annotationId
@@ -1373,6 +1389,11 @@ class PreviewPanelSession implements vscode.Disposable {
         case "saveGlossary":
           if (glossaryText !== undefined) {
             await this.saveGlossary(glossaryText);
+          }
+          break;
+        case "setSummaryLock":
+          if (summaryLockTarget && summaryLockValue !== undefined) {
+            await this.setSummaryLock(summaryLockTarget, summaryLockValue);
           }
           break;
         case "reviewBlock":
@@ -2814,6 +2835,22 @@ class PreviewPanelSession implements vscode.Disposable {
     } finally {
       this.setBusy(false);
     }
+  }
+
+  /**
+   * 切换单项生成锁；不进入忙碌态，避免每次点击都闪一次全局忙碌提示。
+   * 写入失败由 onMessage 的统一错误提示处理，UI 保持旧状态。
+   */
+  private async setSummaryLock(
+    target: SummaryLockTarget,
+    locked: boolean,
+  ): Promise<void> {
+    const cacheText = await this.syncService.setSummaryLocks(
+      this.sourceUri,
+      target,
+      locked,
+    );
+    await this.update(undefined, undefined, cacheText);
   }
 
   /** 清除摘要；若缓存只剩摘要，则缓存文件也会被删除。 */

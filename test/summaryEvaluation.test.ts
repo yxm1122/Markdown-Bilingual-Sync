@@ -64,6 +64,40 @@ describe("summary evaluation metrics", () => {
     expect(countSummaryWords("word ".repeat(130))).toBe(130);
   });
 
+  it("flags audience and tone guidance copied into the summary", () => {
+    const evaluation = evaluate({
+      summary: "本文档面向软件开发者与运维工程师，语气直接、专业、信息密集。",
+      glossary: [],
+      brief: {
+        audience: "软件开发者、运维工程师、技术团队负责人",
+        toneAndStyle: "技术文档风格，直接、专业、信息密集。",
+        ambiguities: "parked 译为搁置。",
+        doNotTranslate: "Signal Relay",
+      },
+    });
+    expect(evaluation.guidanceLeaks.map((leak) => leak.field)).toEqual([
+      "audience",
+      "toneAndStyle",
+    ]);
+    expect(evaluation.briefOverlapFields).toContain("audience");
+    expect(evaluation.guidancePhrases).toEqual(["audience", "tone"]);
+    expect(evaluation.briefOverlapRatio).toBeGreaterThan(0);
+  });
+
+  it("does not flag a document summary that stays out of the brief", () => {
+    const evaluation = evaluate({
+      summary: "本文介绍缓存与 I/O 层的工作方式。",
+      glossary: [],
+      brief: {
+        audience: "软件开发者",
+        toneAndStyle: "直接、专业",
+      },
+    });
+    expect(evaluation.guidanceLeaks).toEqual([]);
+    expect(evaluation.briefOverlapFields).toEqual([]);
+    expect(evaluation.guidancePhrases).toEqual([]);
+  });
+
   it("aggregates raw and filtered metrics", () => {
     const first = evaluate({
       summary: "short",

@@ -578,6 +578,92 @@ textarea:focus-visible {
   font-size: 11px;
 }
 
+.pv-summary-editor-head {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 20px;
+  margin-bottom: 4px;
+}
+
+.pv-summary-editor-label {
+  color: var(--vscode-descriptionForeground);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.pv-summary-editor-head .pv-lock-button {
+  margin-left: auto;
+}
+
+.pv-summary-lock-hint {
+  display: inline-flex;
+  align-items: center;
+  color: var(--vscode-focusBorder);
+}
+
+.pv-lock-button {
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  flex: 0 0 20px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 3px;
+  background: transparent;
+  color: var(--vscode-descriptionForeground);
+  cursor: pointer;
+  transition:
+    background-color 80ms ease,
+    color 80ms ease;
+}
+
+.pv-lock-button:hover {
+  background: var(--vscode-toolbar-hoverBackground);
+  color: var(--vscode-foreground);
+}
+
+.pv-lock-button.is-locked {
+  background: var(--vscode-actionBar-toggledBackground);
+  color: var(--vscode-focusBorder);
+}
+
+.pv-lock-button:disabled {
+  background: transparent;
+  cursor: default;
+  opacity: 0.45;
+}
+
+.pv-lock-button .codicon {
+  font-size: 12px;
+}
+
+.pv-lock-chip {
+  display: inline-flex;
+  align-items: center;
+  height: 16px;
+  padding: 0 5px;
+  border-radius: 8px;
+  background: var(--vscode-badge-background);
+  color: var(--vscode-badge-foreground);
+  font-size: 10px;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.pv-lock-note {
+  display: flex;
+  align-items: flex-start;
+  gap: 5px;
+}
+
+.pv-lock-note .codicon {
+  flex: 0 0 auto;
+  margin-top: 1px;
+  color: var(--vscode-focusBorder);
+}
+
 .pv-brief {
   margin-top: 10px;
   padding-top: 8px;
@@ -628,6 +714,19 @@ textarea:focus-visible {
   transform: rotate(180deg);
 }
 
+.pv-brief-head {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+
+.pv-brief-head .pv-brief-toggle {
+  flex: 1 1 auto;
+  width: auto;
+  min-width: 0;
+}
+
 .pv-brief-fields {
   display: flex;
   flex-direction: column;
@@ -641,6 +740,28 @@ textarea:focus-visible {
   gap: 3px;
   color: var(--vscode-descriptionForeground);
   font-size: 11px;
+}
+
+.pv-brief-field-head {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 18px;
+}
+
+.pv-brief-field-head label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pv-brief-field-head .pv-lock-button {
+  margin-left: auto;
+}
+
+.pv-brief-field.is-locked .pv-brief-field-head label {
+  color: var(--vscode-foreground);
 }
 
 .pv-brief-field .pv-input {

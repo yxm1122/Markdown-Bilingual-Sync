@@ -33,6 +33,7 @@ import { createMarkdownRuntime } from "../markdown/markdown";
 import { parseMarkdownDocument } from "../markdown/segmenter";
 import type { SourceStage } from "../source/editSource";
 import { isDeletedMarker } from "../cache/deletedMarker";
+import type { SummaryLocks } from "../translation/summaryLocks";
 import type { TranslationBrief } from "../translation/types";
 import {
   isUserAnnotationActive,
@@ -153,6 +154,8 @@ export interface PreviewSummaryView {
   briefTokens: number;
   /** brief 已填写的字段数。 */
   briefFilledCount: number;
+  /** 生成锁；锁定项不再由 AI 生成或覆盖。 */
+  locks?: SummaryLocks;
   /** 当前 Provider 是否支持自动生成摘要。 */
   canGenerate: boolean;
   /** 缓存中的文档术语表，文本域每行 `source => target`。 */
@@ -816,6 +819,7 @@ export function buildPreviewModel(input: PreviewModelInput): PreviewModel {
         brief: {},
         briefTokens: 0,
         briefFilledCount: 0,
+        locks: {},
         canGenerate: false,
         glossaryText: "",
         glossaryCount: 0,

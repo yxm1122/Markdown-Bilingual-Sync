@@ -239,7 +239,8 @@ export const UI_TEXT = {
         "Generate a document brief and its document glossary",
       save: "Save brief",
       clear: "Clear brief",
-      clearTitle: "Clear the document brief and its glossary",
+      clearTitle:
+        "Clear the document brief and its glossary, and remove all generation locks",
       glossaryTitle: "Document glossary",
       glossaryCount: "{count} terms",
       glossaryPlaceholder: "One term per line, for example: table => 表格",
@@ -300,6 +301,35 @@ export const UI_TEXT = {
       noSummary: "Not generated",
       generated: "Generated",
       empty: "Brief cannot be empty.",
+      summaryLabel: "Document summary",
+      locked: "Locked",
+      lockSummaryTitle:
+        "Lock the summary: AI generation skips it and never overwrites it. It is still used for translation, and you can keep editing.",
+      unlockSummaryTitle:
+        "Unlock the summary so AI generation can update it.",
+      lockBriefTitle:
+        "Lock this field: AI generation skips it and never overwrites it. It is still used for translation, and you can keep editing.",
+      unlockBriefTitle:
+        "Unlock this field so AI generation can update it.",
+      lockGlossaryTitle:
+        "Lock the glossary: AI generation skips it and never overwrites it. It is still used for translation, and you can keep editing.",
+      unlockGlossaryTitle:
+        "Unlock the glossary so AI generation can update it.",
+      lockNeedsSummary:
+        "Generate or enter a summary before locking document brief items.",
+      lockedSummaryNote:
+        "Locked: AI generation skips the summary; it is still used for translation.",
+      lockedBriefNote:
+        "Locked {count} item(s): AI generation skips them; they are still used for translation.",
+      lockedGlossaryNote:
+        "Locked: AI generation skips the glossary; it is still used for translation.",
+      briefLockedCount: "{count} locked",
+      allLockedTitle:
+        "The summary, translation guidance, and glossary are all locked; there is nothing to generate.",
+      generateUnlockedTitle:
+        "Generate unlocked items only; locked content will not be overwritten.",
+      saveBeforeGenerate:
+        "Save your current edits before generating the document brief.",
     },
     annotations: {
       title: "Annotations",

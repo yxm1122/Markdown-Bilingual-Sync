@@ -139,5 +139,19 @@
       "tags": ["real-document", "runbook", "github-alerts", "code", "tables", "operations"],
       "notes": "Production deployment runbook with a WARNING alert, prerequisites, numbered deploy and rollback steps, JSON request/response, error-code table, and a blockquote note."
     }
+  ],
+  "summaryCases": [
+    {
+      "id": "summary-brief-audience",
+      "source": "cases/summary-brief-audience/source.md",
+      "tags": ["summary-brief-boundary", "audience", "tone", "terminology"],
+      "notes": "README with a trailing localization-notes section. The summary must describe the CLI itself; audience, tone, terminology decisions, and do-not-translate entries belong only to brief."
+    },
+    {
+      "id": "summary-brief-runbook",
+      "source": "cases/summary-brief-runbook/source.md",
+      "tags": ["summary-brief-boundary", "runbook", "audience", "tone"],
+      "notes": "Operations runbook with a trailing localization-notes section. The summary must describe the failover procedure; translation guidance must not leak into it."
+    }
   ]
 }

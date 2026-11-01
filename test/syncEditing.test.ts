@@ -1229,4 +1229,161 @@ describe("SyncService block editing and back-translation", () => {
     expect(requests[0].summary).toBeUndefined();
     expect(requests[0].items[0].reference).toBeUndefined();
   });
+
+  it("skips locked brief items during generation and merges unlocked results", async () => {
+    const uri = mocks.FakeUri.file("/project/demo.md") as unknown as Uri;
+    const initial = await service.saveBrief(uri, {
+      text: "旧摘要",
+      brief: {
+        audience: "旧受众",
+        toneAndStyle: "旧语气",
+        ambiguities: "旧歧义",
+        doNotTranslate: "旧禁译",
+      },
+      glossary: [{ source: "custom", target: "自定义" }],
+    });
+    const before = parseCacheDocument(initial, makeMd()).summary!;
+    await service.setSummaryLocks(uri, "summary", true);
+    await service.setSummaryLocks(uri, "audience", true);
+
+    summaryBrief = {
+      audience: "新受众",
+      toneAndStyle: "新语气",
+      ambiguities: "新歧义",
+      doNotTranslate: "新禁译",
+    };
+    summaryGlossary = [{ source: "item", target: "条目" }];
+
+    const generatedText = await service.generateSummary(uri);
+    const after = parseCacheDocument(generatedText, makeMd()).summary!;
+
+    expect(summaryRequests).toHaveLength(1);
+    expect(summaryRequests[0].locks).toEqual({
+      summary: true,
+      brief: { audience: true },
+    });
+    expect(after.text).toBe("旧摘要");
+    expect(after.brief).toEqual({
+      audience: "旧受众",
+      toneAndStyle: "新语气",
+      ambiguities: "新歧义",
+      doNotTranslate: "新禁译",
+    });
+    expect(after.glossary).toEqual([
+      { source: "custom", target: "自定义" },
+      { source: "item", target: "条目" },
+    ]);
+    // 摘要未重新生成：模型与 sourceHash 保持原值。
+    expect(after.model).toBe(before.model);
+    expect(after.sourceHash).toBe(before.sourceHash);
+  });
+
+  it("keeps the document glossary when the glossary is locked", async () => {
+    const uri = mocks.FakeUri.file("/project/demo.md") as unknown as Uri;
+    await service.saveBrief(uri, {
+      text: "旧摘要",
+      glossary: [{ source: "custom", target: "自定义" }],
+    });
+    await service.setSummaryLocks(uri, "glossary", true);
+    summaryGlossary = [{ source: "item", target: "条目" }];
+
+    const text = await service.generateSummary(uri);
+    const summary = parseCacheDocument(text, makeMd()).summary;
+
+    expect(summaryRequests[0].locks).toEqual({ glossary: true });
+    expect(summary?.glossary).toEqual([
+      { source: "custom", target: "自定义" },
+    ]);
+    expect(summary?.locks).toEqual({ glossary: true });
+    expect(summary?.text).toContain("摘要：");
+  });
+
+  it("does not call the provider when every brief item is locked", async () => {
+    const uri = mocks.FakeUri.file("/project/demo.md") as unknown as Uri;
+    await service.saveBrief(uri, {
+      text: "旧摘要",
+      brief: {
+        audience: "旧受众",
+        toneAndStyle: "旧语气",
+        ambiguities: "旧歧义",
+        doNotTranslate: "旧禁译",
+      },
+    });
+    await service.setSummaryLocks(uri, "summary", true);
+    await service.setSummaryLocks(uri, "glossary", true);
+    await service.setSummaryLocks(uri, "audience", true);
+    await service.setSummaryLocks(uri, "toneAndStyle", true);
+    await service.setSummaryLocks(uri, "ambiguities", true);
+    await service.setSummaryLocks(uri, "doNotTranslate", true);
+
+    const beforeCalls = summaryRequests.length;
+    const text = await service.generateSummary(uri);
+
+    expect(summaryRequests).toHaveLength(beforeCalls);
+    expect(parseCacheDocument(text, makeMd()).summary?.text).toBe("旧摘要");
+  });
+
+  it("drops generation locks when the summary is cleared", async () => {
+    const uri = mocks.FakeUri.file("/project/demo.md") as unknown as Uri;
+    await service.saveSummary(uri, "摘要");
+    await service.setSummaryLocks(uri, "summary", true);
+
+    const cleared = await service.clearSummary(uri);
+    expect(
+      parseCacheDocument(cleared ?? "", makeMd()).summary,
+    ).toBeUndefined();
+  });
+
+  it("requires a summary before locking and preserves locks across saves", async () => {
+    const uri = mocks.FakeUri.file("/project/demo.md") as unknown as Uri;
+    await expect(
+      service.setSummaryLocks(uri, "summary", true),
+    ).rejects.toThrow(/摘要/);
+
+    await service.saveSummary(uri, "摘要");
+    await service.setSummaryLocks(uri, "summary", true);
+    await service.setSummaryLocks(uri, "audience", true);
+    await service.setSummaryLocks(uri, "glossary", true);
+
+    const afterSummary = await service.saveSummary(uri, "新摘要");
+    expect(
+      parseCacheDocument(afterSummary, makeMd()).summary?.locks,
+    ).toEqual({
+      summary: true,
+      glossary: true,
+      brief: { audience: true },
+    });
+
+    const afterBrief = await service.saveBrief(uri, {
+      text: "新摘要",
+      brief: { audience: "新受众", toneAndStyle: "新语气" },
+      glossary: [{ source: "custom", target: "自定义" }],
+    });
+    expect(
+      parseCacheDocument(afterBrief, makeMd()).summary?.locks,
+    ).toEqual({
+      summary: true,
+      glossary: true,
+      brief: { audience: true },
+    });
+
+    const afterGlossary = await service.saveDocumentGlossary(uri, [
+      { source: "other", target: "其他" },
+    ]);
+    expect(
+      parseCacheDocument(afterGlossary, makeMd()).summary?.locks,
+    ).toEqual({
+      summary: true,
+      glossary: true,
+      brief: { audience: true },
+    });
+
+    const unlocked = await service.setSummaryLocks(uri, "summary", false);
+    expect(
+      parseCacheDocument(unlocked, makeMd()).summary?.locks,
+    ).toEqual({
+      glossary: true,
+      brief: { audience: true },
+    });
+  });
 });

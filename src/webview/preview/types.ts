@@ -15,6 +15,7 @@ import type {
   PreviewNotice,
 } from "../../preview/protocol";
 import type { PreviewLayout } from "../../preview/layout";
+import type { BriefField } from "../../translation/summaryLocks";
 import type { TranslationBrief } from "../../translation/types";
 
 export type PreviewText = (typeof UI_TEXT)["preview"];
@@ -87,6 +88,11 @@ export type OutboundMessage =
   | { type: "saveBrief"; summaryText: string; brief: TranslationBrief; glossaryText: string }
   | { type: "clearSummary" }
   | { type: "saveGlossary"; glossaryText: string }
+  | {
+      type: "setSummaryLock";
+      target: "summary" | "glossary" | BriefField;
+      locked: boolean;
+    }
   | { type: "reviewBlock"; blockIndex: number }
   | { type: "reviewMachineBlocks" }
   | {

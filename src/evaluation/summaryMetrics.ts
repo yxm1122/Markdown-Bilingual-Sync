@@ -12,6 +12,10 @@
  */
 import { hasAlternativeTarget, hasProtectedGlossaryText } from "../glossary/generatedGlossary";
 import { countTermOccurrences } from "../util/glossaryMatch";
+import {
+  BRIEF_FIELD_KEYS,
+  type BriefField,
+} from "../translation/summaryLocks";
 import type {
   GlossaryEntry,
   SummaryResult,
@@ -44,6 +48,12 @@ export interface SummaryGlossaryEntryEvaluation {
   issues: SummaryGlossaryIssue[];
 }
 
+export interface SummaryBriefOverlap {
+  field: BriefField;
+  /** 在摘要中逐段出现的 brief 片段。 */
+  segments: string[];
+}
+
 export interface SummaryCaseEvaluation {
   id: string;
   tags: string[];
@@ -51,6 +61,14 @@ export interface SummaryCaseEvaluation {
   summaryWords: number;
   summaryWithinRange: boolean;
   brief?: TranslationBrief;
+  /** 任意 brief 字段的显著片段出现在摘要中；用于人工判断越界程度。 */
+  briefOverlapFields: BriefField[];
+  /** audience/toneAndStyle 被写进摘要；这是明确的翻译要求泄漏。 */
+  guidanceLeaks: SummaryBriefOverlap[];
+  /** 摘要中出现翻译指导措辞（受众/语气/译法/禁译），advisory。 */
+  guidancePhrases: string[];
+  /** 摘要对 brief 的字符 8-gram 包含度（0–1，advisory）。 */
+  briefOverlapRatio: number;
   glossaryCount: number;
   invalidGlossaryCount: number;
   singleOccurrenceCount: number;
@@ -71,6 +89,11 @@ export interface SummaryEvaluationAggregate {
   casesWithInvalidEntries: number;
   averageSummaryWords: number;
   summariesWithinRange: number;
+  totalBriefOverlapFields: number;
+  casesWithGuidanceLeak: number;
+  totalGuidancePhrases: number;
+  casesWithGuidancePhrases: number;
+  averageBriefOverlapRatio: number;
   issueCounts: Record<SummaryGlossaryIssueCode, number>;
 }
 
@@ -108,6 +131,120 @@ function userGlossaryMap(
     map.set(source.toLowerCase(), entry);
   }
   return map;
+}
+
+const BRIEF_SEGMENT_SPLIT =
+  /[，。；、,;.!?！？:：/|()（）\[\]{}<>《》\s]+|\b(?:and|or)\b|[和与及]/;
+const BRIEF_COMPACT_STRIP =
+  /[，。；、,;.!?！？:：/|()（）\[\]{}<>《》"'“”‘’—–\-_\s]+/g;
+const CJK_PATTERN = /[\u3400-\u9fff\u3040-\u30ff\uac00-\ud7af]/;
+const MIN_CJK_SEGMENT = 4;
+const MIN_LATIN_SEGMENT = 12;
+const BRIEF_OVERLAP_NGRAM = 8;
+
+/** 摘要中出现这些措辞时，说明它可能在写翻译要求而不是描述文档。 */
+const GUIDANCE_PHRASE_PATTERNS: Array<{
+  label: string;
+  pattern: RegExp;
+}> = [
+  {
+    label: "audience",
+    pattern: /目标受众|目标读者|面向.{0,16}(读者|用户|工程师|人员|团队)/,
+  },
+  {
+    label: "tone",
+    pattern: /语气|语调|语言风格|文体风格|行文风格|写作风格/,
+  },
+  {
+    label: "translation-decision",
+    pattern: /译为|译作|应译|统一译|标准译法|翻译为|翻译成/,
+  },
+  {
+    label: "do-not-translate",
+    pattern: /不应翻译|不要翻译|无需翻译|保持原文|保持原样|禁译/,
+  },
+];
+
+function compactOverlapText(value: string): string {
+  return value.toLowerCase().replace(BRIEF_COMPACT_STRIP, "");
+}
+
+function splitBriefSegments(value: string): string[] {
+  return value
+    .split(BRIEF_SEGMENT_SPLIT)
+    .map((segment) => segment.trim())
+    .filter(Boolean);
+}
+
+function isSignificantBriefSegment(segment: string): boolean {
+  const compact = compactOverlapText(segment);
+  if (!compact) {
+    return false;
+  }
+  return compact.length >= (CJK_PATTERN.test(compact)
+    ? MIN_CJK_SEGMENT
+    : MIN_LATIN_SEGMENT);
+}
+
+function evaluateGuidancePhrases(summary: string): string[] {
+  return GUIDANCE_PHRASE_PATTERNS.filter(({ pattern }) =>
+    pattern.test(summary),
+  ).map(({ label }) => label);
+}
+
+function characterNgrams(value: string, size: number): Set<string> {
+  const compact = compactOverlapText(value);
+  const grams = new Set<string>();
+  for (let index = 0; index + size <= compact.length; index += 1) {
+    grams.add(compact.slice(index, index + size));
+  }
+  return grams;
+}
+
+/**
+ * 检测摘要复述 brief 的程度。
+ * - briefOverlapFields：显著片段逐字出现在摘要中，advisory；
+ * - guidanceLeaks：audience / toneAndStyle 出现在摘要中，属于明确的翻译要求泄漏；
+ * - ratio：brief 的 8-gram 被摘要包含的比例，用于看趋势而非硬判定。
+ */
+function evaluateBriefOverlap(
+  summary: string,
+  brief: TranslationBrief | undefined,
+): { fields: SummaryBriefOverlap[]; ratio: number } {
+  if (!brief) {
+    return { fields: [], ratio: 0 };
+  }
+  const summaryCompact = compactOverlapText(summary);
+  const fields: SummaryBriefOverlap[] = [];
+  for (const field of BRIEF_FIELD_KEYS) {
+    const value = brief[field]?.trim();
+    if (!value) {
+      continue;
+    }
+    const segments = splitBriefSegments(value).filter(
+      (segment) =>
+        isSignificantBriefSegment(segment) &&
+        summaryCompact.includes(compactOverlapText(segment)),
+    );
+    if (segments.length > 0) {
+      fields.push({ field, segments });
+    }
+  }
+  const briefText = BRIEF_FIELD_KEYS.map((field) => brief[field]?.trim() ?? "")
+    .filter(Boolean)
+    .join(" ");
+  const summaryGrams = characterNgrams(summary, BRIEF_OVERLAP_NGRAM);
+  const briefGrams = characterNgrams(briefText, BRIEF_OVERLAP_NGRAM);
+  let shared = 0;
+  for (const gram of briefGrams) {
+    if (summaryGrams.has(gram)) {
+      shared += 1;
+    }
+  }
+  return {
+    fields,
+    ratio: briefGrams.size > 0 ? shared / briefGrams.size : 0,
+  };
 }
 
 function evaluateEntry(
@@ -171,6 +308,10 @@ export function evaluateSummaryCase(input: {
   );
   const issues = entries.flatMap((entry) => entry.issues);
   const summaryWords = countSummaryWords(input.result.summary);
+  const briefOverlap = evaluateBriefOverlap(
+    input.result.summary,
+    input.result.brief,
+  );
   return {
     id: input.id,
     tags: [...(input.tags ?? [])],
@@ -180,6 +321,12 @@ export function evaluateSummaryCase(input: {
       summaryWords >= SUMMARY_MIN_WORDS &&
       summaryWords <= SUMMARY_MAX_WORDS,
     ...(input.result.brief ? { brief: input.result.brief } : {}),
+    briefOverlapFields: briefOverlap.fields.map((item) => item.field),
+    guidanceLeaks: briefOverlap.fields.filter(
+      (item) => item.field === "audience" || item.field === "toneAndStyle",
+    ),
+    guidancePhrases: evaluateGuidancePhrases(input.result.summary),
+    briefOverlapRatio: briefOverlap.ratio,
     glossaryCount: entries.length,
     invalidGlossaryCount: entries.filter((entry) => entry.issues.length > 0)
       .length,
@@ -207,6 +354,11 @@ export function aggregateSummaryEvaluations(
   let casesWithInvalidEntries = 0;
   let totalSummaryWords = 0;
   let summariesWithinRange = 0;
+  let totalBriefOverlapFields = 0;
+  let casesWithGuidanceLeak = 0;
+  let totalGuidancePhrases = 0;
+  let casesWithGuidancePhrases = 0;
+  let totalBriefOverlapRatio = 0;
   for (const item of cases) {
     totalGlossaryEntries += item.glossaryCount;
     totalInvalidEntries += item.invalidGlossaryCount;
@@ -219,6 +371,15 @@ export function aggregateSummaryEvaluations(
     if (item.summaryWithinRange) {
       summariesWithinRange += 1;
     }
+    totalBriefOverlapFields += item.briefOverlapFields.length;
+    if (item.guidanceLeaks.length > 0) {
+      casesWithGuidanceLeak += 1;
+    }
+    if (item.guidancePhrases.length > 0) {
+      casesWithGuidancePhrases += 1;
+    }
+    totalGuidancePhrases += item.guidancePhrases.length;
+    totalBriefOverlapRatio += item.briefOverlapRatio;
     for (const issue of item.issues) {
       issueCounts[issue.code] += 1;
     }
@@ -244,6 +405,12 @@ export function aggregateSummaryEvaluations(
     averageSummaryWords:
       caseCount > 0 ? totalSummaryWords / caseCount : 0,
     summariesWithinRange,
+    totalBriefOverlapFields,
+    casesWithGuidanceLeak,
+    totalGuidancePhrases,
+    casesWithGuidancePhrases,
+    averageBriefOverlapRatio:
+      caseCount > 0 ? totalBriefOverlapRatio / caseCount : 0,
     issueCounts,
   };
 }

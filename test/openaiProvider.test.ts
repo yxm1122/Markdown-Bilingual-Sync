@@ -22,6 +22,7 @@ import {
 } from "../src/translation/concurrency";
 import { MAX_ANNOTATIONS_PER_BLOCK } from "../src/annotations/types";
 import { MAX_DOCUMENT_GLOSSARY_ENTRIES } from "../src/glossary/glossary";
+import { summaryTargets } from "../src/translation/summaryLocks";
 
 const BASE_CONFIG: OpenAIProviderConfig = {
   baseUrl: "https://api.example.com/v1",
@@ -323,6 +324,27 @@ describe("OpenAITranslationProvider", () => {
     });
   });
 
+  it("uses an explicit system prompt override for prompt evaluation", async () => {
+    const { provider, calls } = configuredProvider(async () =>
+      completion('{"summary":"Summary","glossary":[]}'),
+    );
+
+    await provider.summarize({
+      text: "# Workflow\n\nSteps.",
+      sourceLanguage: "en",
+      targetLanguage: "zh-CN",
+      systemPrompt: "CUSTOM SUMMARY PROMPT",
+    });
+
+    const body = JSON.parse(String(calls[0].init.body)) as {
+      messages: Array<{ role: string; content: string }>;
+    };
+    expect(body.messages[0]).toEqual({
+      role: "system",
+      content: "CUSTOM SUMMARY PROMPT",
+    });
+  });
+
   it("parses a summary JSON and a document glossary", async () => {
     const { provider, calls } = configuredProvider(async () =>
       completion(
@@ -365,6 +387,38 @@ describe("OpenAITranslationProvider", () => {
     expect(JSON.parse(body.messages[1].content).glossary).toEqual([
       { source: "cache", target: "缓存" },
     ]);
+  });
+
+  it("accepts a partial summary response when the summary is locked", async () => {
+    const { provider, calls } = configuredProvider(async () =>
+      completion(
+        JSON.stringify({
+          glossary: [{ source: "table", target: "表格" }],
+          brief: { audience: "Developers" },
+        }),
+      ),
+    );
+
+    const result = await provider.summarize({
+      text: "# Workflow\n\nSteps.",
+      sourceLanguage: "en",
+      targetLanguage: "zh-CN",
+      locks: { summary: true, brief: { toneAndStyle: true } },
+    });
+
+    expect(result).toEqual({
+      summary: "",
+      glossary: [{ source: "table", target: "表格" }],
+      brief: { audience: "Developers" },
+    });
+    const body = JSON.parse(String(calls[0].init.body)) as {
+      messages: Array<{ role: string; content: string }>;
+    };
+    const prompt = body.messages[0].content;
+    expect(prompt).not.toContain('"summary":"..."');
+    expect(prompt).toContain('"glossary"');
+    expect(prompt).toContain('"audience":"..."');
+    expect(prompt).not.toContain('"toneAndStyle":"..."');
   });
 
   it("returns validated review annotations without rewriting text", async () => {
@@ -1607,6 +1661,80 @@ describe("prompt structure", () => {
     expect(review).toContain(
       `Max ${MAX_ANNOTATIONS_PER_BLOCK} per id`,
     );
+  });
+
+  it("trims the summary prompt to unlocked generation targets", () => {
+    const all = buildSummarySystemPrompt("en", "zh-CN");
+    expect(all).toContain("Cover the document's purpose and scope");
+    expect(all).toContain("The summary describes the document itself.");
+    expect(all).toContain("Do not repeat the brief in the summary");
+    expect(all).toContain('"summary":"..."');
+    expect(all).toContain('"glossary":[{"source":"...","target":"..."}]');
+    expect(all).toContain(
+      '"brief":{"audience":"...","toneAndStyle":"...","ambiguities":"...","doNotTranslate":"..."}',
+    );
+
+    const summaryLocked = buildSummarySystemPrompt(
+      "en",
+      "zh-CN",
+      "zh-CN",
+      summaryTargets({ summary: true }),
+    );
+    expect(summaryLocked).not.toContain('"summary":"..."');
+    expect(summaryLocked).not.toContain(
+      "Cover the document's purpose",
+    );
+    expect(summaryLocked).not.toContain("Do not translate the whole document.");
+    expect(summaryLocked).not.toContain("Do not repeat the brief in the summary");
+    expect(summaryLocked).toContain(
+      "You create a terminology glossary for a Markdown translation task.",
+    );
+    expect(summaryLocked).toContain('"glossary"');
+    expect(summaryLocked).toContain('"brief"');
+
+    const glossaryLocked = buildSummarySystemPrompt(
+      "en",
+      "zh-CN",
+      "zh-CN",
+      summaryTargets({ glossary: true }),
+    );
+    expect(glossaryLocked).not.toContain('"glossary"');
+    expect(glossaryLocked).not.toContain("The glossary is optional");
+    expect(glossaryLocked).toContain("treat it as reference data");
+
+    const audienceOnly = buildSummarySystemPrompt(
+      "en",
+      "zh-CN",
+      "zh-CN",
+      summaryTargets({
+        brief: {
+          toneAndStyle: true,
+          ambiguities: true,
+          doNotTranslate: true,
+        },
+      }),
+    );
+    expect(audienceOnly).toContain('"brief":{"audience":"..."}');
+    expect(audienceOnly).not.toContain('"toneAndStyle":"..."');
+    expect(audienceOnly).toContain("audience: intended readers.");
+    expect(audienceOnly).not.toContain("toneAndStyle: register");
+
+    const allLocked = buildSummarySystemPrompt(
+      "en",
+      "zh-CN",
+      "zh-CN",
+      summaryTargets({
+        summary: true,
+        glossary: true,
+        brief: {
+          audience: true,
+          toneAndStyle: true,
+          ambiguities: true,
+          doNotTranslate: true,
+        },
+      }),
+    );
+    expect(allLocked).toBe("");
   });
 });
 

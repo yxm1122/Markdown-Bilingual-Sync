@@ -278,6 +278,14 @@ async function main(): Promise<void> {
         },
         briefTokens: 96,
         briefFilledCount: 4,
+        locks: {
+          summary: true,
+          glossary: true,
+          brief: {
+            audience: true,
+            ambiguities: true,
+          },
+        },
         canGenerate: true,
         glossaryText:
           "Markdown => Markdown\nAnchor => 锚点\nGlossary => 术语表\nA very long source term that exceeds the card width => 一个非常长的目标术语用于验证省略显示",

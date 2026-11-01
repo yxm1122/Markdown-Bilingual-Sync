@@ -123,6 +123,10 @@ function aggregateTable(
     `| Cases with invalid entries | ${aggregate.casesWithInvalidEntries} |`,
     `| Summary words (average) | ${number(aggregate.averageSummaryWords)} |`,
     `| Summaries within 120–250 words | ${aggregate.summariesWithinRange}/${aggregate.caseCount} |`,
+    `| Brief overlap fields (verbatim segments) | ${aggregate.totalBriefOverlapFields} |`,
+    `| Cases with audience/tone leakage | ${aggregate.casesWithGuidanceLeak}/${aggregate.caseCount} |`,
+    `| Guidance phrases | ${aggregate.totalGuidancePhrases} (${aggregate.casesWithGuidancePhrases}/${aggregate.caseCount} cases) |`,
+    `| Brief overlap (8-gram containment) | ${percent(aggregate.averageBriefOverlapRatio)} |`,
     "",
     "| Issue | Count |",
     "| --- | --- |",
@@ -140,6 +144,18 @@ function formatCase(item: SummaryCaseReport): string {
     "",
     `- Tags: ${item.tags.length > 0 ? item.tags.join(", ") : "-"}`,
     `- Summary words: ${filtered.summaryWords}${filtered.summaryWithinRange ? "" : " (outside 120–250)"}`,
+    `- Brief overlap: ${filtered.briefOverlapFields.length > 0 ? filtered.briefOverlapFields.join(", ") : "none"} (${percent(filtered.briefOverlapRatio)} 8-gram containment)`,
+    `- Guidance phrases: ${filtered.guidancePhrases.length > 0 ? filtered.guidancePhrases.join(", ") : "none"}`,
+    ...(filtered.guidanceLeaks.length > 0
+      ? [
+          `- Guidance leakage: ${filtered.guidanceLeaks
+            .map(
+              (leak) =>
+                `${leak.field} (${leak.segments.join(" / ")})`,
+            )
+            .join("; ")}`,
+        ]
+      : []),
     `- Glossary: raw ${item.raw.glossaryCount}, filtered ${filtered.glossaryCount}, dropped ${item.dropped.length}`,
     `- Invalid: raw ${item.raw.invalidGlossaryCount}, filtered ${filtered.invalidGlossaryCount}`,
     `- Single occurrence: raw ${item.raw.singleOccurrenceCount}, filtered ${filtered.singleOccurrenceCount}`,
@@ -242,11 +258,11 @@ export function formatSummaryMarkdown(report: SummaryReport): string {
       : "No cases were evaluated.\n",
     "## Human review",
     "",
-    "Mark each case: useful entries (1–5), unnecessary entries (1–5), missing critical terms (yes/no), and notes. Automatic metrics only flag deterministic problems; they do not judge whether an entry is worth keeping.",
+    "Mark each case: useful entries (1–5), unnecessary entries (1–5), missing critical terms (yes/no), summary sentences that are translation guidance, and notes. Automatic metrics only flag deterministic problems; they do not judge whether an entry is worth keeping.",
     "",
-    "| Case | Useful entries | Unnecessary entries | Missing critical terms | Notes |",
-    "| --- | --- | --- | --- | --- |",
-    ...report.cases.map((item) => `| ${cell(item.id)} |  |  |  |  |`),
+    "| Case | Useful entries | Unnecessary entries | Missing critical terms | Summary guidance sentences | Notes |",
+    "| --- | --- | --- | --- | --- | --- |",
+    ...report.cases.map((item) => `| ${cell(item.id)} |  |  |  |  |  |`),
     "",
     "## Metric notes",
     "",
@@ -256,6 +272,9 @@ export function formatSummaryMarkdown(report: SummaryReport): string {
     "- `target-protected-syntax`: the term contains code, URL, HTML, footnote syntax, or a newline.",
     "- `user-glossary-conflict`: the generated target differs from the user glossary for the same source.",
     "- `single-occurrence` is advisory: a term used once does not need cross-document consistency, but it may still be a key term.",
+    "- `brief-overlap`: a significant brief segment (≥4 CJK characters or ≥12 Latin characters) appears verbatim in the summary. `audience` and `toneAndStyle` overlap is guidance leakage; other fields are advisory because the document may legitimately discuss those terms.",
+    "- `guidance-phrases`: the summary contains wording such as audience targeting, tone guidance, a translation decision, or a do-not-translate rule. This is advisory because a document about translation may legitimately discuss those topics; confirm with the source.",
+    "- `briefOverlapRatio`: character 8-gram containment of brief text in the summary; advisory, for comparing prompt variants rather than a hard failure.",
     "",
   ];
   if (report.notes.length > 0) {
@@ -271,9 +290,9 @@ export function formatSummaryHumanReview(report: SummaryReport): string {
     `- Generated: ${report.generatedAt}`,
     `- Provider: \`${report.provider}\`${report.model ? ` / \`${report.model}\`` : ""}`,
     "",
-    "| Case | Useful entries | Unnecessary entries | Missing critical terms | Notes |",
-    "| --- | --- | --- | --- | --- |",
-    ...report.cases.map((item) => `| ${cell(item.id)} |  |  |  |  |`),
+    "| Case | Useful entries | Unnecessary entries | Missing critical terms | Summary guidance sentences | Notes |",
+    "| --- | --- | --- | --- | --- | --- |",
+    ...report.cases.map((item) => `| ${cell(item.id)} |  |  |  |  |  |`),
     "",
   ].join("\n");
 }

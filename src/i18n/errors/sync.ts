@@ -230,6 +230,11 @@ export const SYNC_ERRORS = [
     zh: "请先生成全文摘要，再编辑文档术语表。",
   },
   {
+    key: "sync.summaryLockNoSummary",
+    en: "Generate or enter a summary before locking document brief items.",
+    zh: "请先生成或填写摘要，再锁定文档简报内容。",
+  },
+  {
     key: "sync.cacheMissingLink",
     en: "The translation cache does not exist, so the translation insert cannot be linked.",
     zh: "译文缓存不存在，无法关联译文插入块。",

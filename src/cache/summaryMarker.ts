@@ -8,6 +8,10 @@
 import { normalizeGlossaryEntries } from "../glossary/glossary";
 import type { CacheSummary } from "../markdown/types";
 import {
+  hasSummaryLocks,
+  normalizeSummaryLocks,
+} from "../translation/summaryLocks";
+import {
   hasTranslationBrief,
   normalizeTranslationBrief,
 } from "../translation/types";
@@ -33,6 +37,7 @@ export function looksLikeSummaryMarker(line: string): boolean {
  */
 export function createSummaryMarker(summary: CacheSummary): string {
   const brief = normalizeTranslationBrief(summary.brief);
+  const locks = normalizeSummaryLocks(summary.locks);
   const payload = JSON.stringify({
     text: summary.text,
     sourceHash: summary.sourceHash,
@@ -40,6 +45,7 @@ export function createSummaryMarker(summary: CacheSummary): string {
     ...(summary.model ? { model: summary.model } : {}),
     ...(summary.glossary?.length ? { glossary: summary.glossary } : {}),
     ...(hasTranslationBrief(brief) ? { brief } : {}),
+    ...(hasSummaryLocks(locks) ? { locks } : {}),
   });
   return `${PREFIX}${Buffer.from(payload, "utf8").toString("base64url")}${SUFFIX}`;
 }
@@ -80,6 +86,7 @@ export function parseSummaryMarker(line: string): CacheSummary | undefined {
     }
     const glossary = normalizeGlossaryEntries(record.glossary);
     const brief = normalizeTranslationBrief(record.brief);
+    const locks = normalizeSummaryLocks(record.locks);
     return {
       text,
       sourceHash,
@@ -89,6 +96,7 @@ export function parseSummaryMarker(line: string): CacheSummary | undefined {
         : {}),
       ...(glossary.length > 0 ? { glossary } : {}),
       ...(hasTranslationBrief(brief) ? { brief } : {}),
+      ...(hasSummaryLocks(locks) ? { locks } : {}),
     };
   } catch {
     return undefined;

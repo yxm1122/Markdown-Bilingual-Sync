@@ -14,6 +14,7 @@
  * 或缺失的块一律拒绝；术语替换是纯文本替换，不解析 Markdown/HTML，也不访问网络。
  */
 import type { BlockKind } from "../markdown/types";
+import type { SummaryLocks } from "./summaryLocks";
 import { tError } from "../i18n/errors";
 
 // ---- 请求与结果数据类型 ----
@@ -310,12 +311,20 @@ export interface SummaryRequest {
   documentMetadata?: DocumentMetadata;
   /** 用户全局/工作区术语表；生成文档术语表时应优先沿用这些目标词。 */
   glossary?: GlossaryEntry[];
+  /** 生成时跳过的简报项；缺省表示全部生成。 */
+  locks?: SummaryLocks;
+  /**
+   * 评估用 system prompt 覆盖；生产调用方不得设置。
+   * 仅用于在不修改生产规则的前提下对比候选提示词。
+   */
+  systemPrompt?: string;
   /** 自动重试诊断；Provider 在重试前调用。 */
   onRetry?: TranslationRetryReporter;
 }
 
 /** 摘要生成结果：摘要正文 + 随摘要生成的文档术语表 + 可选翻译要求。 */
 export interface SummaryResult {
+  /** 摘要正文；摘要被锁定时为空串，调用方不得用空串覆盖已有摘要。 */
   summary: string;
   glossary: GlossaryEntry[];
   brief?: TranslationBrief;

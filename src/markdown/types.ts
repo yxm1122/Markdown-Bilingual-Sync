@@ -2,6 +2,7 @@ import type {
   GlossaryEntry,
   TranslationBrief,
 } from "../translation/types";
+import type { SummaryLocks } from "../translation/summaryLocks";
 
 /**
  * Markdown 双语数据模型。
@@ -144,6 +145,8 @@ export interface CacheSummary {
   glossary?: GlossaryEntry[];
   /** 文档简报的翻译要求（受众、语气、歧义决策、禁译项）。 */
   brief?: TranslationBrief;
+  /** 生成锁：锁定项不再由 AI 生成，生成结果也不会覆盖缓存原值。 */
+  locks?: SummaryLocks;
 }
 
 /**

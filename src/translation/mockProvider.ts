@@ -30,6 +30,7 @@ import {
 } from "./types";
 import { tError } from "../i18n/errors";
 import { UI_TEXT } from "../i18n";
+import { hasAnyBriefTarget, summaryTargets } from "./summaryLocks";
 
 // ---- 静态词典 ----
 // 词组优先于单词，且都按源词长度降序，减少“短词先替换掉长词的一部分”的几率。
@@ -292,6 +293,7 @@ export class MockTranslationProvider implements TranslationProvider {
     if (signal?.aborted) {
       throw new Error(tError("common.translationCancelled"));
     }
+    const targets = summaryTargets(request.locks);
     const lines = request.text
       .split(/\r?\n/)
       .map((line) => line.trim())
@@ -319,15 +321,24 @@ export class MockTranslationProvider implements TranslationProvider {
       seen.add(key);
       glossary.push({ source, target });
     }
+    const brief = {
+      audience: "Developers and technical writers",
+      toneAndStyle: "Concise technical prose with consistent terminology",
+      ambiguities: "",
+      doNotTranslate: "Keep commands, code, URLs, and file paths unchanged.",
+    };
     return {
-      summary,
-      glossary,
-      brief: {
-        audience: "Developers and technical writers",
-        toneAndStyle: "Concise technical prose with consistent terminology",
-        ambiguities: "",
-        doNotTranslate: "Keep commands, code, URLs, and file paths unchanged.",
-      },
+      summary: targets.summary ? summary : "",
+      glossary: targets.glossary ? glossary : [],
+      ...(hasAnyBriefTarget(targets)
+        ? {
+            brief: Object.fromEntries(
+              Object.entries(brief).filter(
+                ([field]) => targets.brief[field as keyof typeof brief],
+              ),
+            ),
+          }
+        : {}),
     };
   }
 

@@ -793,6 +793,203 @@ describe("summary and glossary", () => {
       value: true,
     });
   });
+
+  it("toggles summary, brief, and glossary locks without freezing editing", () => {
+    const text = harness.text.preview;
+    const { container } = renderPreview(
+      makeModel({ summary: { text: "Summary" } }),
+    );
+    const body = container.querySelector(".pv-summary-body") as HTMLElement;
+
+    fireEvent.click(
+      within(body).getByRole("button", {
+        name: text.summary.lockSummaryTitle,
+      }),
+    );
+    expect(actions(harness)).toContainEqual({
+      type: "setSummaryLock",
+      target: "summary",
+      locked: true,
+    });
+
+    fireEvent.click(
+      body.querySelector(
+        ".pv-brief:not(.pv-glossary-section) .pv-brief-toggle",
+      ) as HTMLElement,
+    );
+    const audienceField = body.querySelector(
+      ".pv-brief-field",
+    ) as HTMLElement;
+    fireEvent.click(
+      within(audienceField).getByRole("button", {
+        name: text.summary.lockBriefTitle,
+      }),
+    );
+    expect(actions(harness)).toContainEqual({
+      type: "setSummaryLock",
+      target: "audience",
+      locked: true,
+    });
+
+    openGlossary(body);
+    fireEvent.click(
+      within(body).getByRole("button", {
+        name: text.summary.lockGlossaryTitle,
+      }),
+    );
+    expect(actions(harness)).toContainEqual({
+      type: "setSummaryLock",
+      target: "glossary",
+      locked: true,
+    });
+
+    expect(
+      (within(body).getByLabelText(
+        text.summary.summaryLabel,
+      ) as HTMLTextAreaElement).disabled,
+    ).toBe(false);
+  });
+
+  it("disables lock toggles while a summary task is running", () => {
+    const text = harness.text.preview;
+    const { container } = renderPreview(
+      makeModel({ summary: { text: "Summary" } }),
+    );
+    const body = container.querySelector(".pv-summary-body") as HTMLElement;
+    const lock = within(body).getByRole("button", {
+      name: text.summary.lockSummaryTitle,
+    }) as HTMLButtonElement;
+
+    expect(lock.disabled).toBe(false);
+    postHostMessage({ type: "taskActivity", running: 1, queued: 0 });
+    expect(lock.disabled).toBe(true);
+    postHostMessage({ type: "taskActivity", running: 0, queued: 0 });
+    expect(lock.disabled).toBe(false);
+  });
+
+  it("keeps locked brief fields editable", () => {
+    const text = harness.text.preview;
+    const { container } = renderPreview(
+      makeModel({
+        summary: {
+          text: "Summary",
+          brief: { audience: "Readers" },
+          locks: {
+            summary: true,
+            brief: { audience: true },
+          },
+        },
+      }),
+    );
+    const body = container.querySelector(".pv-summary-body") as HTMLElement;
+    fireEvent.click(
+      body.querySelector(
+        ".pv-brief:not(.pv-glossary-section) .pv-brief-toggle",
+      ) as HTMLElement,
+    );
+    const input = body.querySelector("#brief-audience") as HTMLInputElement;
+    expect(input.value).toBe("Readers");
+    expect(input.disabled).toBe(false);
+    expect(
+      body.querySelector(".pv-brief-field.is-locked"),
+    ).toBeTruthy();
+  });
+
+  it("disables generate only when every brief item is locked", () => {
+    const text = harness.text.preview;
+    const { container } = renderPreview(
+      makeModel({
+        summary: {
+          text: "Summary",
+          locks: {
+            summary: true,
+            glossary: true,
+            brief: {
+              audience: true,
+              toneAndStyle: true,
+              ambiguities: true,
+              doNotTranslate: true,
+            },
+          },
+        },
+      }),
+    );
+    const body = container.querySelector(".pv-summary-body") as HTMLElement;
+    const generate = within(body).getByRole("button", {
+      name: text.summary.generate,
+    }) as HTMLButtonElement;
+    expect(generate.disabled).toBe(true);
+    expect(generate.title).toBe(text.summary.allLockedTitle);
+    expect(
+      (within(body).getByLabelText(
+        text.summary.summaryLabel,
+      ) as HTMLTextAreaElement).disabled,
+    ).toBe(false);
+
+    fireEvent.click(
+      within(body).getByRole("button", {
+        name: text.summary.unlockSummaryTitle,
+      }),
+    );
+    expect(actions(harness)).toContainEqual({
+      type: "setSummaryLock",
+      target: "summary",
+      locked: false,
+    });
+  });
+
+  it("keeps generate enabled when only some brief items are locked", () => {
+    const text = harness.text.preview;
+    const { container } = renderPreview(
+      makeModel({
+        summary: { text: "Summary", locks: { summary: true } },
+      }),
+    );
+    const body = container.querySelector(".pv-summary-body") as HTMLElement;
+    const generate = within(body).getByRole("button", {
+      name: text.summary.generate,
+    }) as HTMLButtonElement;
+    expect(generate.disabled).toBe(false);
+    expect(generate.title).toBe(text.summary.generateUnlockedTitle);
+  });
+
+  it("requires saving edits before generating", () => {
+    const text = harness.text.preview;
+    const { container } = renderPreview(
+      makeModel({ summary: { text: "Server summary" } }),
+    );
+    const body = container.querySelector(".pv-summary-body") as HTMLElement;
+    const textarea = within(body).getByLabelText(
+      text.summary.summaryLabel,
+    ) as HTMLTextAreaElement;
+
+    fireEvent.input(textarea, { target: { value: "Unsaved summary" } });
+    fireEvent.click(
+      within(body).getByRole("button", { name: text.summary.generate }),
+    );
+
+    expect(screen.getByText(text.summary.saveBeforeGenerate)).toBeTruthy();
+    expect(actions(harness)).not.toContainEqual({ type: "generateSummary" });
+  });
+
+  it("disables lock toggles without a summary", () => {
+    const text = harness.text.preview;
+    const { container } = renderPreview(makeModel());
+    const body = container.querySelector(".pv-summary-body") as HTMLElement;
+    const summaryLock = within(
+      body.querySelector(".pv-summary-editor-head") as HTMLElement,
+    ).getByRole("button", {
+      name: text.summary.lockNeedsSummary,
+    }) as HTMLButtonElement;
+    const glossaryLock = within(
+      body.querySelector(".pv-glossary-section .pv-brief-head") as HTMLElement,
+    ).getByRole("button", {
+      name: text.summary.lockNeedsSummary,
+    }) as HTMLButtonElement;
+
+    expect(summaryLock.disabled).toBe(true);
+    expect(glossaryLock.disabled).toBe(true);
+  });
 });
 
 describe("notices and toasts", () => {

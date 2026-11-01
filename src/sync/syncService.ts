@@ -85,6 +85,17 @@ import {
   type TranslationProvider,
   type TranslationRetryReporter,
 } from "../translation/types";
+import {
+  BRIEF_FIELD_KEYS,
+  hasAnyBriefTarget,
+  hasAnySummaryTarget,
+  hasSummaryLocks,
+  normalizeSummaryLocks,
+  summaryTargets,
+  withSummaryLock,
+  type SummaryLockTarget,
+  type SummaryLocks,
+} from "../translation/summaryLocks";
 import { estimateTokenCount } from "../translation/batching";
 import {
   checkDocumentConsistency,
@@ -2310,7 +2321,18 @@ export class SyncService {
     // 重新生成摘要时保留已有文档术语条目，避免覆盖用户在预览中的修改；
     // 需要彻底重建时先清除摘要（会同时清除术语表）再生成。
     const existingCache = parseCacheDocument(state.cacheText ?? "", this.md);
-    const existingGlossary = existingCache.summary?.glossary ?? [];
+    const existingSummary = existingCache.summary;
+    const existingGlossary = existingSummary?.glossary ?? [];
+    const locks = normalizeSummaryLocks(existingSummary?.locks);
+    const targets = summaryTargets(locks);
+    if (!hasAnySummaryTarget(targets)) {
+      this.log("summary generation skipped: every brief item is locked");
+      return state.cacheText ?? "";
+    }
+    const existingText = existingSummary?.text.trim() ?? "";
+    if (locks.summary && !existingText) {
+      throw new Error(tError("sync.summaryLockNoSummary"));
+    }
     const result = await this.provider.summarize(
       {
         text: summaryText,
@@ -2329,47 +2351,77 @@ export class SyncService {
           scopedGlossary.entries,
           existingGlossary,
         ]),
+        ...(Object.keys(locks).length > 0 ? { locks } : {}),
       },
       signal,
     );
     if (signal?.aborted) {
       throw new CancelledError();
     }
-    const text = result.summary.trim();
+    const generatedText = result.summary.trim();
+    const text = targets.summary ? generatedText : existingText;
     if (!text) {
       throw new Error(tError("sync.aiEmptySummary"));
     }
-    const generatedGlossary = filterGeneratedGlossary(
-      result.glossary,
-      summaryText,
-      {
-        // 文档术语表用于跨块一致性：只出现一次的词不需要一致性约束；
-        // 用户术语表已覆盖的 source 也不重复收录，避免覆盖用户选择。
-        minOccurrences: 2,
-        reservedSources: scopedGlossary.entries.map((entry) => entry.source),
-      },
-    );
-    if (generatedGlossary.dropped.length > 0) {
+    const generatedGlossary = targets.glossary
+      ? filterGeneratedGlossary(result.glossary, summaryText, {
+          // 文档术语表用于跨块一致性：只出现一次的词不需要一致性约束；
+          // 用户术语表已覆盖的 source 也不重复收录，避免覆盖用户选择。
+          minOccurrences: 2,
+          reservedSources: scopedGlossary.entries.map((entry) => entry.source),
+        })
+      : undefined;
+    if (generatedGlossary && generatedGlossary.dropped.length > 0) {
       this.log(
         `summary glossary: dropped ${generatedGlossary.dropped.length} generated entries (${[
           ...new Set(generatedGlossary.dropped.map((entry) => entry.reason)),
         ].join(", ")})`,
       );
     }
+    const generatedBrief = normalizeTranslationBrief(result.brief);
+    const brief: TranslationBrief = {};
+    if (hasTranslationBrief(generatedBrief)) {
+      for (const field of BRIEF_FIELD_KEYS) {
+        const value = targets.brief[field]
+          ? generatedBrief[field]
+          : existingSummary?.brief?.[field];
+        if (value) {
+          brief[field] = value;
+        }
+      }
+    } else if (existingSummary?.brief) {
+      // 模型没有返回可用 brief 时，保留用户手工填写的内容。
+      Object.assign(brief, existingSummary.brief);
+    }
+    const normalizedBrief = normalizeTranslationBrief(brief);
+    const briefChanged =
+      hasAnyBriefTarget(targets) &&
+      JSON.stringify(normalizedBrief) !==
+        JSON.stringify(existingSummary?.brief ?? {});
+    const detailsChanged = targets.summary || briefChanged;
     // 持久化稳定 provider id（mock/openai/http），显示名在渲染时按当前 locale 映射，
     // 避免缓存内容随界面语言变化。BatchTranslationCoordinator 的 id 带 batch: 前缀，
     // 只用于运行时路由，不写入缓存。
-    const generatedBrief = normalizeTranslationBrief(result.brief);
     return this.writeSummary(state, {
       text,
-      model: this.provider.id.replace(/^batch:/, ""),
-      glossary: this.mergeGeneratedGlossary(
-        existingGlossary,
-        generatedGlossary.entries,
-      ),
-      brief: hasTranslationBrief(generatedBrief)
-        ? generatedBrief
-        : existingCache.summary?.brief,
+      model: targets.summary
+        ? this.provider.id.replace(/^batch:/, "")
+        : existingSummary?.model,
+      glossary: generatedGlossary
+        ? this.mergeGeneratedGlossary(
+            existingGlossary,
+            generatedGlossary.entries,
+          )
+        : existingGlossary,
+      updatedAt: detailsChanged
+        ? new Date().toISOString()
+        : existingSummary?.updatedAt,
+      // 摘要被锁定时保留原有 sourceHash，过期提示继续反映锁定的版本。
+      sourceHash: targets.summary
+        ? summarySourceHash(state.sourceText)
+        : existingSummary?.sourceHash,
+      brief: normalizedBrief,
+      locks,
     });
   }
 
@@ -2416,6 +2468,7 @@ export class SyncService {
       model: "manual",
       glossary: cache.summary?.glossary ?? [],
       brief: cache.summary?.brief,
+      locks: cache.summary?.locks,
     });
   }
 
@@ -2480,6 +2533,7 @@ export class SyncService {
         ? summarySourceHash(state.sourceText)
         : previous?.sourceHash,
       brief,
+      locks: previous?.locks,
     });
   }
 
@@ -2516,6 +2570,43 @@ export class SyncService {
       updatedAt: cache.summary.updatedAt,
       sourceHash: cache.summary.sourceHash,
       brief: cache.summary.brief,
+      locks: cache.summary.locks,
+    });
+  }
+
+  /**
+   * 切换文档简报的单项生成锁；只改锁元数据，不刷新 updatedAt/model/sourceHash。
+   * 锁定要求缓存中已有摘要正文，因为锁随摘要标记一起保存。
+   */
+  async setSummaryLocks(
+    sourceUri: vscode.Uri,
+    target: SummaryLockTarget,
+    locked: boolean,
+  ): Promise<string> {
+    return this.withLock(sourceUri, () =>
+      this.setSummaryLocksUnlocked(sourceUri, target, locked),
+    );
+  }
+
+  private async setSummaryLocksUnlocked(
+    sourceUri: vscode.Uri,
+    target: SummaryLockTarget,
+    locked: boolean,
+  ): Promise<string> {
+    const state = await this.loadState(sourceUri, false);
+    const cache = parseCacheDocument(state.cacheText ?? "", this.md);
+    const summary = cache.summary;
+    if (!summary?.text.trim()) {
+      throw new Error(tError("sync.summaryLockNoSummary"));
+    }
+    return this.writeSummary(state, {
+      text: summary.text,
+      model: summary.model,
+      glossary: summary.glossary ?? [],
+      updatedAt: summary.updatedAt,
+      sourceHash: summary.sourceHash,
+      brief: summary.brief,
+      locks: withSummaryLock(summary.locks, target, locked),
     });
   }
 
@@ -2578,6 +2669,7 @@ export class SyncService {
       updatedAt?: string;
       sourceHash?: string;
       brief?: TranslationBrief;
+      locks?: SummaryLocks;
     },
   ): Promise<string> {
     const summaryText = input.text.trim();
@@ -2591,6 +2683,7 @@ export class SyncService {
       MAX_DOCUMENT_GLOSSARY_ENTRIES,
     );
     const normalizedBrief = normalizeTranslationBrief(input.brief);
+    const normalizedLocks = normalizeSummaryLocks(input.locks);
     const cache = parseCacheDocument(state.cacheText ?? "", this.md);
     this.assertCacheSummaryWritable(cache);
     const entries = this.orderedCacheEntries(cache);
@@ -2607,6 +2700,9 @@ export class SyncService {
           : {}),
         ...(hasTranslationBrief(normalizedBrief)
           ? { brief: normalizedBrief }
+          : {}),
+        ...(hasSummaryLocks(normalizedLocks)
+          ? { locks: normalizedLocks }
           : {}),
       },
     );

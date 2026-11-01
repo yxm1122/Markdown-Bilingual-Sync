@@ -56,6 +56,11 @@ import type {
   TranslationBrief,
 } from "../../translation/types";
 import {
+  BRIEF_FIELD_KEYS,
+  type BriefField,
+  type SummaryLockTarget,
+} from "../../translation/summaryLocks";
+import {
   isUserAnnotationPending,
   MAX_ANNOTATION_MESSAGE,
   type AnnotationView,
@@ -254,6 +259,28 @@ function IconButton(props: {
       onClick={props.onClick}
     >
       <Icon name={props.icon} />
+    </button>
+  );
+}
+
+/** 紧凑锁按钮：用于摘要、brief 字段和术语表标题，状态只影响生成，不冻结编辑。 */
+function LockButton(props: {
+  locked: boolean;
+  title: string;
+  disabled?: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      class={`pv-lock-button${props.locked ? " is-locked" : ""}`}
+      title={props.title}
+      aria-label={props.title}
+      aria-pressed={props.locked}
+      disabled={props.disabled}
+      onClick={props.onClick}
+    >
+      <Icon name={props.locked ? "lock" : "unlock"} />
     </button>
   );
 }
@@ -2519,6 +2546,59 @@ function GlossaryTable(props: {
   );
 }
 
+function BriefFieldEditor(props: {
+  field: BriefField;
+  label: string;
+  value: string;
+  placeholder: string;
+  rows?: number;
+  locked: boolean;
+  disabled: boolean;
+  lockDisabled: boolean;
+  lockTitle: string;
+  onLock: () => void;
+  onInput: (value: string) => void;
+}) {
+  const id = `brief-${props.field}`;
+  return (
+    <div class={`pv-brief-field${props.locked ? " is-locked" : ""}`}>
+      <div class="pv-brief-field-head">
+        <label for={id}>{props.label}</label>
+        <LockButton
+          locked={props.locked}
+          title={props.lockTitle}
+          disabled={props.lockDisabled}
+          onClick={props.onLock}
+        />
+      </div>
+      {props.rows ? (
+        <textarea
+          id={id}
+          class="pv-textarea"
+          rows={props.rows}
+          value={props.value}
+          maxLength={BRIEF_FIELD_LIMIT}
+          spellcheck={false}
+          disabled={props.disabled}
+          placeholder={props.placeholder}
+          onInput={(event) => props.onInput(event.currentTarget.value)}
+        />
+      ) : (
+        <input
+          id={id}
+          class="pv-input"
+          value={props.value}
+          maxLength={BRIEF_FIELD_LIMIT}
+          spellcheck={false}
+          disabled={props.disabled}
+          placeholder={props.placeholder}
+          onInput={(event) => props.onInput(event.currentTarget.value)}
+        />
+      )}
+    </div>
+  );
+}
+
 function SummaryPanel(props: {
   text: UiCatalog;
   summary: Summary;
@@ -2534,6 +2614,7 @@ function SummaryPanel(props: {
   onDraft: (value: string) => void;
   onGlossaryDraft: (value: string) => void;
   onBriefDraft: (patch: Partial<TranslationBrief>) => void;
+  onLock: (target: SummaryLockTarget, locked: boolean) => void;
   onGenerate: () => void;
   onSave: () => void;
   onClear: () => void;
@@ -2541,6 +2622,31 @@ function SummaryPanel(props: {
 }) {
   const { text, summary } = props;
   const hasSummary = Boolean(summary.text.trim());
+  const locks = summary.locks ?? {};
+  const summaryLocked = locks.summary === true;
+  const glossaryLocked = locks.glossary === true;
+  const lockedBriefCount = BRIEF_FIELD_KEYS.filter(
+    (field) => locks.brief?.[field] === true,
+  ).length;
+  const anyLocked = summaryLocked || glossaryLocked || lockedBriefCount > 0;
+  const allLocked =
+    summaryLocked &&
+    glossaryLocked &&
+    lockedBriefCount === BRIEF_FIELD_KEYS.length;
+  const lockDisabled = props.locked || !hasSummary;
+  const briefLockTitle = (field: BriefField): string =>
+    !hasSummary
+      ? text.preview.summary.lockNeedsSummary
+      : locks.brief?.[field] === true
+        ? text.preview.summary.unlockBriefTitle
+        : text.preview.summary.lockBriefTitle;
+  const generateTitle = allLocked
+    ? text.preview.summary.allLockedTitle
+    : !summary.canGenerate
+      ? text.preview.summary.unsupported
+      : anyLocked
+        ? text.preview.summary.generateUnlockedTitle
+        : text.preview.summary.generateTitle;
   const [openSection, setOpenSection] = useState<
     "brief" | "glossary" | null
   >(null);
@@ -2591,6 +2697,14 @@ function SummaryPanel(props: {
       >
         <Icon name="book" />
         <span class="pv-summary-title">{text.preview.summary.title}</span>
+        {anyLocked ? (
+          <span
+            class="pv-summary-lock-hint"
+            title={text.preview.summary.locked}
+          >
+            <Icon name="lock" size={12} />
+          </span>
+        ) : null}
         <span class={`pv-summary-state${summary.stale ? " is-stale" : ""}`}>{status}</span>
         <span class="pv-summary-meta">{meta.join(" · ")}</span>
         <Icon name="chevron-down" />
@@ -2600,8 +2714,8 @@ function SummaryPanel(props: {
           <div class="pv-summary-actions">
             <Button
               primary
-              disabled={props.busy || !summary.canGenerate}
-              title={summary.canGenerate ? text.preview.summary.generateTitle : text.preview.summary.unsupported}
+              disabled={props.busy || !summary.canGenerate || allLocked}
+              title={generateTitle}
               onClick={props.onGenerate}
             >
               {text.preview.summary.generate}
@@ -2639,12 +2753,32 @@ function SummaryPanel(props: {
               {text.preview.summary.useSummary}
             </label>
           </div>
+          <div class="pv-summary-editor-head">
+            <span class="pv-summary-editor-label">
+              {text.preview.summary.summaryLabel}
+            </span>
+            {summaryLocked ? (
+              <span class="pv-lock-chip">{text.preview.summary.locked}</span>
+            ) : null}
+            <LockButton
+              locked={summaryLocked}
+              title={
+                !hasSummary
+                  ? text.preview.summary.lockNeedsSummary
+                  : summaryLocked
+                    ? text.preview.summary.unlockSummaryTitle
+                    : text.preview.summary.lockSummaryTitle
+              }
+              disabled={lockDisabled}
+              onClick={() => props.onLock("summary", !summaryLocked)}
+            />
+          </div>
           <textarea
             class="pv-textarea"
             rows={6}
             spellcheck={false}
             disabled={props.locked}
-            aria-label={text.preview.summary.title}
+            aria-label={text.preview.summary.summaryLabel}
             value={props.summaryDraft}
             placeholder={text.preview.summary.placeholder}
             onInput={(event) => props.onDraft(event.currentTarget.value)}
@@ -2653,6 +2787,12 @@ function SummaryPanel(props: {
             {meta.join(" · ")}
             {summary.stale ? ` · ${text.preview.summary.staleHint}` : ""}
           </p>
+          {summaryLocked ? (
+            <p class="pv-summary-note pv-lock-note">
+              <Icon name="lock" size={11} />
+              <span>{text.preview.summary.lockedSummaryNote}</span>
+            </p>
+          ) : null}
           <div class={`pv-brief${openSection === "brief" ? " is-open" : ""}`}>
             <button
               type="button"
@@ -2668,80 +2808,102 @@ function SummaryPanel(props: {
                 {fmt(text.preview.summary.briefFilled, {
                   count: filledBrief,
                 })}
+                {lockedBriefCount > 0
+                  ? ` · ${fmt(text.preview.summary.briefLockedCount, {
+                      count: lockedBriefCount,
+                    })}`
+                  : ""}
               </span>
               <Icon name="chevron-down" />
             </button>
             {openSection === "brief" ? (
               <div class="pv-brief-fields">
-                <label class="pv-brief-field">
-                  <span>{text.preview.summary.briefAudience}</span>
-                  <input
-                    class="pv-input"
-                    value={props.brief.audience ?? ""}
-                    maxLength={BRIEF_FIELD_LIMIT}
-                    spellcheck={false}
-                    disabled={props.locked}
-                    placeholder={text.preview.summary.briefAudiencePlaceholder}
-                    onInput={(event) =>
-                      props.onBriefDraft({ audience: event.currentTarget.value })
-                    }
-                  />
-                </label>
-                <label class="pv-brief-field">
-                  <span>{text.preview.summary.briefTone}</span>
-                  <textarea
-                    class="pv-textarea"
-                    rows={2}
-                    value={props.brief.toneAndStyle ?? ""}
-                    maxLength={BRIEF_FIELD_LIMIT}
-                    spellcheck={false}
-                    disabled={props.locked}
-                    placeholder={text.preview.summary.briefTonePlaceholder}
-                    onInput={(event) =>
-                      props.onBriefDraft({
-                        toneAndStyle: event.currentTarget.value,
-                      })
-                    }
-                  />
-                </label>
-                <label class="pv-brief-field">
-                  <span>{text.preview.summary.briefAmbiguities}</span>
-                  <textarea
-                    class="pv-textarea"
-                    rows={3}
-                    value={props.brief.ambiguities ?? ""}
-                    maxLength={BRIEF_FIELD_LIMIT}
-                    spellcheck={false}
-                    disabled={props.locked}
-                    placeholder={
-                      text.preview.summary.briefAmbiguitiesPlaceholder
-                    }
-                    onInput={(event) =>
-                      props.onBriefDraft({
-                        ambiguities: event.currentTarget.value,
-                      })
-                    }
-                  />
-                </label>
-                <label class="pv-brief-field">
-                  <span>{text.preview.summary.briefDoNotTranslate}</span>
-                  <textarea
-                    class="pv-textarea"
-                    rows={2}
-                    value={props.brief.doNotTranslate ?? ""}
-                    maxLength={BRIEF_FIELD_LIMIT}
-                    spellcheck={false}
-                    disabled={props.locked}
-                    placeholder={
-                      text.preview.summary.briefDoNotTranslatePlaceholder
-                    }
-                    onInput={(event) =>
-                      props.onBriefDraft({
-                        doNotTranslate: event.currentTarget.value,
-                      })
-                    }
-                  />
-                </label>
+                <BriefFieldEditor
+                  field="audience"
+                  label={text.preview.summary.briefAudience}
+                  value={props.brief.audience ?? ""}
+                  placeholder={text.preview.summary.briefAudiencePlaceholder}
+                  locked={locks.brief?.audience === true}
+                  disabled={props.locked}
+                  lockDisabled={lockDisabled}
+                  lockTitle={briefLockTitle("audience")}
+                  onLock={() =>
+                    props.onLock("audience", locks.brief?.audience !== true)
+                  }
+                  onInput={(value) => props.onBriefDraft({ audience: value })}
+                />
+                <BriefFieldEditor
+                  field="toneAndStyle"
+                  label={text.preview.summary.briefTone}
+                  value={props.brief.toneAndStyle ?? ""}
+                  placeholder={text.preview.summary.briefTonePlaceholder}
+                  rows={2}
+                  locked={locks.brief?.toneAndStyle === true}
+                  disabled={props.locked}
+                  lockDisabled={lockDisabled}
+                  lockTitle={briefLockTitle("toneAndStyle")}
+                  onLock={() =>
+                    props.onLock(
+                      "toneAndStyle",
+                      locks.brief?.toneAndStyle !== true,
+                    )
+                  }
+                  onInput={(value) =>
+                    props.onBriefDraft({ toneAndStyle: value })
+                  }
+                />
+                <BriefFieldEditor
+                  field="ambiguities"
+                  label={text.preview.summary.briefAmbiguities}
+                  value={props.brief.ambiguities ?? ""}
+                  placeholder={text.preview.summary.briefAmbiguitiesPlaceholder}
+                  rows={3}
+                  locked={locks.brief?.ambiguities === true}
+                  disabled={props.locked}
+                  lockDisabled={lockDisabled}
+                  lockTitle={briefLockTitle("ambiguities")}
+                  onLock={() =>
+                    props.onLock(
+                      "ambiguities",
+                      locks.brief?.ambiguities !== true,
+                    )
+                  }
+                  onInput={(value) =>
+                    props.onBriefDraft({ ambiguities: value })
+                  }
+                />
+                <BriefFieldEditor
+                  field="doNotTranslate"
+                  label={text.preview.summary.briefDoNotTranslate}
+                  value={props.brief.doNotTranslate ?? ""}
+                  placeholder={
+                    text.preview.summary.briefDoNotTranslatePlaceholder
+                  }
+                  rows={2}
+                  locked={locks.brief?.doNotTranslate === true}
+                  disabled={props.locked}
+                  lockDisabled={lockDisabled}
+                  lockTitle={briefLockTitle("doNotTranslate")}
+                  onLock={() =>
+                    props.onLock(
+                      "doNotTranslate",
+                      locks.brief?.doNotTranslate !== true,
+                    )
+                  }
+                  onInput={(value) =>
+                    props.onBriefDraft({ doNotTranslate: value })
+                  }
+                />
+                {lockedBriefCount > 0 ? (
+                  <p class="pv-summary-note pv-lock-note">
+                    <Icon name="lock" size={11} />
+                    <span>
+                      {fmt(text.preview.summary.lockedBriefNote, {
+                        count: lockedBriefCount,
+                      })}
+                    </span>
+                  </p>
+                ) : null}
                 <p class="pv-summary-note">
                   {text.preview.summary.briefHint}
                 </p>
@@ -2753,35 +2915,57 @@ function SummaryPanel(props: {
               openSection === "glossary" ? " is-open" : ""
             }`}
           >
-            <button
-              type="button"
-              class="pv-brief-toggle"
-              aria-expanded={openSection === "glossary"}
-              onClick={() => toggleSection("glossary")}
-            >
-              <Icon name="book" />
-              <span class="pv-brief-title">
-                {text.preview.summary.glossaryTitle}
-              </span>
-              <span class="pv-brief-count">
-                {fmt(text.preview.summary.glossaryCount, {
-                  count: glossaryValidation.count,
-                })}
-              </span>
-              <span class="pv-glossary-limit">
-                / {GLOSSARY_MAX_ENTRIES}
-              </span>
-              <Icon name="chevron-down" />
-            </button>
+            <div class="pv-brief-head">
+              <button
+                type="button"
+                class="pv-brief-toggle"
+                aria-expanded={openSection === "glossary"}
+                onClick={() => toggleSection("glossary")}
+              >
+                <Icon name="book" />
+                <span class="pv-brief-title">
+                  {text.preview.summary.glossaryTitle}
+                </span>
+                <span class="pv-brief-count">
+                  {fmt(text.preview.summary.glossaryCount, {
+                    count: glossaryValidation.count,
+                  })}
+                </span>
+                <span class="pv-glossary-limit">
+                  / {GLOSSARY_MAX_ENTRIES}
+                </span>
+                <Icon name="chevron-down" />
+              </button>
+              <LockButton
+                locked={glossaryLocked}
+                title={
+                  !hasSummary
+                    ? text.preview.summary.lockNeedsSummary
+                    : glossaryLocked
+                      ? text.preview.summary.unlockGlossaryTitle
+                      : text.preview.summary.lockGlossaryTitle
+                }
+                disabled={lockDisabled}
+                onClick={() => props.onLock("glossary", !glossaryLocked)}
+              />
+            </div>
             {openSection === "glossary" ? (
               hasSummary ? (
-                <GlossaryTable
-                  text={text}
-                  value={props.glossaryDraft}
-                  disabled={props.locked}
-                  onDraft={props.onGlossaryDraft}
-                  onEditing={setGlossaryEditing}
-                />
+                <>
+                  <GlossaryTable
+                    text={text}
+                    value={props.glossaryDraft}
+                    disabled={props.locked}
+                    onDraft={props.onGlossaryDraft}
+                    onEditing={setGlossaryEditing}
+                  />
+                  {glossaryLocked ? (
+                    <p class="pv-summary-note pv-lock-note">
+                      <Icon name="lock" size={11} />
+                      <span>{text.preview.summary.lockedGlossaryNote}</span>
+                    </p>
+                  ) : null}
+                </>
               ) : (
                 <p class="pv-summary-note">
                   {text.preview.summary.glossaryNeedsSummary}
@@ -5188,8 +5372,16 @@ export function App(props: { boot: BootData; text: UiCatalog }) {
             setGlossaryDraft(value);
           }}
           onBriefDraft={updateBrief}
+          onLock={(target, next) => {
+            if (locked) return;
+            sendMessage({ type: "setSummaryLock", target, locked: next });
+          }}
           onGenerate={() => {
             if (busy) return;
+            if (summaryDirty || briefDirty || glossaryDirty) {
+              showToast(text.preview.summary.saveBeforeGenerate, "info");
+              return;
+            }
             pendingBriefSave.current = null;
             setSummaryDirty(false);
             setBriefDirty(false);

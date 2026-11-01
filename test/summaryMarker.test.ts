@@ -106,6 +106,27 @@ describe("cache summary marker", () => {
     });
   });
 
+  it("round-trips generation locks and drops invalid entries", () => {
+    const marker = createSummaryMarker({
+      text: "summary",
+      sourceHash: "hash",
+      updatedAt: "now",
+      locks: {
+        summary: true,
+        glossary: true,
+        brief: {
+          audience: true,
+          toneAndStyle: false,
+        },
+      },
+    });
+    expect(parseSummaryMarker(marker)?.locks).toEqual({
+      summary: true,
+      glossary: true,
+      brief: { audience: true },
+    });
+  });
+
   it("hashes normalized source text stably", () => {
     expect(summarySourceHash("a\r\nb")).toBe(summarySourceHash("a\nb"));
     expect(summarySourceHash("a")).not.toBe(summarySourceHash("b"));

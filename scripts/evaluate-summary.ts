@@ -58,6 +58,8 @@ interface EvalManifest {
   outputLanguage?: string;
   glossary?: GlossaryEntry[];
   cases: EvalCaseRef[];
+  /** 只参与 summary 评估的附加用例；翻译评估忽略此字段。 */
+  summaryCases?: EvalCaseRef[];
 }
 
 interface CliOptions {
@@ -74,6 +76,7 @@ interface CliOptions {
   timeoutMs: number;
   filterGenerated: boolean;
   minOccurrences: number;
+  systemPromptFile?: string;
 }
 
 const USAGE = `Usage: npm run eval:summary -- [options]
@@ -92,6 +95,8 @@ Options:
   --timeout <ms>          Per-request timeout (default: MBS_TIMEOUT_MS or 180000)
   --min-occurrences <n>   Filter entries used fewer than n times (default: 2)
   --no-filter             Do not apply the deterministic generated-glossary filter
+  --system-prompt-file <path>
+                          Override the summary system prompt (prompt-variant evaluation)
   --help                  Show this help
 
 Environment for openai provider:
@@ -160,6 +165,7 @@ function parseCli(): CliOptions | undefined {
       timeout: { type: "string" },
       "min-occurrences": { type: "string" },
       "no-filter": { type: "boolean" },
+      "system-prompt-file": { type: "string" },
       help: { type: "boolean", short: "h" },
     },
     allowPositionals: false,
@@ -211,6 +217,9 @@ function parseCli(): CliOptions | undefined {
     ),
     filterGenerated: values["no-filter"] !== true,
     minOccurrences: numberOption(values["min-occurrences"], 2, 1, 100),
+    ...(values["system-prompt-file"]
+      ? { systemPromptFile: path.resolve(String(values["system-prompt-file"])) }
+      : {}),
   };
 }
 
@@ -321,12 +330,16 @@ async function main(): Promise<void> {
   if (!Array.isArray(manifest.cases) || manifest.cases.length === 0) {
     throw new Error("Manifest must contain at least one case.");
   }
-  const selected = manifest.cases.filter((item) =>
+  const cases = [...manifest.cases, ...(manifest.summaryCases ?? [])];
+  const selected = cases.filter((item) =>
     matchesFilter(item, options.filter),
   );
   if (selected.length === 0) {
     throw new Error("No cases matched --filter.");
   }
+  const systemPromptOverride = options.systemPromptFile
+    ? (await readFile(options.systemPromptFile, "utf8")).trimEnd()
+    : undefined;
 
   const providerInfo = createProvider(options);
   const summarize = providerInfo.provider.summarize?.bind(
@@ -370,6 +383,7 @@ async function main(): Promise<void> {
         title,
         ...(metadata ? { documentMetadata: metadata } : {}),
         ...(manifest.glossary ? { glossary: manifest.glossary } : {}),
+        ...(systemPromptOverride ? { systemPrompt: systemPromptOverride } : {}),
       });
     } catch (caught) {
       error = caught instanceof Error ? caught.message : String(caught);
@@ -494,16 +508,22 @@ async function main(): Promise<void> {
         : "Deterministic filtering was disabled; raw and filtered metrics are identical.",
       "Summary generation has no automatic retry; each case is a single provider request.",
       "Human review is required: automatic metrics cannot decide whether a term is worth keeping.",
+      ...(systemPromptOverride
+        ? [
+            `System prompt override: ${path.relative(process.cwd(), options.systemPromptFile ?? "")}`,
+          ]
+        : []),
     ],
   });
 
   await writeFile(
     path.join(options.outDir, "prompt.txt"),
-    buildSummarySystemPrompt(
-      manifest.sourceLanguage,
-      manifest.targetLanguage,
-      outputLanguage,
-    ),
+    systemPromptOverride ??
+      buildSummarySystemPrompt(
+        manifest.sourceLanguage,
+        manifest.targetLanguage,
+        outputLanguage,
+      ),
     "utf8",
   );
   await writeFile(
