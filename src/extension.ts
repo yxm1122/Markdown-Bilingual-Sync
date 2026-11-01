@@ -24,6 +24,8 @@
  * - SecretStorage 中的 Key 只在 API Key 命令与读取 Provider 配置时使用，绝不写入日志或设置。
  */
 import * as vscode from "vscode";
+import { AgentService } from "./agent/agentService";
+import { registerAgentTools } from "./agent/agentTools";
 import { filterBatchMarkdownFiles, isFileInsideFolder } from "./batch/batchFiles";
 import { CacheStore } from "./cache/cacheStore";
 import { ExportService, type PreparedExport } from "./export/exportService";
@@ -402,6 +404,15 @@ export function activate(context: vscode.ExtensionContext): void {
     operationScheduler,
   );
   context.subscriptions.push(previewManager);
+  // Language Model Tools：仅 GitHub Copilot / VS Code agent 消费；没有 lm API 时静默跳过。
+  const agentService = new AgentService({
+    syncService,
+    glossaryStore,
+    cacheStore,
+    previewManager,
+    output,
+  });
+  registerAgentTools(context, agentService);
   // 任务视图只依赖快照与命令回调，不直接访问同步服务。
   const taskViewProvider = new TaskViewProvider({
     monitor: taskMonitor,

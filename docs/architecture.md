@@ -8,17 +8,20 @@
 ┌─────────────────────────────────────────────────────────────┐
 │ VS Code 层                                                   │
 │ extension.ts / PreviewManager / ExportService / TaskView     │
+│ Agent tools（Language Model Tools）                          │
 └──────────────────────────┬──────────────────────────────────┘
                            │ 调用
 ┌──────────────────────────▼──────────────────────────────────┐
 │ 服务层                                                       │
-│ SyncService（配置、文件锁、读写、编辑、摘要、回译）            │
+│ SyncService / GlossaryStore / AgentService                   │
+│ （配置、文件锁、读写、编辑、摘要、回译、Agent 编排）           │
 └──────────────────────────┬──────────────────────────────────┘
                            │ 调用
 ┌──────────────────────────▼──────────────────────────────────┐
 │ 纯逻辑层                                                     │
 │ syncDocument / editCache / editSource / exportMarkdown       │
 │ previewModel / batching / importTranslation                  │
+│ glossaryPatch / briefPatch                                   │
 └──────────────────────────┬──────────────────────────────────┘
                            │ 解析/生成
 ┌──────────────────────────▼──────────────────────────────────┐
@@ -30,8 +33,8 @@
 
 约束：
 
-- `src/markdown/`、`src/sync/sync.ts`、`src/translation/batching.ts`、`src/export/exportMarkdown.ts` 等纯逻辑模块不应导入 `vscode`。
-- 只有 `SyncService`、`PreviewManager`、`ExportService`、`CacheStore`、`extension.ts` 等适配层接触 VS Code API。
+- `src/markdown/`、`src/sync/sync.ts`、`src/translation/batching.ts`、`src/export/exportMarkdown.ts` 等纯逻辑模块不应直接导入 `vscode`；错误文案通过 `tError` 间接本地化。
+- 只有 `SyncService`、`GlossaryStore`、`AgentService`、`PreviewManager`、`ExportService`、`CacheStore`、`extension.ts` 等适配层接触 VS Code API。
 - Provider 通过 `getConfig` 惰性读取配置，因此修改设置无需重载窗口。
 
 ## 2. 数据模型
@@ -229,6 +232,17 @@ batchTranslateFolder
 - **清单**：`package.json` 使用 `%key%`，英文值在 `package.nls.json`，中文值在 `package.nls.zh-cn.json`。
 - **Webview**：宿主把本地化后的 `UI_TEXT.preview` 与 provider 名称序列化到首屏壳的 JSON；`<html lang>`、`Intl.DateTimeFormat` 使用 `vscode.env.language`。Webview 脚本不直接访问 `vscode.l10n`。
 - **测试**：`vitest.config.ts` 把 `vscode` alias 到 `test/vscodeStub.ts`，默认 locale 为 zh-cn，`l10n.t` 从生成的 zh-cn bundle 取值；需要英文 locale 的用例在重置模块后修改 stub 的 `env.language`。
+
+### 3.11 Agent 工具（Language Model Tools）
+
+- 面向 GitHub Copilot / VS Code 自带 agent：`package.json` 的 `contributes.languageModelTools` 声明 5 个 `mbs_*` 工具，`vscode.lm.registerTool` 在激活时注册，`onLanguageModelTool:<name>` 保证未打开 Markdown 时调用也能激活扩展；要求 VS Code 1.95+。
+- `AgentService` 负责：路径解析（绝对/工作区相对、活动编辑器回退、缓存与术语表路径拒绝）、运行时校验、结构化错误、默认覆盖生成锁、写入后刷新已打开预览；不直接操作缓存标记或术语表 JSON。
+- 文档简报：`mbs_update_document_brief` 在 `withLock` 内调用 `SyncService.patchDocumentBrief`，brief 按字段合并、空字符串清除；创建时必须提供非空 `summary`，保持“缓存标记只在摘要非空时写入”的既有格式。`mbs_update_document_glossary` 调用 `patchDocumentGlossary`，要求已有文档简报。
+- 用户术语表：`mbs_update_glossary` 调用 `GlossaryStore.updateScope`。merge 先检查现有文件，结构无效或超限时拒绝；replace 显式整体替换。已打开且脏的文件拒绝写入，干净时用 `WorkspaceEdit` 更新并保存；同一 URI 的写入串行排队，避免并发覆盖。
+- 锁与原子性：默认覆盖生成锁但保留锁状态，结果返回 `locksOverridden`；文档/术语补丁先整体校验，任何无效项或超限都不写盘。缓存脏、术语表脏、同步互斥等错误由 `AgentService` 转成稳定 code（如 `BUSY`）。
+- 确认与结果：写工具用 `prepareInvocation` 展示目标文件/作用域与紧凑 diff；读工具只提供进度提示。工具结果统一为 JSON；可恢复错误返回 `{ ok: false, code, message, hint }`，写工具只返回变更计数与样本。
+- 读工具：文档简报可关闭摘要/术语表输出；用户术语表支持 global/workspace/effective 三个作用域、大小写不敏感查询和 offset/limit 分页，effective 结果标记最终来源。
+- 测试：`glossaryPatch` / `briefPatch` 纯逻辑、`SyncService` / `GlossaryStore` 服务写入、`AgentService` 路径与编排、`agentTools` 结果/确认、`languageModelTools` 清单与激活事件/NLS 一致性。
 
 ## 4. Provider 协议
 

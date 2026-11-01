@@ -86,6 +86,15 @@ import {
   type TranslationRetryReporter,
 } from "../translation/types";
 import {
+  applyBriefPatch,
+  BriefPatchError,
+} from "../translation/briefPatch";
+import {
+  applyGlossaryPatch,
+  assertGlossaryPatch,
+  type GlossaryPatch,
+} from "../glossary/glossaryPatch";
+import {
   BRIEF_FIELD_KEYS,
   hasAnyBriefTarget,
   hasAnySummaryTarget,
@@ -187,6 +196,47 @@ export interface PreviewState extends LanguageSettings {
 export interface TranslationAssistSettings {
   stableTranslation: boolean;
   summaryContext: boolean;
+}
+
+/**
+ * Agent/命令入口使用的文档简报补丁。
+ * brief 与 glossary 允许传入未校验值，服务层会再次校验并整体拒绝。
+ */
+export interface DocumentBriefPatchInput {
+  /** 新摘要正文；缺省保持现有摘要，创建简报时必须提供。 */
+  summary?: string;
+  /** brief 部分更新；字段缺省保持，空字符串清除。 */
+  brief?: unknown;
+  /** 文档术语表整体替换；缺省保持现有条目。 */
+  glossary?: unknown;
+}
+
+/** 文档简报补丁结果；summary 为写入后的最终状态。 */
+export interface DocumentBriefPatchResult {
+  cacheText: string;
+  summary: CacheSummary;
+  previous?: CacheSummary;
+  /** 被覆盖但未解除的生成锁目标（summary / brief 字段 / glossary）。 */
+  overrodeLocks: string[];
+}
+
+/** 文档术语表补丁；mode 缺省 merge。 */
+export interface DocumentGlossaryPatchInput {
+  mode?: "merge" | "replace";
+  entries?: unknown;
+  remove?: unknown;
+}
+
+/** 文档术语表补丁结果；保留摘要的 updatedAt/sourceHash。 */
+export interface DocumentGlossaryPatchResult {
+  cacheText: string;
+  summary: CacheSummary;
+  previous: CacheSummary;
+  overrodeLocks: string[];
+  added: GlossaryEntry[];
+  updated: GlossaryEntry[];
+  removed: GlossaryEntry[];
+  duplicates: string[];
 }
 
 /** 块级回译结果；`line` 为原文行号（1 基），供预览定位。 */
@@ -2535,6 +2585,198 @@ export class SyncService {
       brief,
       locks: previous?.locks,
     });
+  }
+
+  /**
+   * 合并更新文档简报：摘要、brief 字段与文档术语表。
+   *
+   * 与 `saveBrief` 的区别：按字段合并而不是整份覆盖；摘要文本不能为空，因为
+   * 缓存只在摘要非空时写入 `mbs-summary` 标记。所有修改在同一文件锁内完成。
+   * 生成锁默认被覆盖但保留，覆盖项通过 `overrodeLocks` 返回。
+   */
+  async patchDocumentBrief(
+    sourceUri: vscode.Uri,
+    input: DocumentBriefPatchInput,
+  ): Promise<DocumentBriefPatchResult> {
+    return this.withLock(sourceUri, () =>
+      this.patchDocumentBriefUnlocked(sourceUri, input),
+    );
+  }
+
+  private async patchDocumentBriefUnlocked(
+    sourceUri: vscode.Uri,
+    input: DocumentBriefPatchInput,
+  ): Promise<DocumentBriefPatchResult> {
+    // Agent 写入允许基于未保存的编辑器缓冲；sourceHash 与缓冲内容一致，
+    // 用户之后放弃修改时简报会自然显示过期，而不是被错误标记为最新。
+    const state = await this.loadState(
+      sourceUri,
+      false,
+      tError("sync.purposeSaveSummary"),
+    );
+    const cache = parseCacheDocument(state.cacheText ?? "", this.md);
+    const previous = cache.summary;
+    const previousText = previous?.text.trim() ?? "";
+
+    let text = previousText;
+    if (input.summary !== undefined) {
+      if (typeof input.summary !== "string") {
+        throw new Error(tError("sync.summaryEmpty"));
+      }
+      text = input.summary.trim();
+      if (!text) {
+        throw new Error(tError("sync.summaryEmpty"));
+      }
+      if (text.length > MAX_SUMMARY_CHARS) {
+        throw new Error(
+          tError("sync.summaryTooLong", { chars: MAX_SUMMARY_CHARS }),
+        );
+      }
+    }
+    if (!text) {
+      throw new Error(tError("sync.summaryRequiredForBrief"));
+    }
+
+    const briefPatch = applyBriefPatch(previous?.brief, input.brief);
+    if (briefPatch.issues.length > 0) {
+      throw new BriefPatchError(briefPatch.issues);
+    }
+    const brief = briefPatch.brief;
+
+    let glossary: GlossaryEntry[] = previous?.glossary
+      ? [...previous.glossary]
+      : [];
+    if (input.glossary !== undefined) {
+      const replacement = applyGlossaryPatch(
+        [],
+        { mode: "replace", entries: input.glossary },
+        MAX_DOCUMENT_GLOSSARY_ENTRIES,
+      );
+      assertGlossaryPatch(replacement);
+      glossary = replacement.entries;
+    }
+
+    const locks = normalizeSummaryLocks(previous?.locks);
+    const textChanged = previousText !== text;
+    const briefChanged =
+      JSON.stringify(normalizeTranslationBrief(previous?.brief)) !==
+      JSON.stringify(normalizeTranslationBrief(brief));
+    const glossaryChanged =
+      JSON.stringify(previous?.glossary ?? []) !== JSON.stringify(glossary);
+
+    const overrodeLocks = new Set<string>();
+    if (textChanged && locks.summary === true) {
+      overrodeLocks.add("summary");
+    }
+    for (const field of briefPatch.changed) {
+      if (locks.brief?.[field] === true) {
+        overrodeLocks.add(field);
+      }
+    }
+    if (glossaryChanged && locks.glossary === true) {
+      overrodeLocks.add("glossary");
+    }
+
+    // 只有摘要/ brief 变化才刷新 updatedAt 与 sourceHash；仅改术语表时保留元数据。
+    const detailsChanged = textChanged || briefChanged;
+    const cacheText = await this.writeSummary(state, {
+      text,
+      model: detailsChanged ? "manual" : previous?.model,
+      glossary,
+      updatedAt: detailsChanged
+        ? new Date().toISOString()
+        : previous?.updatedAt,
+      sourceHash: textChanged
+        ? summarySourceHash(state.sourceText)
+        : previous?.sourceHash,
+      brief,
+      locks,
+    });
+    const summary = parseCacheDocument(cacheText, this.md).summary;
+    if (!summary) {
+      throw new Error(tError("sync.summaryEmpty"));
+    }
+    this.log(`patch document brief of ${path.basename(sourceUri.fsPath)}`);
+    return {
+      cacheText,
+      summary,
+      ...(previous ? { previous } : {}),
+      overrodeLocks: [...overrodeLocks],
+    };
+  }
+
+  /**
+   * 合并更新文档术语表；必须已有摘要。保留摘要、brief、updatedAt 与 sourceHash。
+   * 生成锁默认被覆盖但保留，覆盖项通过 `overrodeLocks` 返回。
+   */
+  async patchDocumentGlossary(
+    sourceUri: vscode.Uri,
+    input: DocumentGlossaryPatchInput,
+  ): Promise<DocumentGlossaryPatchResult> {
+    return this.withLock(sourceUri, () =>
+      this.patchDocumentGlossaryUnlocked(sourceUri, input),
+    );
+  }
+
+  private async patchDocumentGlossaryUnlocked(
+    sourceUri: vscode.Uri,
+    input: DocumentGlossaryPatchInput,
+  ): Promise<DocumentGlossaryPatchResult> {
+    const state = await this.loadState(
+      sourceUri,
+      false,
+      tError("sync.purposeSaveGlossary"),
+    );
+    const cache = parseCacheDocument(state.cacheText ?? "", this.md);
+    const previous = cache.summary;
+    if (!previous?.text.trim()) {
+      throw new Error(tError("sync.glossaryNoSummary"));
+    }
+    const patchResult = applyGlossaryPatch(
+      previous.glossary ?? [],
+      {
+        mode: input.mode ?? "merge",
+        entries: input.entries,
+        remove: input.remove,
+      },
+      MAX_DOCUMENT_GLOSSARY_ENTRIES,
+    );
+    assertGlossaryPatch(patchResult);
+    const glossaryChanged =
+      patchResult.added.length +
+        patchResult.updated.length +
+        patchResult.removed.length >
+      0;
+    const overrodeLocks: string[] =
+      previous.locks?.glossary === true && glossaryChanged
+        ? ["glossary"]
+        : [];
+    const cacheText = await this.writeSummary(state, {
+      text: previous.text,
+      model: previous.model,
+      glossary: patchResult.entries,
+      updatedAt: previous.updatedAt,
+      sourceHash: previous.sourceHash,
+      brief: previous.brief,
+      locks: previous.locks,
+    });
+    const summary = parseCacheDocument(cacheText, this.md).summary;
+    if (!summary) {
+      throw new Error(tError("sync.glossaryNoSummary"));
+    }
+    this.log(
+      `patch document glossary of ${path.basename(sourceUri.fsPath)}`,
+    );
+    return {
+      cacheText,
+      summary,
+      previous,
+      overrodeLocks,
+      added: patchResult.added,
+      updated: patchResult.updated,
+      removed: patchResult.removed,
+      duplicates: patchResult.duplicates,
+    };
   }
 
   /**

@@ -14,7 +14,7 @@
     "url": "https://github.com/yxm1122/Markdown-Bilingual-Sync/issues"
   },
   "engines": {
-    "vscode": "^1.90.0"
+    "vscode": "^1.95.0"
   },
   "categories": [
     "Other"
@@ -34,7 +34,12 @@
   ],
   "activationEvents": [
     "onLanguage:markdown",
-    "onLanguage:skill"
+    "onLanguage:skill",
+    "onLanguageModelTool:mbs_get_document_brief",
+    "onLanguageModelTool:mbs_update_document_brief",
+    "onLanguageModelTool:mbs_update_document_glossary",
+    "onLanguageModelTool:mbs_get_glossary",
+    "onLanguageModelTool:mbs_update_glossary"
   ],
   "l10n": "./l10n",
   "main": "./dist/extension.js",
@@ -202,6 +207,306 @@
         "command": "markdownBilingualSync.task.cancel",
         "title": "%task.cancel.title%",
         "icon": "$(close)"
+      }
+    ],
+    "languageModelTools": [
+      {
+        "name": "mbs_get_document_brief",
+        "tags": [
+          "markdown",
+          "translation",
+          "glossary",
+          "markdown-bilingual-sync"
+        ],
+        "toolReferenceName": "mbsBrief",
+        "displayName": "%tool.getDocumentBrief.displayName%",
+        "userDescription": "%tool.getDocumentBrief.userDescription%",
+        "modelDescription": "Read the document brief for a Markdown or Skill file: the full-document summary, translation requirements (audience, tone and style, ambiguity decisions, do-not-translate), generation locks, and the document glossary. Use this before changing a brief or when the user asks what translation guidance is configured for a file. The file path should be absolute; workspace-relative paths are also accepted. Omit file to use the active Markdown editor. This tool never writes.",
+        "canBeReferencedInPrompt": true,
+        "icon": "$(book)",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "file": {
+              "type": "string",
+              "description": "Absolute path to the source Markdown or Skill file. Workspace-relative paths are also accepted. Omit to use the active Markdown editor."
+            },
+            "includeSummary": {
+              "type": "boolean",
+              "default": true,
+              "description": "Include the full summary text."
+            },
+            "includeGlossary": {
+              "type": "boolean",
+              "default": true,
+              "description": "Include all document glossary entries."
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      {
+        "name": "mbs_update_document_brief",
+        "tags": [
+          "markdown",
+          "translation",
+          "glossary",
+          "markdown-bilingual-sync"
+        ],
+        "toolReferenceName": "mbsUpdateBrief",
+        "displayName": "%tool.updateDocumentBrief.displayName%",
+        "userDescription": "%tool.updateDocumentBrief.userDescription%",
+        "modelDescription": "Create or update the document brief for a Markdown or Skill file: summary, translation requirements, and optionally the full document glossary. Use when the user asks to set the audience, tone/style, ambiguity decisions, do-not-translate terms, or the document glossary. A non-empty summary is required when the file has no document brief yet; provide summary in the same call. brief is a partial update: omitted fields are kept, empty strings clear fields. A glossary provided here replaces the whole document glossary; use mbs_update_document_glossary for incremental term changes. Writes override generation locks by default but keep the locks set. Do not use for the global/workspace glossary; use mbs_update_glossary.",
+        "canBeReferencedInPrompt": true,
+        "icon": "$(edit)",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "file": {
+              "type": "string",
+              "description": "Absolute path to the source Markdown or Skill file. Workspace-relative paths are also accepted. Omit to use the active Markdown editor."
+            },
+            "summary": {
+              "type": "string",
+              "description": "Full summary text. Required when the file has no document brief yet; omit to keep the current summary."
+            },
+            "brief": {
+              "type": "object",
+              "description": "Partial translation requirements. Only provided fields change; an empty string clears a field. Maximum 400 characters per field.",
+              "properties": {
+                "audience": {
+                  "type": "string",
+                  "description": "Target audience. Maximum 400 characters."
+                },
+                "toneAndStyle": {
+                  "type": "string",
+                  "description": "Tone, style, and formatting conventions. Maximum 400 characters."
+                },
+                "ambiguities": {
+                  "type": "string",
+                  "description": "Resolved ambiguities and terminology decisions. Maximum 400 characters."
+                },
+                "doNotTranslate": {
+                  "type": "string",
+                  "description": "Names, commands, paths, and placeholders that must stay unchanged. Maximum 400 characters."
+                }
+              },
+              "additionalProperties": false
+            },
+            "glossary": {
+              "type": "array",
+              "description": "Optional full replacement of the document glossary. Requires a summary. Maximum 200 entries.",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "source": {
+                    "type": "string",
+                    "description": "Source term, at most 200 characters."
+                  },
+                  "target": {
+                    "type": "string",
+                    "description": "Target term, at most 200 characters."
+                  }
+                },
+                "required": [
+                  "source",
+                  "target"
+                ],
+                "additionalProperties": false
+              }
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      {
+        "name": "mbs_update_document_glossary",
+        "tags": [
+          "markdown",
+          "translation",
+          "glossary",
+          "markdown-bilingual-sync"
+        ],
+        "toolReferenceName": "mbsDocGlossary",
+        "displayName": "%tool.updateDocumentGlossary.displayName%",
+        "userDescription": "%tool.updateDocumentGlossary.userDescription%",
+        "modelDescription": "Add, update, remove, or replace terms in a file's document glossary. Use when the user asks to change terms that apply only to one Markdown document. Requires an existing document brief (summary). Prefer merge mode to add or update a few terms; use replace only to replace the entire document glossary. Limits: 200 entries and 200 characters per term. Writes override the glossary generation lock by default but keep it set. For the global/workspace glossary, use mbs_update_glossary instead.",
+        "canBeReferencedInPrompt": true,
+        "icon": "$(list-unordered)",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "file": {
+              "type": "string",
+              "description": "Absolute path to the source Markdown or Skill file. Workspace-relative paths are also accepted. Omit to use the active Markdown editor."
+            },
+            "mode": {
+              "type": "string",
+              "enum": [
+                "merge",
+                "replace"
+              ],
+              "default": "merge",
+              "description": "merge updates or appends terms; replace overwrites the whole document glossary."
+            },
+            "entries": {
+              "type": "array",
+              "description": "Terms to add or update. In replace mode this is the complete new list. Maximum 200 entries.",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "source": {
+                    "type": "string",
+                    "description": "Source term, at most 200 characters."
+                  },
+                  "target": {
+                    "type": "string",
+                    "description": "Target term, at most 200 characters."
+                  }
+                },
+                "required": [
+                  "source",
+                  "target"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "remove": {
+              "type": "array",
+              "description": "Source terms to remove (case-insensitive). Merge mode only.",
+              "items": {
+                "type": "string"
+              }
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      {
+        "name": "mbs_get_glossary",
+        "tags": [
+          "markdown",
+          "translation",
+          "glossary",
+          "markdown-bilingual-sync"
+        ],
+        "toolReferenceName": "mbsGlossary",
+        "displayName": "%tool.getGlossary.displayName%",
+        "userDescription": "%tool.getGlossary.userDescription%",
+        "modelDescription": "Read the global glossary (shared by all workspaces), the current workspace glossary (.mbs-glossary.json), or the effective merged glossary (global then workspace; workspace wins). Use before adding terms to check existing translations. Supports a case-insensitive query and offset/limit paging for large glossaries. This tool never writes.",
+        "canBeReferencedInPrompt": true,
+        "icon": "$(book)",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "scope": {
+              "type": "string",
+              "enum": [
+                "global",
+                "workspace",
+                "effective"
+              ],
+              "default": "effective",
+              "description": "global: shared glossary; workspace: .mbs-glossary.json; effective: merged global then workspace (workspace wins)."
+            },
+            "file": {
+              "type": "string",
+              "description": "Optional source Markdown file used to resolve the workspace. Omit to use the active editor or the only workspace; pass file when several workspaces are open."
+            },
+            "query": {
+              "type": "string",
+              "description": "Case-insensitive substring match on source or target."
+            },
+            "limit": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 200,
+              "default": 50,
+              "description": "Maximum entries to return."
+            },
+            "offset": {
+              "type": "integer",
+              "minimum": 0,
+              "default": 0,
+              "description": "Number of matching entries to skip."
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      {
+        "name": "mbs_update_glossary",
+        "tags": [
+          "markdown",
+          "translation",
+          "glossary",
+          "markdown-bilingual-sync"
+        ],
+        "toolReferenceName": "mbsUpdateGlossary",
+        "displayName": "%tool.updateGlossary.displayName%",
+        "userDescription": "%tool.updateGlossary.userDescription%",
+        "modelDescription": "Add, update, remove, or replace terms in the global glossary or the current workspace glossary. Use when the user asks to manage shared terminology. Prefer merge mode for a few terms; use replace only to replace the entire glossary file. Limits: 1000 entries and 200 characters per term. Workspace scope requires an open workspace folder. Do not use for a single document's glossary; use mbs_update_document_glossary instead.",
+        "canBeReferencedInPrompt": true,
+        "icon": "$(edit)",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "scope": {
+              "type": "string",
+              "enum": [
+                "global",
+                "workspace"
+              ],
+              "description": "global: shared glossary; workspace: .mbs-glossary.json in the current workspace."
+            },
+            "file": {
+              "type": "string",
+              "description": "Optional source Markdown file used to resolve the workspace. Required when multiple workspaces are open and no editor is active."
+            },
+            "mode": {
+              "type": "string",
+              "enum": [
+                "merge",
+                "replace"
+              ],
+              "default": "merge",
+              "description": "merge updates or appends terms; replace overwrites the whole glossary file."
+            },
+            "entries": {
+              "type": "array",
+              "description": "Terms to add or update. In replace mode this is the complete new list. Maximum 1000 entries.",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "source": {
+                    "type": "string",
+                    "description": "Source term, at most 200 characters."
+                  },
+                  "target": {
+                    "type": "string",
+                    "description": "Target term, at most 200 characters."
+                  }
+                },
+                "required": [
+                  "source",
+                  "target"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "remove": {
+              "type": "array",
+              "description": "Source terms to remove (case-insensitive). Merge mode only.",
+              "items": {
+                "type": "string"
+              }
+            }
+          },
+          "required": [
+            "scope"
+          ],
+          "additionalProperties": false
+        }
       }
     ],
     "menus": {
@@ -637,7 +942,7 @@
     "@types/katex": "^0.16.8",
     "@types/markdown-it": "^14.1.2",
     "@types/node": "^20.17.0",
-    "@types/vscode": "^1.90.0",
+    "@types/vscode": "^1.95.0",
     "@vscode/vsce": "^3.2.0",
     "esbuild": "^0.25.0",
     "jsdom": "^29.1.1",

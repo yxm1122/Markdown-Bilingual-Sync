@@ -225,6 +225,31 @@ export const SYNC_ERRORS = [
     zh: "摘要过长（超过 {chars} 字符），请精简后再保存。",
   },
   {
+    key: "sync.summaryRequiredForBrief",
+    en: "A document brief needs a non-empty summary. Provide summary in the same request, or generate the brief in the preview first.",
+    zh: "文档简报需要一份非空摘要。请在同一次请求中提供 summary，或先在预览中生成文档简报。",
+  },
+  {
+    key: "sync.briefNotObject",
+    en: "brief must be an object with audience, toneAndStyle, ambiguities, and/or doNotTranslate.",
+    zh: "brief 必须是包含 audience、toneAndStyle、ambiguities 或 doNotTranslate 的对象。",
+  },
+  {
+    key: "sync.briefUnknownField",
+    en: "Unknown brief field “{field}”. Allowed fields: audience, toneAndStyle, ambiguities, doNotTranslate.",
+    zh: "未知的简报字段“{field}”。允许的字段：audience、toneAndStyle、ambiguities、doNotTranslate。",
+  },
+  {
+    key: "sync.briefInvalidValue",
+    en: "Brief field “{field}” must be a string.",
+    zh: "简报字段“{field}”必须是字符串。",
+  },
+  {
+    key: "sync.briefFieldTooLong",
+    en: "Brief field “{field}” is {length} characters; the limit is {max}. Nothing was written.",
+    zh: "简报字段“{field}”有 {length} 个字符，上限为 {max}。未写入任何内容。",
+  },
+  {
     key: "sync.glossaryNoSummary",
     en: "Generate the full-document summary before editing its glossary.",
     zh: "请先生成全文摘要，再编辑文档术语表。",

@@ -64,6 +64,41 @@ function disposable(): { dispose: () => void } {
   return { dispose() {} };
 }
 
+/** LanguageModelToolResult 的最小文本部分替身。 */
+export class LanguageModelTextPart {
+  constructor(readonly value: string) {}
+}
+
+/** LanguageModelToolResult 的最小替身；测试可直接读取 content。 */
+export class LanguageModelToolResult {
+  constructor(readonly content: unknown[]) {}
+}
+
+/** 编辑器位置替身；仅供需要 WorkspaceEdit 的测试使用。 */
+export class Position {
+  constructor(
+    readonly line: number,
+    readonly character: number,
+  ) {}
+}
+
+/** 编辑器范围替身。 */
+export class Range {
+  constructor(
+    readonly start: Position,
+    readonly end: Position,
+  ) {}
+}
+
+/** WorkspaceEdit 的最小替身；记录 replace 调用，由测试的 applyEdit 消费。 */
+export class WorkspaceEdit {
+  readonly edits: Array<{ uri: unknown; range: Range; text: string }> = [];
+
+  replace(uri: unknown, range: Range, text: string): void {
+    this.edits.push({ uri, range, text });
+  }
+}
+
 /** 最小 FileSystemError 替身；AnnotationStore 用 code 判断文件不存在。 */
 export class FileSystemError extends Error {
   constructor(
@@ -118,7 +153,7 @@ export const vscodeStub = {
     ) {}
   },
   MarkdownString: class {
-    private value = "";
+    value = "";
     appendMarkdown(text: string) {
       this.value += text;
       return this;
@@ -127,6 +162,19 @@ export const vscodeStub = {
       this.value += text;
       return this;
     }
+  },
+  LanguageModelTextPart,
+  LanguageModelToolResult,
+  Position,
+  Range,
+  WorkspaceEdit,
+  lm: {
+    registerTool: (_name: string, _tool: unknown) => disposable(),
+    tools: [] as unknown[],
+    invokeTool: async () => {
+      throw new Error("invokeTool is not implemented in vscodeStub");
+    },
+    registerMcpServerDefinitionProvider: () => disposable(),
   },
   commands: {
     registerCommand: () => disposable(),
@@ -163,6 +211,8 @@ export const vscodeStub = {
   workspace: {
     textDocuments: [],
     workspaceFolders: undefined,
+    getWorkspaceFolder: () => undefined,
+    applyEdit: async () => true,
     getConfiguration: () => ({
       get: (_key: string, fallback?: unknown) => fallback,
       inspect: () => undefined,

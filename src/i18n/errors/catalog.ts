@@ -7,6 +7,7 @@
 import { CACHE_ERRORS } from "./cache";
 import { COMMAND_ERRORS } from "./commands";
 import { COMMON_ERRORS } from "./common";
+import { AGENT_ERRORS } from "./agent";
 import { EXPORT_ERRORS } from "./exportTranslation";
 import { GLOSSARY_ERRORS } from "./glossary";
 import { IMPORT_ERRORS } from "./importTranslation";
@@ -18,6 +19,7 @@ import { TRANSLATION_ERRORS } from "./translation";
 
 export const ERROR_MESSAGES = [
   ...COMMON_ERRORS,
+  ...AGENT_ERRORS,
   ...SYNC_ERRORS,
   ...SOURCE_ERRORS,
   ...CACHE_ERRORS,

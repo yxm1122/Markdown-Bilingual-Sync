@@ -7,7 +7,7 @@
 环境要求：
 
 - Node.js 20+
-- VS Code 1.90+（`package.json` 的 `engines.vscode`）
+- VS Code 1.95+（`package.json` 的 `engines.vscode`）
 
 ```bash
 npm ci

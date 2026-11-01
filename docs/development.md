@@ -5,7 +5,7 @@
 ## 1. 环境与安装
 
 - Node.js 20+
-- VS Code 1.90+
+- VS Code 1.95+
 - 推荐使用仓库自带的 `.vscode/launch.json` 与 `.vscode/tasks.json`
 
 ```bash

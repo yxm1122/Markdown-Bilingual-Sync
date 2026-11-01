@@ -59,5 +59,15 @@
   "task.languages.title": "Change Languages",
   "task.openSource.title": "Open Source File",
   "task.openPreview.title": "Open Bilingual Preview",
-  "task.cancel.title": "Cancel Task"
+  "task.cancel.title": "Cancel Task",
+  "tool.getDocumentBrief.displayName": "Get Document Brief",
+  "tool.getDocumentBrief.userDescription": "Read the summary, translation requirements, locks, and document glossary for a Markdown file.",
+  "tool.updateDocumentBrief.displayName": "Update Document Brief",
+  "tool.updateDocumentBrief.userDescription": "Create or update a document brief, including translation requirements and document glossary.",
+  "tool.updateDocumentGlossary.displayName": "Update Document Glossary",
+  "tool.updateDocumentGlossary.userDescription": "Add, update, remove, or replace terms in a file's document glossary.",
+  "tool.getGlossary.displayName": "Get Glossary",
+  "tool.getGlossary.userDescription": "Read the global, workspace, or effective user glossary.",
+  "tool.updateGlossary.displayName": "Update Glossary",
+  "tool.updateGlossary.userDescription": "Add, update, remove, or replace terms in the global or workspace glossary."
 }

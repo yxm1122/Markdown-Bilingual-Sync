@@ -59,5 +59,15 @@
   "task.languages.title": "切换语言",
   "task.openSource.title": "打开源文件",
   "task.openPreview.title": "打开双语预览",
-  "task.cancel.title": "取消任务"
+  "task.cancel.title": "取消任务",
+  "tool.getDocumentBrief.displayName": "读取文档简报",
+  "tool.getDocumentBrief.userDescription": "读取 Markdown 文件的摘要、翻译要求、生成锁与文档术语表。",
+  "tool.updateDocumentBrief.displayName": "更新文档简报",
+  "tool.updateDocumentBrief.userDescription": "创建或更新文档简报，包括翻译要求与文档术语表。",
+  "tool.updateDocumentGlossary.displayName": "更新文档术语表",
+  "tool.updateDocumentGlossary.userDescription": "添加、修改、删除或替换单个文件的文档术语。",
+  "tool.getGlossary.displayName": "读取术语表",
+  "tool.getGlossary.userDescription": "读取全局、工作区或合并后的用户术语表。",
+  "tool.updateGlossary.displayName": "更新术语表",
+  "tool.updateGlossary.userDescription": "添加、修改、删除或替换全局或工作区术语。"
 }
