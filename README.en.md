@@ -7,7 +7,7 @@
 
 Translate Markdown inside VS Code and read it as a bilingual preview. The source text stays the single source of truth, and translations you edit by hand are locked so they are never silently overwritten.
 
-Current version **0.16.0** adds per-item generation locks for the document brief: lock the summary, each translation-guidance field, and the document glossary independently. Locked items are omitted from AI generation, are never overwritten even if the model returns them, and remain editable and available to translation/review context. The summary/brief boundary is rewritten so the summary describes only the document while audience, tone, terminology decisions, and do-not-translate rules live in the brief; the change was evaluated over multiple runs on 19 cases with SiliconFlow DeepSeek-V3.2, with new overlap and guidance-phrase metrics. The 0.15.1 block multi-select, task panel, queue, annotations, and quality evaluations are included.
+Current version **0.17.0** adds VS Code agent integration: five native Language Model Tools let GitHub Copilot / VS Code agents read, create, and update document briefs, document glossaries, and global or workspace glossaries. Writes show a confirmation, reuse the existing cache file lock, dirty-file protection, and preview refresh, override generation locks by default while keeping them set, and still require a non-empty summary for document briefs. The 0.16.0 generation locks, summary/brief boundary, and 19-case DeepSeek-V3.2 evaluation, plus the 0.15.1 block multi-select, task panel, queue, annotations, and quality evaluations, are included.
 
 ## Features
 
