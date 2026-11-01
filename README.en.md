@@ -2,46 +2,119 @@
 
 [![CI](https://github.com/yxm1122/Markdown-Bilingual-Sync/actions/workflows/ci.yml/badge.svg)](https://github.com/yxm1122/Markdown-Bilingual-Sync/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://github.com/yxm1122/Markdown-Bilingual-Sync/blob/main/LICENSE)
+[![VS Code Marketplace](https://img.shields.io/badge/VS%20Code-Marketplace-007ACC?logo=visualstudiocode&logoColor=white)](https://marketplace.visualstudio.com/items?itemName=yxm1122.markdown-bilingual-sync)
+[![Version](https://img.shields.io/github/package-json/v/yxm1122/Markdown-Bilingual-Sync?label=version)](https://github.com/yxm1122/Markdown-Bilingual-Sync/blob/main/CHANGELOG.md)
 
 [中文](README.md) | English
 
-Translate Markdown inside VS Code and read it as a bilingual preview. The source text stays the single source of truth, and translations you edit by hand are locked so they are never silently overwritten.
+**A translation, review, and export workbench for technical documentation.**
 
-Current version **0.17.0** adds VS Code agent integration: five native Language Model Tools let GitHub Copilot / VS Code agents read, create, and update document briefs, document glossaries, and global or workspace glossaries. Writes show a confirmation, reuse the existing cache file lock, dirty-file protection, and preview refresh, override generation locks by default while keeping them set, and still require a non-empty summary for document briefs. The 0.16.0 generation locks, summary/brief boundary, and 19-case DeepSeek-V3.2 evaluation, plus the 0.15.1 block multi-select, task panel, queue, annotations, and quality evaluations, are included.
+Translate Markdown block by block, read it in a true bilingual split preview, review with annotations, and export with a diff. The source stays the single source of truth, and human edits stay locked.
+
+![Split bilingual preview: English source on the left, Chinese translation on the right, with translated, stale, and locked counts in the header](docs/assets/readme/hero.png)
+
+*Split view: independent scrolling, block-level sync, with translated, stale, and locked counts.*
+
+> Three layouts: side-by-side, stacked, and split. Split uses two independent panes, not paired blocks stacked in one column.
+
+**Three steps**
+
+1. Install from the [VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=yxm1122.markdown-bilingual-sync), or run `code --install-extension yxm1122.markdown-bilingual-sync`.
+2. Run **Markdown Bilingual Sync: Set AI Translation API Key** first; pick a provider preset or fill in an OpenAI-compatible endpoint.
+3. Open a `.md` file and run **Translate Current File**. Edit, review, and export from the preview.
+
+> Requires VS Code 1.95 or later. API keys live only in VS Code SecretStorage; saving the source never calls the translation API. Full provider and batch configuration is under [Quick Start](#quick-start); release history is in the [CHANGELOG](CHANGELOG.md).
+
+## Why this exists
+
+Translating technical documentation is not finished when the file has been translated once: terms must stay consistent, human edits must survive the next sync, review notes must be actionable, and batch changes must stay under control. This extension is built around those four problems.
+
+### Your edits survive the next sync
+
+![Edit a translation in place and save to lock it; nearby blocks show translation locked and source updated states](docs/assets/readme/lock-editing.png)
+
+*Edit in place; saving locks the block, and a source change only marks it as locked and stale.*
+
+Click a translation to edit it in place. Saving immediately locks the block. Sync, single-block retranslation, and retranslate-all will not overwrite it; when the source changes, the block shows **Translation locked · source updated** and you choose **Mark synchronized** or retranslate. Source edits follow the same pattern: stage, review the diff, then write back.
+
+### Let the model read the document before translating
+
+![Document brief panel with summary, translation guidance, generation locks, and document glossary](docs/assets/readme/brief.png)
+
+*Document brief: summary, translation guidance, generation locks, and the document glossary in one panel.*
+
+Manually generate a source-language summary, translation guidance (audience, tone, ambiguities, do-not-translate), and a document glossary. The summary describes only the document; guidance stays in the brief. Lock the summary, each of the four brief fields, and the glossary independently; AI generation skips locked items and never overwrites them, while they stay editable and continue to feed translation and review.
+
+![Document glossary with term cards pairing payment intent, idempotency key, capture method, rate limit, and webhook](docs/assets/readme/glossary.png)
+
+*Document glossary: one-row source and target cards; click either side to edit.*
+
+The document glossary uses single-row `source | target` cards; click either side to edit. It joins global and workspace glossaries during translation. The consistency check in the preview toolbar flags glossary and protected-Markdown issues and retranslates each affected block.
+
+### Review suggests; you decide
+
+![Annotations panel with AI review notes, handling options, and a pending user annotation](docs/assets/readme/annotations.png)
+
+*AI review only raises notes; adopt, edit, or write your own annotation.*
+
+AI review returns notes that may need human verification; it never rewrites the translation. User annotations default to one-shot, can be switched to persistent, and participate automatically in sync, single-block retranslation, and retranslate-all. AI handling options are split into directly usable instructions and read-only advice, and you can write your own.
+
+### Batch work with a queue
+
+![Block multi-select with three blocks selected and bulk retranslate, review, back-translate, mark synchronized, and delete actions](docs/assets/readme/selection.png)
+
+*Select blocks to retranslate, review, back-translate, mark synchronized, or delete in bulk; operations queue.*
+
+Click or drag across blocks to select them (Shift-click for a range), then retranslate, review, back-translate, mark synchronized, or delete translations in bulk. Operations on one file run serially while different files run in parallel; the task panel and status bar show running and queued state, and you can keep enqueueing while tasks run.
 
 ## Features
 
+### Translation and sync
+
 - **Blocks as translation units.** Translation works on top-level semantic blocks: headings, paragraphs, complete list sections, whole tables, whole blockquotes, and footnote definitions.
 - **Protected syntax.** Inline code, URLs, and footnote labels are restored before a cache write if the model rewrites them. Footnote definitions are translated while keeping their `[^id]` labels.
-- **Bilingual preview.** Side-by-side, stacked, and a true split layout. The split layout gives the source and the translation independent scrolling panes with block-level scroll sync. Renders GFM, syntax highlighting, KaTeX, footnotes, and GitHub Alerts.
-- **Any Markdown-like language ID.** Works with the standard Markdown language ID and with environment-specific IDs such as `skill` from Qoder; the file content stays Markdown.
-- **Swappable translation service.** OpenAI-compatible endpoints or any custom HTTP service, with built-in presets for common providers. API keys are stored only in VS Code SecretStorage.
-- **Import existing translations.** Imports are validated and aligned against the top-level block structure and marked as locked translations. Start from the preview toolbar or the Command Palette.
-- **Cache maintenance.** Clear the cache for the current file, or remove every translation cache from extension storage in one step.
-- **Batch processing.** Folder translation packs blocks into batches by token budget, with one concurrency limit shared by files and in-file batches. Successful batches survive failures, and existing caches can be exported in bulk.
-- **Translation Tasks view.** A status bar button toggles a native TreeView showing the batch overview, active tasks, recent completions, and runtime status. Clicking a task opens the bilingual preview at its block (or the first block for file batches), while row actions can open the source file or cancel. Consecutive block tasks are grouped into collapsible rows, and hovering shows status plus retry counts. The view title's **Change Languages** action uses a native QuickPick to switch or swap source/target languages.
-- **Block multi-select and operation queue.** Click or drag across blocks to select them (Shift-click for a range), then retranslate, review, back-translate, mark synchronized, or delete translations in bulk. Operations on one file run serially while different files run in parallel; the task panel and status bar show running/queued state, and you can keep enqueueing while tasks run.
 - **Batch translation and incremental sync.** Saving the source only marks translations as stale; translation requests are made only by explicit commands.
 - **Translation lock.** After you edit and save a translation in the cache, that block is protected from automatic retranslation.
-- **In-preview editing.** Click source or translation content to edit the underlying Markdown in place. A saved translation is locked immediately; source edits can be staged, reviewed as a diff, and then written back.
 - **Back-translate to rewrite the source.** Back-translating a block sends the result straight to source staging. Writing it back locks the translation to the new source so sync cannot overwrite it.
 - **Stable translation.** Retranslation references the previous translation and back-translation references the current source, which reduces wording drift after small edits. Controlled by a setting and a preview toggle.
+- Retranslate a single block, all stale blocks, or all machine translations.
+- **Import existing translations.** Imports are validated and aligned against the top-level block structure and marked as locked translations. Start from the preview toolbar or the Command Palette.
+- **Batch processing.** Folder translation packs blocks into batches by token budget, with one concurrency limit shared by files and in-file batches. Successful batches survive failures, and existing caches can be exported in bulk.
+- **Cache maintenance.** Clear the cache for the current file, or remove every translation cache from extension storage in one step.
+
+### Preview and editing
+
+- **Bilingual preview.** Side-by-side, stacked, and a true split layout. The split layout gives the source and the translation independent scrolling panes with block-level scroll sync. Renders GFM, syntax highlighting, KaTeX, footnotes, and GitHub Alerts.
+- **In-preview editing.** Click source or translation content to edit the underlying Markdown in place. A saved translation is locked immediately; source edits can be staged, reviewed as a diff, and then written back.
+- **Block multi-select and operation queue.** Click or drag across blocks to select them (Shift-click for a range), then retranslate, review, back-translate, mark synchronized, or delete translations in bulk. Operations on one file run serially while different files run in parallel; the task panel and status bar show running/queued state, and you can keep enqueueing while tasks run.
+- **Translation Tasks view.** A status bar button toggles a native TreeView showing the batch overview, active tasks, recent completions, and runtime status. Clicking a task opens the bilingual preview at its block (or the first block for file batches), while row actions can open the source file or cancel. Consecutive block tasks are grouped into collapsible rows, and hovering shows status plus retry counts. The view title's **Change Languages** action uses a native QuickPick to switch or swap source/target languages.
+
+### Quality and review
+
 - **Document brief, glossary, and generation locks.** Manually generate a source-language summary, translation guidance (audience, tone, ambiguities, do-not-translate), and a document glossary. The summary describes only the document; translation guidance stays in the brief. Lock the summary, each of the four brief fields, and the glossary independently; locked items are skipped by AI generation and never overwritten, but remain editable and continue to be used for translation/review. The brief is stored with the translation cache and can be edited or cleared in the preview.
 - **Block annotations and review.** AI review returns notes that may need human verification; it never rewrites the translation. User annotations default to one-shot, can be switched to persistent, and participate automatically in sync, single-block retranslation, and retranslate-all. Sync retranslates blocks with pending annotations (locked blocks still need a manual single-block retranslation); stable translation still sends the previous-translation reference, but the system prompt explicitly makes annotations override it. Untranslatable or deleted blocks do not accept applicable annotations. AI review can return up to three handling options: an instruction is a self-contained message for the translator with a proposed one-shot/persistent mode, and can be used or edited before use; advice is read-only and only for decisions that need a human. You can also write your own. Adopting an instruction creates a user annotation with that mode and marks the AI annotation answered. Annotations live in a local sidecar, not in the cache Markdown or exports.
-- Retranslate a single block, all stale blocks, or all machine translations.
 - **Layered glossaries.** Global and workspace term lists plus an AI-generated document glossary stored with the summary. The preview toolbar can check machine translations for glossary and protected-Markdown issues and retranslate each affected block.
+
+### Integration, export, and localization
+
 - **Agent-managed briefs and glossaries.** Five native Language Model Tools let Copilot / VS Code agents read, create, and update document briefs, document glossaries, and global/workspace glossaries. Writes are confirmed, refresh open previews, and override generation locks by default while keeping the locks set.
 - Export to a language-suffixed file in the same folder, after confirming a split diff.
 - Structural problems are reported before export or retranslation. The cache write is rejected when the model returns a system prompt, an echoed request, or untranslated source text. Missing inline code or glossary targets trigger one corrective retry first.
+- **Any Markdown-like language ID.** Works with the standard Markdown language ID and with environment-specific IDs such as `skill` from Qoder; the file content stays Markdown.
+- **Swappable translation service.** OpenAI-compatible endpoints or any custom HTTP service, with built-in presets for common providers. API keys are stored only in VS Code SecretStorage.
 - Full localization of the extension: English is the source language, Chinese is loaded when VS Code's display language is `zh-cn`, and the command and settings manifests switch with it.
 
 ## Installation
 
+Install **Markdown Bilingual Sync** from the [VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=yxm1122.markdown-bilingual-sync), or run:
+
 ```bash
-code --install-extension artifacts/vsix/markdown-bilingual-sync.vsix
+code --install-extension yxm1122.markdown-bilingual-sync
 ```
 
 Requires VS Code 1.95 or later (the extension uses Webviews, SecretStorage, WorkspaceEdit, and Language Model Tools).
+
+The `main` branch may be ahead of the Marketplace build; use the source build below for the latest commits.
 
 ### Build from Source
 
@@ -54,7 +127,7 @@ npm ci
 npm run package
 ```
 
-The build output is `artifacts/vsix/markdown-bilingual-sync.vsix`, which you can install with the command above. To debug, press F5 in VS Code to launch the Extension Development Host; see [Development](#development) for the full command list.
+The build output is `artifacts/vsix/markdown-bilingual-sync.vsix`, which you can install with `code --install-extension artifacts/vsix/markdown-bilingual-sync.vsix`. To debug, press F5 in VS Code to launch the Extension Development Host; see [Development](#development) for the full command list.
 
 ## Quick Start
 
@@ -103,6 +176,12 @@ The build output is `artifacts/vsix/markdown-bilingual-sync.vsix`, which you can
 - The brief is stored as a dedicated marker in the cache and takes no part in block alignment or export. It is shown as *Possibly stale* after the source changes but is still used as context, and clearing the cache removes it. Brief generation accepts about 12k input tokens; beyond that, write it manually. Single-block retranslation and back-translation also send read-only neighboring blocks from the same section, which helps short headings and paragraphs keep their local meaning.
 
 ### Block Status and Cache Markers
+
+![Block state model: untranslated, translated, stale, translation locked, locked with an updated source, and deleted; side notes cover copied blocks, target-only blocks, and staged source edits](docs/assets/readme/block-states.png)
+
+*Block state model: automatic writes never overwrite locked translations; saving the source only marks stale.*
+
+> Automatic writes never overwrite a locked translation. Saving the source only marks blocks stale; it never calls the translation API.
 
 Cache anchors (`<!-- mbs:... -->`) have five modes:
 

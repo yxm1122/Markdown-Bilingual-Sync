@@ -18,6 +18,8 @@ npm run compile
 
 在 VS Code 中按 `F5` 使用 `.vscode/launch.json` 的 “Run Extension” 配置，会以 `samples/` 为工作区启动 Extension Development Host。
 
+README 宣传图使用 `docs/assets/readme/showcase.md` 与 `showcase.zh.md` 的人工译文，由 `npm run readme:assets` 输出到 `docs/assets/readme/`；改演示文案后请重新生成，不要直接编辑 PNG。状态图的 SVG 源文件是 `block-states.svg`。
+
 常用命令：
 
 | 命令 | 作用 |
@@ -28,6 +30,9 @@ npm run compile
 | `npm test` | Vitest 全量单元测试 |
 | `npm run test:watch` | Vitest 监听模式 |
 | `npm run preview:sample` | 用 Mock 生成 `tmp/preview*.html` 静态预览 |
+| `npm run readme:assets` | 生成 README 截图与块状态图（需要本机 Edge 与 ffmpeg） |
+| `npm run readme:shots` | 只生成 README 截图 |
+| `npm run readme:diagram` | 只生成块状态图 |
 | `npm run eval:translation` | 运行翻译质量评估（默认 Mock，真实 Provider 需 API Key） |
 | `npm run eval:annotations` | 运行 AI 批注质量评估（问题发现、候选处理项、独立执行性） |
 | `npm run package` | 构建并生成 `artifacts/vsix/markdown-bilingual-sync.vsix` |

@@ -7,6 +7,8 @@ docs/**
 eval/**
 HANDOFF.md
 README.md
+CHANGELOG.md
+media/icon.svg
 node_modules/**
 dist/**/*.map
 tsconfig.json

@@ -5,6 +5,11 @@
   "version": "0.17.0",
   "publisher": "yxm1122",
   "license": "MIT",
+  "icon": "media/icon.png",
+  "galleryBanner": {
+    "color": "#0B1F33",
+    "theme": "dark"
+  },
   "repository": {
     "type": "git",
     "url": "git+https://github.com/yxm1122/Markdown-Bilingual-Sync.git"
@@ -26,10 +31,14 @@
     "bilingual",
     "i18n",
     "localization",
+    "documentation",
+    "technical-writing",
     "ai",
     "openai",
     "llm",
     "glossary",
+    "copilot",
+    "agent",
     "vscode-extension"
   ],
   "activationEvents": [
@@ -918,6 +927,10 @@
     "test:watch": "vitest",
     "preview:sample": "npm run compile && tsx --tsconfig scripts/tsconfig.json scripts/render-sample.ts",
     "ui:matrix": "npm run preview:sample && tsx --tsconfig scripts/tsconfig.json scripts/capture-ui-matrix.ts",
+    "readme:preview": "tsx --tsconfig scripts/tsconfig.json scripts/render-readme-preview.ts",
+    "readme:shots": "npm run readme:preview && tsx --tsconfig scripts/tsconfig.json scripts/capture-readme-shots.ts",
+    "readme:diagram": "tsx --tsconfig scripts/tsconfig.json scripts/render-readme-diagram.ts",
+    "readme:assets": "npm run readme:shots && npm run readme:diagram",
     "ui:perf": "npm run compile && tsx --tsconfig scripts/tsconfig.json scripts/benchmark-preview.ts",
     "eval:translation": "tsx --tsconfig scripts/tsconfig.json scripts/evaluate-translation.ts",
     "eval:annotations": "tsx --tsconfig scripts/tsconfig.json scripts/evaluate-annotations.ts",

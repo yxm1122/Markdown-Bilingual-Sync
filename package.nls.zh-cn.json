@@ -50,7 +50,7 @@
   "configuration.provider.enumDescription.openai": "调用 OpenAI 兼容的 Chat Completions 接口。API Key 通过命令保存到 VS Code SecretStorage。",
   "configuration.provider.enumDescription.http": "调用任意 JSON/文本 HTTP 接口，通过模板配置请求头、请求体和响应字段。API Key 通过命令保存到 VS Code SecretStorage。",
   "displayName": "Markdown 双语同步",
-  "description": "为 VS Code 提供 AI 驱动的 Markdown 双语翻译与预览：块级锚点缓存、译文锁定、分栏视图、术语表与导出。",
+  "description": "在 VS Code 中翻译、审校并导出 Markdown 技术文档：块级 AI 翻译、真正的双语分栏预览、人工译文锁定、文档简报、术语表与批注。",
   "configuration.title": "Markdown 双语同步",
   "command.category": "Markdown 双语同步",
   "task.cancelAll.title": "取消全部任务",

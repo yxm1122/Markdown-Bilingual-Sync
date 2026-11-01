@@ -50,7 +50,7 @@
   "configuration.provider.enumDescription.openai": "Calls an OpenAI-compatible Chat Completions endpoint. The API key is stored in VS Code SecretStorage via a command.",
   "configuration.provider.enumDescription.http": "Calls any JSON/text HTTP endpoint with templates for headers, body, and response fields. The API key is stored in VS Code SecretStorage via a command.",
   "displayName": "Markdown Bilingual Sync",
-  "description": "AI-powered bilingual Markdown translation and preview for VS Code: block-anchored cache, translation locking, split views, glossary, and export.",
+  "description": "A translation, review, and export workbench for Markdown technical docs: block-level AI translation, true split preview, locked human edits, briefs, glossaries, and annotations.",
   "configuration.title": "Markdown Bilingual Sync",
   "command.category": "Markdown Bilingual Sync",
   "task.cancelAll.title": "Cancel All Tasks",

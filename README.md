@@ -2,46 +2,119 @@
 
 [![CI](https://github.com/yxm1122/Markdown-Bilingual-Sync/actions/workflows/ci.yml/badge.svg)](https://github.com/yxm1122/Markdown-Bilingual-Sync/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://github.com/yxm1122/Markdown-Bilingual-Sync/blob/main/LICENSE)
+[![VS Code Marketplace](https://img.shields.io/badge/VS%20Code-Marketplace-007ACC?logo=visualstudiocode&logoColor=white)](https://marketplace.visualstudio.com/items?itemName=yxm1122.markdown-bilingual-sync)
+[![Version](https://img.shields.io/github/package-json/v/yxm1122/Markdown-Bilingual-Sync?label=version)](https://github.com/yxm1122/Markdown-Bilingual-Sync/blob/main/CHANGELOG.md)
 
 [English](README.en.md) | 中文
 
-在 VS Code 中翻译 Markdown，并以双语预览阅读；原文是唯一事实源，手动修改的译文会自动锁定，不会被静默覆盖。
+**技术文档的翻译、审校、导出工作台。**
 
-当前版本 **0.17.0**：新增 VS Code Agent 集成——通过原生 Language Model Tools 暴露 5 个工具，GitHub Copilot / VS Code agent 可读取、创建和修改文档简报、文档术语表以及全局/工作区术语表；写操作显示确认，复用缓存文件锁、脏文件保护与预览刷新，默认覆盖生成锁但保留锁状态，文档简报仍要求非空摘要。0.16.0 的生成锁、摘要/brief 边界与 19 个 case 的 DeepSeek-V3.2 评测，以及 0.15.1 的块多选、任务面板、队列、批注与质量评测均包含在内。
+在 VS Code 里完成 Markdown 的块级 AI 翻译、双语预览、批注审校与差异导出。原文是唯一事实源，人工修改的译文会自动锁定，不会被静默覆盖。
+
+![左右分栏的双语预览：左侧英文原文，右侧中文译文；顶部显示已翻译、原文已更新和译文锁定统计](docs/assets/readme/hero.png)
+
+*左右分栏：原文与译文独立滚动，按块同步；顶部统计显示已翻译、过期与锁定。*
+
+> 支持并排、交错与分栏三种布局；分栏使用两个独立窗格，而不是把每块并排塞进同一栏。
+
+**三步上手**
+
+1. 在 [VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=yxm1122.markdown-bilingual-sync) 安装，或执行 `code --install-extension yxm1122.markdown-bilingual-sync`。
+2. 首次使用先执行 **Markdown 双语同步: 设置 AI 翻译 API Key**；选择一个服务预设，或填写 OpenAI 兼容端点。
+3. 打开 `.md` 文件，执行 **Markdown 双语同步: 翻译当前文件**；之后在预览里编辑、审校与导出。
+
+> 需要 VS Code 1.95 或更高版本。API Key 只保存在 VS Code SecretStorage；保存原文不会自动请求翻译。完整的 Provider 与批量配置见下方 [快速开始](#快速开始)，版本历史见 [CHANGELOG](CHANGELOG.md)。
+
+## 为什么是它
+
+技术文档的翻译不是“把文件翻完”就结束了：术语要一致，人工改过的句子不能被下一次同步覆盖，审校意见要能落地，成批修改也要有秩序。这个扩展围绕这四件事设计。
+
+### 人工改过的译文，不会被下一次同步覆盖
+
+![就地编辑译文并保存锁定；相邻块显示译文锁定和原文已更新状态](docs/assets/readme/lock-editing.png)
+
+*就地编辑译文；保存即锁定，原文更新只标记“译文锁定 · 原文已更新”。*
+
+点击译文即可就地编辑，保存后该块立即进入 **译文锁定**。之后无论同步、单块重译还是全部重译，都不会覆盖它；原文变化时只显示 **译文锁定 · 原文已更新**，由你决定 **标记已同步** 还是重新翻译。原文修改同样先暂存、看差异、再写回源文件。
+
+### 先让 AI 读懂文档，再开始翻译
+
+![文档简报面板：摘要、翻译要求、生成锁和文档术语表](docs/assets/readme/brief.png)
+
+*文档简报：摘要、翻译要求、生成锁与文档术语表在同一个面板中。*
+
+手动生成原文语言摘要、翻译要求（受众、语气、歧义决策、禁译项）和本文档术语表。摘要只描述文档，翻译要求只归 brief；摘要、4 个 brief 字段和术语表都能逐项锁定，AI 生成会跳过锁定项且不覆盖，但仍可人工编辑并继续参与翻译与审校。
+
+![文档术语表：payment intent、idempotency key、capture method、rate limit、webhook 的原文与译文对照卡片](docs/assets/readme/glossary.png)
+
+*文档术语表用单行卡片展示原文与译文，点击任一侧即可编辑。*
+
+文档术语表用单行卡片展示 `原文 | 译文`，点击任一侧即可编辑；与全局/工作区术语表一起参与翻译。预览工具栏的一致性检查会指出术语或受保护 Markdown 的问题，并支持逐块重译。
+
+### 审校只给建议，改不改由你
+
+![批注面板：AI 审校返回待人工核对的问题与可选处理方式，用户批注待生效](docs/assets/readme/annotations.png)
+
+*AI 审校只给待核对建议；你可采用、改写或自己写批注。*
+
+AI 审校只返回可能需要人工核对的批注，不直接改写译文。用户批注默认只生效一次，也可以改为持续生效；同步、单块重译和全部重译都会自动带上批注。AI 的处理项分为可直接采用的 instruction 和只读的 advice，也可以自己写。
+
+### 多块操作，排队执行
+
+![块多选：选中三个块后显示批量重译、审校、回译、标记已同步和删除译文操作](docs/assets/readme/selection.png)
+
+*多选块后批量重译、审校、回译、标记已同步或删除译文，操作进入队列。*
+
+点击或拖过块即可多选（Shift 连选），批量重译、审校、回译、标记已同步或删除译文。同一文件的操作串行执行、不同文件并行，任务面板与状态栏显示运行/排队状态，任务进行中仍可继续入队。
 
 ## 功能
 
+### 翻译与同步
+
 - 以顶层语义块为翻译单元：标题、段落、整段列表、整张表格、整段引用与脚注定义。
 - 受保护语法兜底：行内代码、URL 与脚注标签若被模型改写，会在写入缓存前自动还原；脚注定义翻译正文并保留 `[^id]` 标签。
-- 双语 Webview 预览：并排、交错与真正的左右分栏布局，分栏模式支持两个独立滚动窗格和块级滚动同步；支持 GFM、代码高亮、KaTeX、脚注和 GitHub Alerts。
-- 同时支持 Markdown 与 Qoder 等环境提供的 `skill` 语言 ID（文件内容仍为 Markdown）。
-- 可切换的 OpenAI 兼容或通用 HTTP 翻译服务，API Key 只保存在 VS Code SecretStorage；内置常用服务预设。
-- 导入已有译文：按顶层块结构校验并对齐，全部标记为译文锁定；预览工具栏和命令面板都可发起导入。
-- 缓存清理：可清理当前文件缓存，或一键清除扩展存储中的所有译文缓存。
-- 批量处理：目录批量翻译按 token 预算动态分批，文件级与文件内批次共享并发上限；批次按文档与小节边界组织，不同文件不会混批；失败时保留已成功译文，也可批量导出已有缓存。
-- 翻译任务视图：状态栏右侧按钮切换原生 TreeView，展示批量总览、活动任务、最近完成和运行状态；点击任务会打开双语预览并定位到对应块或第一个块，任务行也可打开源文件/取消；连续块级任务自动合并为可折叠组，悬浮可查看状态与重试次数。视图标题的“切换语言”用原生 QuickPick 修改原文/译文语言或交换。
-- 块多选与操作队列：直接点击或拖过块进行多选（Shift 连选），批量重译、审校、回译、标记已同步或删除译文；同一文件操作串行、不同文件并行，任务面板与状态栏显示运行/排队，任务进行中仍可继续入队。
 - 批量翻译与增量同步：保存原文只标记过期，只有手动命令才请求翻译 API。
 - 译文锁定：编辑译文缓存并保存后，该块不会被自动重译覆盖。
-- 预览内编辑：点击原文或译文内容即可就地编辑原始 Markdown；译文保存后立即锁定，原文修改暂存后可先查看差异再写回源文件。
 - 回译改写原文：对已有译文的块执行反向翻译，结果直接进入原文暂存；写回后该块译文锁定到新的原文，不会被同步覆盖。
 - 稳定翻译：重新翻译参考旧译文，回译参考当前原文，减少细微修改造成的措辞波动；设置与预览开关均可控制。
+- 单块重译、过期块重译、全部机器译文重译。
+- 导入已有译文：按顶层块结构校验并对齐，全部标记为译文锁定；预览工具栏和命令面板都可发起导入。
+- 批量处理：目录批量翻译按 token 预算动态分批，文件级与文件内批次共享并发上限；批次按文档与小节边界组织，不同文件不会混批；失败时保留已成功译文，也可批量导出已有缓存。
+- 缓存清理：可清理当前文件缓存，或一键清除扩展存储中的所有译文缓存。
+
+### 预览与编辑
+
+- 双语 Webview 预览：并排、交错与真正的左右分栏布局，分栏模式支持两个独立滚动窗格和块级滚动同步；支持 GFM、代码高亮、KaTeX、脚注和 GitHub Alerts。
+- 预览内编辑：点击原文或译文内容即可就地编辑原始 Markdown；译文保存后立即锁定，原文修改暂存后可先查看差异再写回源文件。
+- 块多选与操作队列：直接点击或拖过块进行多选（Shift 连选），批量重译、审校、回译、标记已同步或删除译文；同一文件操作串行、不同文件并行，任务面板与状态栏显示运行/排队，任务进行中仍可继续入队。
+- 翻译任务视图：状态栏右侧按钮切换原生 TreeView，展示批量总览、活动任务、最近完成和运行状态；点击任务会打开双语预览并定位到对应块或第一个块，任务行也可打开源文件/取消；连续块级任务自动合并为可折叠组，悬浮可查看状态与重试次数。视图标题的“切换语言”用原生 QuickPick 修改原文/译文语言或交换。
+
+### 质量与审校
+
 - 文档简报、术语表与生成锁：手动生成原文语言摘要、翻译要求（受众/语气/歧义决策/禁译项）和本文档术语表；摘要只描述文档，翻译要求只归 brief。可逐项锁定摘要、4 个 brief 字段和术语表；锁定后 AI 生成跳过对应内容且不覆盖，仍可人工编辑，并继续用于翻译/审校。简报随译文缓存保存，可在预览中编辑、清除。
 - 块级批注与审校：AI 审校只返回可能需要人工核对的批注，不直接改写译文；用户批注默认仅生效一次，可改为持续生效，并自动参与同步、单块重译和全部重译。同步会主动重译带待生效批注的块（human 块仍需手动单块重译）；稳定翻译仍会发送旧译文参考，但系统提示明确要求批注优先于参考，避免批注被稳定翻译覆盖。不可翻译或已删除的块不能保存可应用的批注。AI 处理项最多 3 条：instruction 是给翻译器的自包含指令，模型会提议一次性或持续，可“采用 / 改后采用”，采纳后生成对应模式的用户批注并把 AI 批注标为已回答；advice 只读、不能直接采纳，只用于需要人工确认的问题。也可以“自己写”。批注保存在本机 sidecar，不进入缓存 Markdown 或导出。
-- 单块重译、过期块重译、全部机器译文重译。
 - 两层用户术语表（全局/工作区）+ 随摘要生成的文档术语表；预览内可检查机器译文的术语与受保护 Markdown，并逐块一键重译。
+
+### 集成、导出与本地化
+
 - **Agent 管理文档简报与术语表**：通过 VS Code 原生 Language Model Tools 暴露 5 个工具，Copilot / VS Code agent 可读取、创建和修改文档简报、文档术语表、全局/工作区术语表；写入前确认，写入后刷新预览，默认覆盖但保留生成锁。
 - 导出到同目录语言后缀文件，写入前显示分栏差异确认。
 - 导出/重译前可发现结构问题；AI 返回提示词、请求回显或未翻译原文时拒绝写入缓存；缺失行内代码或术语目标时先带明确提示重试一次。
+- 同时支持 Markdown 与 Qoder 等环境提供的 `skill` 语言 ID（文件内容仍为 Markdown）。
+- 可切换的 OpenAI 兼容或通用 HTTP 翻译服务，API Key 只保存在 VS Code SecretStorage；内置常用服务预设。
 - 全插件本地化：英文为默认 source，VS Code 显示语言为 `zh-cn` 时加载中文；命令/设置清单与运行时文案同步切换。
 
 ## 安装
 
+在 [VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=yxm1122.markdown-bilingual-sync) 搜索 **Markdown Bilingual Sync**，或在命令行安装：
+
 ```bash
-code --install-extension artifacts/vsix/markdown-bilingual-sync.vsix
+code --install-extension yxm1122.markdown-bilingual-sync
 ```
 
 需要 VS Code 1.95 或更高版本（扩展使用 Webview、SecretStorage、WorkspaceEdit 与 Language Model Tools）。
+
+仓库 `main` 可能领先于 Marketplace 发布版本；需要最新提交时使用下方的从源码构建。
 
 ### 从源码构建
 
@@ -54,7 +127,7 @@ npm ci
 npm run package
 ```
 
-构建产物位于 `artifacts/vsix/markdown-bilingual-sync.vsix`，可按上面的安装命令安装。开发调试可直接在 VS Code 中按 F5 启动扩展开发主机；详细命令见“开发”一节。
+构建产物位于 `artifacts/vsix/markdown-bilingual-sync.vsix`，可执行 `code --install-extension artifacts/vsix/markdown-bilingual-sync.vsix` 本地安装。开发调试可直接在 VS Code 中按 F5 启动扩展开发主机；详细命令见“开发”一节。
 
 ## 快速开始
 
@@ -103,6 +176,12 @@ npm run package
 - 简报写入缓存内的专用标记，不参与块对齐和导出；源文变化后显示“可能过期”但仍会作为上下文使用；清除缓存时简报一起删除。简报生成输入上限约 12k tokens，超出时请手动填写。单块重译/回译会额外携带同 section 的只读邻块上下文，帮助短标题和短段落保持语义。
 
 ### 块状态与缓存标记
+
+![块状态模型：未翻译、已翻译、过期、译文锁定、锁定且原文已更新、已删除；侧栏说明复制块、译文独占块与暂存原文修改](docs/assets/readme/block-states.png)
+
+*块状态模型：自动写入不会覆盖锁定译文；保存原文只标记过期。*
+
+> 自动写入不会覆盖译文锁定块；保存原文只标记过期，不会自动请求翻译 API。
 
 缓存锚点（`<!-- mbs:... -->`）共有五种模式：
 

@@ -1,0 +1,100 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024" role="img" aria-labelledby="icon-title">
+  <title id="icon-title">Markdown Bilingual Sync icon</title>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#0D2742"/>
+      <stop offset="1" stop-color="#071827"/>
+    </linearGradient>
+    <radialGradient id="bgGlow" cx="50%" cy="45%" r="62%">
+      <stop offset="0" stop-color="#1F5B8C" stop-opacity=".5"/>
+      <stop offset="1" stop-color="#0B1F33" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="tile" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#1B4B73"/>
+      <stop offset="1" stop-color="#0E2C49"/>
+    </linearGradient>
+    <linearGradient id="leftPane" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#2A6699"/>
+      <stop offset="1" stop-color="#16405F"/>
+    </linearGradient>
+    <linearGradient id="rightPane" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#123E61"/>
+      <stop offset="1" stop-color="#0A2238"/>
+    </linearGradient>
+    <linearGradient id="topLight" x1="0" y1="0" x2="0.65" y2="0.65">
+      <stop offset="0" stop-color="#FFFFFF" stop-opacity=".2"/>
+      <stop offset="1" stop-color="#FFFFFF" stop-opacity="0"/>
+    </linearGradient>
+    <linearGradient id="flap" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#EAF3FB"/>
+      <stop offset="1" stop-color="#8CADC7"/>
+    </linearGradient>
+    <filter id="tileShadow" x="-30%" y="-30%" width="160%" height="170%">
+      <feDropShadow dx="0" dy="26" stdDeviation="30" flood-color="#000000" flood-opacity=".55"/>
+    </filter>
+    <filter id="glyphShadow" x="-30%" y="-30%" width="160%" height="160%">
+      <feDropShadow dx="0" dy="10" stdDeviation="12" flood-color="#000000" flood-opacity=".32"/>
+    </filter>
+    <filter id="seamGlow" x="-200%" y="-20%" width="500%" height="140%">
+      <feGaussianBlur stdDeviation="12"/>
+    </filter>
+    <filter id="arrowGlow" x="-80%" y="-120%" width="260%" height="340%">
+      <feGaussianBlur stdDeviation="8"/>
+    </filter>
+    <filter id="arrowShadow" x="-30%" y="-140%" width="160%" height="380%">
+      <feDropShadow dx="0" dy="0" stdDeviation="6" flood-color="#000000" flood-opacity=".55"/>
+    </filter>
+    <clipPath id="tileClip">
+      <rect x="70" y="70" width="884" height="884" rx="190"/>
+    </clipPath>
+  </defs>
+
+  <rect width="1024" height="1024" fill="url(#bg)"/>
+  <rect width="1024" height="1024" fill="url(#bgGlow)"/>
+
+  <rect x="70" y="70" width="884" height="884" rx="190" fill="#06131F" filter="url(#tileShadow)"/>
+
+  <g clip-path="url(#tileClip)">
+    <rect x="70" y="70" width="884" height="884" fill="url(#tile)"/>
+    <rect x="70" y="70" width="442" height="884" fill="url(#leftPane)"/>
+    <rect x="512" y="70" width="442" height="884" fill="url(#rightPane)"/>
+    <rect x="70" y="70" width="884" height="884" fill="url(#topLight)"/>
+
+    <rect x="498" y="86" width="28" height="852" fill="#22D3EE" opacity=".32" filter="url(#seamGlow)"/>
+    <rect x="510" y="86" width="4" height="852" fill="#22D3EE" opacity=".95"/>
+
+    <g stroke="#BBD4E8" stroke-width="10" stroke-linecap="round" opacity=".22">
+      <line x1="150" y1="838" x2="300" y2="838"/>
+      <line x1="150" y1="866" x2="260" y2="866"/>
+      <line x1="150" y1="894" x2="220" y2="894"/>
+      <line x1="724" y1="838" x2="874" y2="838"/>
+      <line x1="764" y1="866" x2="874" y2="866"/>
+      <line x1="804" y1="894" x2="874" y2="894"/>
+    </g>
+
+    <g fill="#22D3EE" opacity=".4" filter="url(#arrowGlow)">
+      <path d="M 350 512 L 452 458 L 452 566 Z"/>
+      <path d="M 630 512 L 528 458 L 528 566 Z"/>
+      <rect x="400" y="484" width="180" height="56" rx="28"/>
+    </g>
+    <g fill="#F8FAFC" filter="url(#arrowShadow)">
+      <path d="M 350 512 L 452 458 L 452 566 Z"/>
+      <path d="M 630 512 L 528 458 L 528 566 Z"/>
+      <rect x="400" y="484" width="180" height="56" rx="28"/>
+    </g>
+
+    <g filter="url(#glyphShadow)">
+      <text x="230" y="512" text-anchor="middle" dominant-baseline="central" font-family="Segoe UI, Inter, Helvetica Neue, Arial, sans-serif" font-weight="900" font-size="320" fill="#F8FAFC">A</text>
+      <text x="790" y="512" text-anchor="middle" dominant-baseline="central" font-family="Microsoft YaHei UI, Microsoft YaHei, Noto Sans SC, sans-serif" font-weight="700" font-size="300" fill="#F8FAFC">文</text>
+    </g>
+
+    <g>
+      <path d="M 790 70 L 954 70 L 954 234 C 900 214 836 166 790 70 Z" fill="url(#flap)"/>
+      <path d="M 790 70 C 836 166 900 214 954 234" fill="none" stroke="#06131F" stroke-width="8" opacity=".3"/>
+      <path d="M 790 70 L 954 70" stroke="#FFFFFF" stroke-width="2" opacity=".35"/>
+    </g>
+  </g>
+
+  <rect x="71.5" y="71.5" width="881" height="881" rx="188.5" fill="none" stroke="#5B84A6" stroke-width="3" opacity=".55"/>
+  <rect x="78" y="78" width="868" height="868" rx="182" fill="none" stroke="#FFFFFF" stroke-width="2" opacity=".08"/>
+</svg>

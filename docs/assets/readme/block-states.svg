@@ -1,0 +1,136 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="900" viewBox="0 0 1600 900" role="img" aria-labelledby="diagram-title diagram-desc">
+  <title id="diagram-title">Markdown Bilingual Sync block state model</title>
+  <desc id="diagram-desc">Six main block states: untranslated, translated, stale, translation locked, locked with updated source, and deleted. Copy, target-only, and staged edits are explained in side notes.</desc>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#64748B"/>
+    </marker>
+    <marker id="arrow-amber" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#FBBF24"/>
+    </marker>
+    <marker id="arrow-blue" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#60A5FA"/>
+    </marker>
+    <style>
+      .title { font: 700 42px "Segoe UI", Inter, "Helvetica Neue", sans-serif; fill: #F8FAFC; }
+      .subtitle { font: 400 19px "Segoe UI", Inter, "Helvetica Neue", sans-serif; fill: #94A3B8; }
+      .state { font: 600 22px "Segoe UI", Inter, "Helvetica Neue", sans-serif; fill: #F1F5F9; }
+      .state-small { font: 600 21px "Segoe UI", Inter, "Helvetica Neue", sans-serif; fill: #F1F5F9; }
+      .detail { font: 400 15px "Segoe UI", Inter, "Helvetica Neue", sans-serif; fill: #94A3B8; }
+      .edge { font: 500 15px "Segoe UI", Inter, "Helvetica Neue", sans-serif; fill: #A8B3C4; }
+      .legend { font: 500 14px "Segoe UI", Inter, "Helvetica Neue", sans-serif; fill: #94A3B8; }
+      .note-title { font: 600 18px "Segoe UI", Inter, "Helvetica Neue", sans-serif; fill: #E2E8F0; }
+      .note { font: 400 14.5px "Segoe UI", Inter, "Helvetica Neue", sans-serif; fill: #94A3B8; }
+      .rule { font: 600 15px "Segoe UI", Inter, "Helvetica Neue", sans-serif; fill: #CBD5E1; }
+      .card { fill: #102A44; stroke: #24445F; stroke-width: 1.5; }
+      .dot-green { fill: #34D399; }
+      .dot-blue { fill: #60A5FA; }
+      .dot-amber { fill: #FBBF24; }
+      .dot-slate { fill: #94A3B8; }
+      .dot-red { fill: #F87171; }
+      .line { stroke: #64748B; stroke-width: 1.8; fill: none; }
+      .line-dashed { stroke: #64748B; stroke-width: 1.6; stroke-dasharray: 6 6; fill: none; }
+      .line-amber { stroke: #FBBF24; stroke-width: 1.8; fill: none; }
+    </style>
+  </defs>
+
+  <rect x="0" y="0" width="1600" height="900" rx="28" fill="#0B1F33"/>
+
+  <text x="80" y="92" class="title">Block state model</text>
+  <text x="80" y="130" class="subtitle">Saving the source only marks stale. Automatic writes never overwrite a locked translation.</text>
+
+  <g transform="translate(1070, 64)">
+    <circle cx="6" cy="10" r="4.5" class="dot-green"/>
+    <text x="18" y="15" class="legend">Auto</text>
+    <circle cx="92" cy="10" r="4.5" class="dot-blue"/>
+    <text x="104" y="15" class="legend">Locked</text>
+    <circle cx="190" cy="10" r="4.5" class="dot-amber"/>
+    <text x="202" y="15" class="legend">Needs attention</text>
+    <circle cx="342" cy="10" r="4.5" class="dot-slate"/>
+    <text x="354" y="15" class="legend">Special</text>
+  </g>
+
+  <!-- Top row: automatic translation -->
+  <g>
+    <rect x="80" y="240" width="230" height="100" rx="14" class="card"/>
+    <circle cx="106" cy="270" r="5" class="dot-slate"/>
+    <text x="122" y="276" class="state">Untranslated</text>
+    <text x="106" y="310" class="detail">No cache entry yet</text>
+
+    <rect x="400" y="240" width="230" height="100" rx="14" class="card"/>
+    <circle cx="426" cy="270" r="5" class="dot-green"/>
+    <text x="442" y="276" class="state">Translated</text>
+    <text x="426" y="310" class="detail">Auto cache, source matches</text>
+
+    <rect x="760" y="240" width="230" height="100" rx="14" class="card"/>
+    <circle cx="786" cy="270" r="5" class="dot-amber"/>
+    <text x="802" y="276" class="state">Stale</text>
+    <text x="786" y="310" class="detail">Source changed after sync</text>
+
+    <line x1="310" y1="290" x2="392" y2="290" class="line" marker-end="url(#arrow)"/>
+    <text x="332" y="278" class="edge">sync</text>
+
+    <line x1="630" y1="290" x2="752" y2="290" class="line" marker-end="url(#arrow)"/>
+    <text x="691" y="314" text-anchor="middle" class="edge">source saved</text>
+
+    <path d="M 875 240 L 875 190 L 515 190 L 515 232" class="line-dashed" marker-end="url(#arrow)"/>
+    <text x="695" y="180" text-anchor="middle" class="edge">sync / retranslate stale</text>
+  </g>
+
+  <!-- Human translation row -->
+  <g>
+    <rect x="390" y="520" width="250" height="110" rx="14" class="card"/>
+    <circle cx="416" cy="552" r="5" class="dot-blue"/>
+    <text x="432" y="558" class="state-small">Translation locked</text>
+    <text x="416" y="594" class="detail">Edited, imported, or synced</text>
+
+    <rect x="770" y="520" width="290" height="110" rx="14" class="card"/>
+    <circle cx="796" cy="552" r="5" class="dot-amber"/>
+    <text x="812" y="558" class="state-small">Locked · source updated</text>
+    <text x="796" y="594" class="detail">Needs a manual refresh</text>
+
+    <rect x="1150" y="520" width="240" height="110" rx="14" fill="#102A44" stroke="#475569" stroke-width="1.5" stroke-dasharray="7 6"/>
+    <circle cx="1176" cy="552" r="5" class="dot-red"/>
+    <text x="1192" y="558" class="state-small">Deleted</text>
+    <text x="1176" y="594" class="detail">Tombstone, not exported</text>
+
+    <line x1="515" y1="340" x2="515" y2="512" class="line" marker-end="url(#arrow)"/>
+    <text x="530" y="430" class="edge">edit / import / mark synced</text>
+
+    <line x1="640" y1="575" x2="762" y2="575" class="line" marker-end="url(#arrow)"/>
+    <text x="701" y="600" text-anchor="middle" class="edge">source saved</text>
+
+    <path d="M 915 630 L 915 700 L 515 700 L 515 638" class="line-dashed" marker-end="url(#arrow)"/>
+    <text x="715" y="690" text-anchor="middle" class="edge">mark synced / retranslate locked</text>
+
+    <line x1="1060" y1="575" x2="1142" y2="575" class="line-dashed" marker-end="url(#arrow)"/>
+    <text x="1101" y="600" text-anchor="middle" class="edge">delete</text>
+  </g>
+
+  <!-- Key rule -->
+  <g>
+    <rect x="80" y="660" width="280" height="44" rx="10" fill="#0F2E4C" stroke="#1D4ED8" stroke-width="1.2"/>
+    <path d="M 101 682 l 8 8 l 14 -16" fill="none" stroke="#60A5FA" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/>
+    <text x="132" y="688" class="rule">Human edits stay protected</text>
+  </g>
+
+  <!-- Special states -->
+  <g>
+    <rect x="80" y="748" width="460" height="96" rx="12" fill="#0D233A" stroke="#1E3A55" stroke-width="1.2"/>
+    <circle cx="104" cy="778" r="4.5" class="dot-slate"/>
+    <text x="118" y="784" class="note-title">Copy blocks</text>
+    <text x="104" y="812" class="note">Code, math, and other non-translatable blocks are copied as-is.</text>
+
+    <rect x="570" y="748" width="460" height="96" rx="12" fill="#0D233A" stroke="#1E3A55" stroke-width="1.2"/>
+    <circle cx="594" cy="778" r="4.5" class="dot-blue"/>
+    <text x="608" y="784" class="note-title">Target-only</text>
+    <text x="594" y="812" class="note">A translation without a source block stays locked and is exported.</text>
+
+    <rect x="1060" y="748" width="460" height="96" rx="12" fill="#0D233A" stroke="#1E3A55" stroke-width="1.2"/>
+    <circle cx="1084" cy="778" r="4.5" class="dot-amber"/>
+    <text x="1098" y="784" class="note-title">Staged source edits</text>
+    <text x="1084" y="812" class="note">Insert, edit, or delete in the preview, then apply once to the source.</text>
+  </g>
+
+  <text x="80" y="878" class="detail">Markdown Bilingual Sync · block-level cache and lock model</text>
+</svg>

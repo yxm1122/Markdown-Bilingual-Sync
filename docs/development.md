@@ -197,7 +197,10 @@ npm version <patch|minor|major> --no-git-tag-version
 - [ ] `npm run package` 成功
 - [ ] VSIX 的 `extension/package.json` 版本与预期一致
 - [ ] 在隔离 profile 完成受影响路径的手动 E2E
-- [ ] 确认 `README.md` 的功能/命令/设置已同步
+- [ ] 确认 `README.md` 与 `README.en.md` 的功能/命令/设置已同步
+- [ ] 修改 README 演示稿或截图后运行 `npm run readme:assets`，并确认图注与图片一致
+- [ ] 确认 `package.json` 的 `icon` 指向 `media/icon.png`，且在 32/128px 下可辨认
+- [ ] 检查 VSIX 内 `extension/package.json` 的 `icon` 与 `galleryBanner`
 - [ ] 确认没有密钥、临时路径、调试日志进入提交
 - [ ] 用户明确同意提交/推送/发布
 
