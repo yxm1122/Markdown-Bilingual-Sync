@@ -1453,6 +1453,19 @@ function AnnotationPopover(props: {
 
 // ---- 工具栏 / 上下文栏 ----
 
+/** 判断事件目标是否是可输入控件；用于感知“用户正在编辑”。 */
+function isEditableTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) {
+    return false;
+  }
+  return (
+    target.isContentEditable ||
+    target.tagName === "INPUT" ||
+    target.tagName === "TEXTAREA" ||
+    target.tagName === "SELECT"
+  );
+}
+
 function Toolbar(props: {
   model: PreviewModel;
   text: UiCatalog;
@@ -1461,6 +1474,7 @@ function Toolbar(props: {
   selectionMode: boolean;
   canSelect: boolean;
   taskActivity: { running: number; queued: number };
+  taskFlash: number;
   onSync: () => void;
   onReview: () => void;
   onExport: () => void;
@@ -1469,8 +1483,31 @@ function Toolbar(props: {
   onToggleSelection: () => void;
   onOpenTasks: () => void;
 }) {
-  const { model, text, busy, locked, taskActivity } = props;
+  const { model, text, busy, locked, taskActivity, taskFlash } = props;
   const taskCount = taskActivity.running + taskActivity.queued;
+  const activityRef = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    if (taskFlash <= 0) {
+      return;
+    }
+    const node = activityRef.current;
+    if (!node) {
+      return;
+    }
+    node.classList.remove("is-flashing");
+    // 强制回流，确保连续两次新任务都能重新播放同一段动画。
+    void node.offsetWidth;
+    node.classList.add("is-flashing");
+    const reduceMotion =
+      window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches === true;
+    const timer = window.setTimeout(
+      () => {
+        node.classList.remove("is-flashing");
+      },
+      reduceMotion ? 320 : 1200,
+    );
+    return () => window.clearTimeout(timer);
+  }, [taskFlash]);
   return (
     <header class="pv-toolbar">
       <div class="pv-file">
@@ -1485,19 +1522,22 @@ function Toolbar(props: {
       <div class="pv-toolbar-actions">
         {taskCount > 0 ? (
           <button
+            ref={activityRef}
             type="button"
             class="pv-task-activity"
             title={text.preview.toolbar.taskActivityTitle}
             aria-label={text.preview.toolbar.taskActivityTitle}
             onClick={props.onOpenTasks}
           >
-            <span
-              class={`codicon ${
-                taskActivity.running > 0
-                  ? "codicon-sync codicon-modifier-spin"
-                  : "codicon-clock"
-              }`}
-            />
+            <span class="pv-task-icon">
+              <span
+                class={`codicon ${
+                  taskActivity.running > 0
+                    ? "codicon-sync codicon-modifier-spin"
+                    : "codicon-clock"
+                }`}
+              />
+            </span>
             <span>
               {fmt(text.preview.toolbar.taskActivity, taskActivity)}
             </span>
@@ -4157,6 +4197,10 @@ export function App(props: { boot: BootData; text: UiCatalog }) {
     running: 0,
     queued: 0,
   });
+  /** 宿主推送的“新任务出现”信号计数；每次增加播放一次胶囊脉冲。 */
+  const [taskFlash, setTaskFlash] = useState(0);
+  /** 焦点位于输入控件内；与弹窗/草稿状态一起上报交互锁。 */
+  const [editableFocused, setEditableFocused] = useState(false);
   const [selectionMode, setSelectionMode] = useState(false);
   const [selectedKeys, setSelectedKeys] = useState<Set<string>>(
     () => new Set(),
@@ -4198,6 +4242,8 @@ export function App(props: { boot: BootData; text: UiCatalog }) {
   );
   const [sourceDialog, setSourceDialog] = useState<SourceDialogState | null>(null);
   const toastId = useRef(0);
+  /** 上一次上报给宿主的交互锁状态；避免重复消息。 */
+  const lastInteractionSent = useRef(false);
   const bodyRef = useRef<HTMLDivElement>(null);
   const summaryDraftRef = useRef(summaryDraft);
   const briefDraftRef = useRef(briefDraft);
@@ -4299,6 +4345,9 @@ export function App(props: { boot: BootData; text: UiCatalog }) {
           setTaskActivity({ running, queued });
           break;
         }
+        case "taskFlash":
+          setTaskFlash((current) => current + 1);
+          break;
         case "revealBlock":
           setRevealRequest({
             ...(typeof message.blockKey === "string"
@@ -4347,6 +4396,53 @@ export function App(props: { boot: BootData; text: UiCatalog }) {
       showToast(props.boot.notice.text, props.boot.notice.kind);
     }
   }, [showToast]);
+
+  // 输入焦点变化：编辑框一获得焦点就进入交互锁，失焦到非输入控件才解除。
+  useEffect(() => {
+    const onFocusIn = (event: FocusEvent) => {
+      if (isEditableTarget(event.target)) {
+        setEditableFocused(true);
+      }
+    };
+    const onFocusOut = (event: FocusEvent) => {
+      if (!isEditableTarget(event.relatedTarget)) {
+        setEditableFocused(false);
+      }
+    };
+    document.addEventListener("focusin", onFocusIn);
+    document.addEventListener("focusout", onFocusOut);
+    return () => {
+      document.removeEventListener("focusin", onFocusIn);
+      document.removeEventListener("focusout", onFocusOut);
+    };
+  }, []);
+
+  // 编辑器关闭会直接卸载聚焦元素而不触发 focusout；每次渲染后校正一次，
+  // 避免交互锁因焦点丢失事件而永久保持。
+  useEffect(() => {
+    if (editableFocused && !isEditableTarget(document.activeElement)) {
+      setEditableFocused(false);
+    }
+  });
+
+  // 交互锁：弹窗、编辑态与未保存草稿期间暂停宿主的自动刷新。
+  const interactionActive =
+    editableFocused ||
+    Boolean(editing) ||
+    Boolean(insert) ||
+    Boolean(annotationTarget) ||
+    Boolean(exportDialog) ||
+    Boolean(sourceDialog) ||
+    summaryDirty ||
+    briefDirty ||
+    glossaryDirty;
+  useEffect(() => {
+    if (standaloneMode || lastInteractionSent.current === interactionActive) {
+      return;
+    }
+    lastInteractionSent.current = interactionActive;
+    send({ type: "interaction", active: interactionActive });
+  }, [interactionActive]);
 
   // 摘要/术语表草稿：用户未编辑时跟随宿主模型，编辑中不被刷新覆盖。
   useEffect(() => {
@@ -5311,6 +5407,7 @@ export function App(props: { boot: BootData; text: UiCatalog }) {
         selectionMode={selectionMode}
         canSelect={selectableBlocks.length > 0}
         taskActivity={taskActivity}
+        taskFlash={taskFlash}
         onSync={() => sendMessage({ type: "sync" })}
         onReview={() => sendMessage({ type: "reviewMachineBlocks" })}
         onExport={() => sendMessage({ type: "export" })}

@@ -47,6 +47,7 @@ export type PreviewHostMessage =
     }
   | { type: "busy"; busy: boolean; message?: string }
   | { type: "taskActivity"; running: number; queued: number }
+  | { type: "taskFlash" }
   | { type: "revealBlock"; blockKey?: string; first?: boolean }
   | { type: "toast"; text: string; kind: PreviewToastKind }
   | { type: "sourceConfirm"; data: SourceConfirmationView }

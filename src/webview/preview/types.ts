@@ -47,6 +47,8 @@ export interface BlockSelection {
 /** Webview 可以发送给宿主的全部动作（与 PreviewManager.onMessage 对齐）。 */
 export type OutboundMessage =
   | { type: "ready" }
+  /** 预览内有弹窗/输入框正在交互；宿主据此暂停自动刷新。 */
+  | { type: "interaction"; active: boolean }
   | { type: "setLayout"; layout: PreviewLayout }
   | { type: "togglePaneReadonly"; pane: "source" | "target" }
   | { type: "sync" }

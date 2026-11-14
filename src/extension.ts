@@ -525,7 +525,20 @@ export function activate(context: vscode.ExtensionContext): void {
           : { scope: "fileBatch", revealFirstBlock: true },
       run: async ({ signal, report, recordRetry }) => {
         report({ phase: UI_TEXT.extension.syncPreparing });
+        // 显式“翻译文件”时任务开始就打开预览，让用户看到逐批出现；
+        // 若保存确认被取消，预览保持打开并显示当前状态。
+        if (openPreview) {
+          try {
+            previewManager.open(sourceUri);
+          } catch (error) {
+            output.appendLine(
+              `[${new Date().toISOString()}] open preview failed ${relative}: ${formatError(error)}`,
+            );
+          }
+        }
         try {
+          const onCacheProgress = (cacheText: string): void =>
+            previewManager.progress(sourceUri, cacheText);
           const outcome =
             mode === "all"
               ? await syncService.retranslateAll(
@@ -536,6 +549,7 @@ export function activate(context: vscode.ExtensionContext): void {
                   signal,
                   undefined,
                   () => recordRetry(),
+                  onCacheProgress,
                 )
               : await syncService.sync(
                   sourceUri,
@@ -547,14 +561,11 @@ export function activate(context: vscode.ExtensionContext): void {
                   true,
                   undefined,
                   () => recordRetry(),
+                  onCacheProgress,
                 );
           const { result } = outcome;
           try {
-            if (openPreview) {
-              previewManager.open(sourceUri);
-            } else {
-              previewManager.refresh(sourceUri);
-            }
+            previewManager.refresh(sourceUri);
           } catch (error) {
             output.appendLine(
               `[${new Date().toISOString()}] sync preview failed ${relative}: ${formatError(error)}`,
@@ -873,6 +884,7 @@ export function activate(context: vscode.ExtensionContext): void {
                 true,
                 undefined,
                 () => recordRetry(),
+                (cacheText) => previewManager.progress(file, cacheText),
               );
               const result = outcome.result;
               output.appendLine(
@@ -1361,6 +1373,13 @@ export function activate(context: vscode.ExtensionContext): void {
 
   // 所有监听都注册一次并随 context.subscriptions 释放，避免重载后重复触发。
   context.subscriptions.push(
+    vscode.workspace.onDidChangeTextDocument((event) => {
+      if (event.contentChanges.length === 0) return;
+      if (!isSupportedLanguageId(event.document.languageId)) return;
+      if (cacheStore.isCacheUri(event.document.uri)) return;
+      // 输入中刷新预览（读取未保存缓冲区）；去抖与哈希去重在会话内完成。
+      previewManager.sourceChanged(event.document.uri);
+    }),
     vscode.workspace.onDidSaveTextDocument((document) => {
       // 缓存文件没有与预览一一对应的映射，保存缓存时刷新全部已打开预览。
       if (cacheStore.isCacheUri(document.uri)) {

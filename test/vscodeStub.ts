@@ -90,6 +90,14 @@ export class Range {
   ) {}
 }
 
+/** 相对文件匹配模式替身；预览面板用它监听单个源文件。 */
+export class RelativePattern {
+  constructor(
+    readonly base: unknown,
+    readonly pattern: string,
+  ) {}
+}
+
 /** WorkspaceEdit 的最小替身；记录 replace 调用，由测试的 applyEdit 消费。 */
 export class WorkspaceEdit {
   readonly edits: Array<{ uri: unknown; range: Range; text: string }> = [];
@@ -167,6 +175,7 @@ export const vscodeStub = {
   LanguageModelToolResult,
   Position,
   Range,
+  RelativePattern,
   WorkspaceEdit,
   lm: {
     registerTool: (_name: string, _tool: unknown) => disposable(),
@@ -223,6 +232,12 @@ export const vscodeStub = {
     onDidChangeTextDocument: () => disposable(),
     onDidOpenTextDocument: () => disposable(),
     onDidCloseTextDocument: () => disposable(),
+    createFileSystemWatcher: () => ({
+      onDidChange: () => disposable(),
+      onDidCreate: () => disposable(),
+      onDidDelete: () => disposable(),
+      dispose() {},
+    }),
     openTextDocument: async () => ({}),
     asRelativePath: (value: unknown) => String(value),
     fs: {

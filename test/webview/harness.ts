@@ -113,7 +113,12 @@ export function postHostMessage(message: PreviewHostMessage): void {
   });
 }
 
-/** 返回除 ready 握手以外的上行消息。 */
+/**
+ * 返回除 ready 握手与 interaction 控制信号以外的上行消息。
+ * interaction 只驱动宿主暂停自动刷新，不代表用户动作；需要断言时直接看 messages。
+ */
 export function actions(harness: WebviewHarness): OutboundMessage[] {
-  return harness.messages.filter((message) => message.type !== "ready");
+  return harness.messages.filter(
+    (message) => message.type !== "ready" && message.type !== "interaction",
+  );
 }

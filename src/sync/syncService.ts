@@ -1429,6 +1429,7 @@ export class SyncService {
     allowPartial = false,
     assist?: Partial<TranslationAssistSettings>,
     onRetry?: TranslationRetryReporter,
+    onCacheProgress?: (cacheText: string) => void,
   ): Promise<SyncOutcome> {
     try {
       return await this.withLock(sourceUri, async () => {
@@ -1442,6 +1443,7 @@ export class SyncService {
           allowPartial,
           assist,
           onRetry,
+          onCacheProgress,
         );
       });
     } catch (error) {
@@ -1463,6 +1465,7 @@ export class SyncService {
     signal?: AbortSignal,
     assist?: Partial<TranslationAssistSettings>,
     onRetry?: TranslationRetryReporter,
+    onCacheProgress?: (cacheText: string) => void,
   ): Promise<SyncOutcome> {
     return this.sync(
       sourceUri,
@@ -1472,6 +1475,7 @@ export class SyncService {
       true,
       assist,
       onRetry,
+      onCacheProgress,
     );
   }
 
@@ -1487,6 +1491,7 @@ export class SyncService {
     signal?: AbortSignal,
     assist?: Partial<TranslationAssistSettings>,
     onRetry?: TranslationRetryReporter,
+    onCacheProgress?: (cacheText: string) => void,
   ): Promise<SyncOutcome> {
     try {
       return await this.withLock(sourceUri, async () => {
@@ -1500,6 +1505,7 @@ export class SyncService {
           true,
           assist,
           onRetry,
+          onCacheProgress,
         );
       });
     } catch (error) {
@@ -1524,6 +1530,7 @@ export class SyncService {
     signal?: AbortSignal,
     assist?: Partial<TranslationAssistSettings>,
     onRetry?: TranslationRetryReporter,
+    onCacheProgress?: (cacheText: string) => void,
   ): Promise<RetranslateBlocksOutcome> {
     try {
       return await this.withLock(sourceUri, async () => {
@@ -1614,6 +1621,7 @@ export class SyncService {
             true,
             assist,
             onRetry,
+            onCacheProgress,
             { onlySourceIndexes, includeHuman: true },
           ),
           skipped,
@@ -3838,6 +3846,7 @@ export class SyncService {
     allowPartial = false,
     assist?: Partial<TranslationAssistSettings>,
     onRetry?: TranslationRetryReporter,
+    onCacheProgress?: (cacheText: string) => void,
     selective?: {
       onlySourceIndexes: ReadonlySet<number>;
       includeHuman?: boolean;
@@ -3909,6 +3918,7 @@ export class SyncService {
       signal,
       onProgress,
       ...(onRetry ? { onRetry } : {}),
+      ...(onCacheProgress ? { onCacheProgress } : {}),
       allowPartial,
       // 只有部分模式需要中间落盘；失败错误会由 syncDocument 回传给调用方。
       onCacheCommit: allowPartial

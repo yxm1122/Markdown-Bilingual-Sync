@@ -139,6 +139,11 @@ export interface SyncOptions {
    * 部分结果落盘回调；仅在 `allowPartial` 时按阈值调用，失败会中断当前批次。
    */
   onCacheCommit?: (cacheText: string) => Promise<void>;
+  /**
+   * 每批结果通过校验后的即时缓存快照，用于预览逐批显示；与 `onCacheCommit`
+   * 的落盘阈值无关。回调抛错会被吞掉，不得影响翻译流程。
+   */
+  onCacheProgress?: (cacheText: string) => void;
 }
 
 /** `syncDocument` 的结果；`cacheText` 是最终应持久化的完整缓存。 */
@@ -449,6 +454,7 @@ export async function syncDocument(options: SyncOptions): Promise<SyncResult> {
     onProgress,
     allowPartial = false,
     onCacheCommit,
+    onCacheProgress,
   } = options;
 
   const source = parseMarkdownDocument(sourceText, md);
@@ -648,13 +654,17 @@ export async function syncDocument(options: SyncOptions): Promise<SyncResult> {
    * 然后用实际解析出的块哈希修正每个 `dst`，最后再序列化/解析一次得到稳定结果。
    * 草稿结构异常会转成 `SyncBlockedError`，避免把坏缓存交给调用方。
    */
-  const buildCache = (candidate: Map<string, string>) => {
+  const buildCache = (
+    candidate: Map<string, string>,
+    /** 中间快照允许缺少尚未交付的块；最终构建仍按模式严格校验。 */
+    allowMissing = allowPartial,
+  ) => {
     const prepared = collectEntries(
       initialAlignment,
       candidate,
       finalIds,
       source.blocks,
-      allowPartial,
+      allowMissing,
     );
 
     let entries = mergeTargetEntries(prepared.entries, cache);
@@ -770,11 +780,21 @@ export async function syncDocument(options: SyncOptions): Promise<SyncResult> {
       const restored = restoreResult(item);
       candidate.set(restored.id, restored.text);
     }
-    if (allowPartial) {
-      buildCache(candidate);
-    }
+    // 缓存构建同时充当结构校验；供预览显示进度时即使非部分模式也需要构建一次，
+    // 但中间快照允许缺少尚未交付的块，最终构建仍保持严格校验。
+    const built =
+      allowPartial || onCacheProgress
+        ? buildCache(candidate, allowPartial || onCacheProgress !== undefined)
+        : undefined;
     outputs = candidate;
     pendingSinceCommit += items.length;
+    if (built && onCacheProgress) {
+      try {
+        onCacheProgress(built.cacheText);
+      } catch {
+        /* 预览进度只是旁路展示，失败不得中断翻译 */
+      }
+    }
     await commitIfNeeded(false);
   };
 

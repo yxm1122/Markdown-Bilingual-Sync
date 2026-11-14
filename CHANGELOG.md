@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Flash the preview task chip with a short, reduced-motion-aware pulse whenever a new task for the current file appears, coalescing bursts within one second.
+- Display translated blocks in the preview as each provider batch is validated instead of waiting for the whole run; explicitly started single-file translations open the preview at task start.
+- Auto-refresh the preview while source text changes through typing, saving, or external edits, with 300ms debounce and content-hash deduplication.
+- Pause both incremental translation updates and source auto-refresh while a preview dialog, annotation composer, staged edit, or export confirmation is active, then flush once when interaction ends.
+
 ## [0.17.0] - 2026-11-01
 
 ### Added

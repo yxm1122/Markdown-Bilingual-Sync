@@ -3132,6 +3132,100 @@ body.vscode-high-contrast-light .diff-dialog::backdrop {
   color: var(--vscode-progressBar-background, var(--vscode-textLink-foreground));
 }
 
+/* 新任务出现：胶囊做两次柔和脉冲；图标单独包裹，避免覆盖旋转动画。 */
+.pv-task-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.pv-task-activity.is-flashing {
+  animation: pv-task-pulse 1.1s ease-out;
+}
+
+.pv-task-activity.is-flashing .pv-task-icon {
+  animation: pv-task-icon-pulse 1.1s ease-out;
+}
+
+@keyframes pv-task-pulse {
+  0% {
+    background-color: transparent;
+    box-shadow: 0 0 0 0 color-mix(
+      in srgb,
+      var(--vscode-focusBorder) 35%,
+      transparent
+    );
+  }
+  18% {
+    background-color: color-mix(
+      in srgb,
+      var(--vscode-focusBorder) 14%,
+      transparent
+    );
+    box-shadow: 0 0 0 3px color-mix(
+      in srgb,
+      var(--vscode-focusBorder) 22%,
+      transparent
+    );
+  }
+  40% {
+    background-color: transparent;
+    box-shadow: 0 0 0 0 transparent;
+  }
+  58% {
+    background-color: color-mix(
+      in srgb,
+      var(--vscode-focusBorder) 10%,
+      transparent
+    );
+    box-shadow: 0 0 0 2px color-mix(
+      in srgb,
+      var(--vscode-focusBorder) 18%,
+      transparent
+    );
+  }
+  82%,
+  100% {
+    background-color: transparent;
+    box-shadow: 0 0 0 0 transparent;
+  }
+}
+
+@keyframes pv-task-icon-pulse {
+  0%,
+  40%,
+  82%,
+  100% {
+    transform: scale(1);
+  }
+  18% {
+    transform: scale(1.18);
+  }
+  58% {
+    transform: scale(1.12);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pv-task-activity.is-flashing {
+    animation: none;
+    background-color: color-mix(
+      in srgb,
+      var(--vscode-focusBorder) 12%,
+      transparent
+    );
+    box-shadow: 0 0 0 1px color-mix(
+      in srgb,
+      var(--vscode-focusBorder) 30%,
+      transparent
+    );
+  }
+
+  .pv-task-activity.is-flashing .pv-task-icon {
+    animation: none;
+  }
+}
+
 .pv-selection-bar {
   flex: 0 0 auto;
   display: flex;
@@ -3321,7 +3415,7 @@ body.vscode-high-contrast-light .diff-dialog::backdrop {
     padding: 0 7px;
   }
 
-  .pv-task-activity span:last-child {
+  .pv-task-activity > span:last-child {
     display: none;
   }
 }

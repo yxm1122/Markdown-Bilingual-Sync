@@ -68,6 +68,7 @@ import {
   normalizeTranslationBrief,
   translationBriefText,
 } from "../translation/types";
+import { sha256 } from "../util/hash";
 import { languageSuffix } from "../util/language";
 import {
   buildPreviewModel,
@@ -81,6 +82,13 @@ import {
 } from "./layout";
 import { buildPreviewAppShell } from "./appShell";
 import type { PreviewHostMessage, PreviewNotice } from "./protocol";
+import {
+  PreviewRefreshQueue,
+  shouldSkipUnchangedSourceRefresh,
+  type PreviewRefreshKind,
+  type PreviewRefreshRequest,
+} from "./refreshQueue";
+import { TaskFlashTracker } from "./taskFlash";
 import type {
   TaskOperation,
   TaskTarget,
@@ -365,18 +373,34 @@ export class PreviewManager implements vscode.Disposable {
   }
 
   /**
-   * 刷新单个文件的预览（文件保存时由扩展调用）。
+   * 刷新单个文件的预览（保存、任务结束时由扩展调用）。
    * @param sourceUri 源文件；未打开预览时静默忽略。
    */
   refresh(sourceUri: vscode.Uri): void {
-    void this.panels.get(sourceUri.toString())?.update();
+    void this.panels.get(sourceUri.toString())?.refreshFromCache();
   }
 
   /** 刷新所有已打开面板（缓存保存、配置变化时调用）。 */
   refreshAll(): void {
     for (const session of this.panels.values()) {
-      void session.update();
+      void session.refreshFromCache();
     }
+  }
+
+  /**
+   * 推送一批译文快照到已打开预览；未打开时忽略。
+   * 会话内部按 250ms 合并，并在交互/写回期间暂缓。
+   */
+  progress(sourceUri: vscode.Uri, cacheText: string): void {
+    this.panels.get(sourceUri.toString())?.requestProgress(cacheText);
+  }
+
+  /**
+   * 源文变化（编辑器输入/外部磁盘变化）时请求刷新已打开的预览。
+   * 会话内部做 300ms 去抖与内容哈希去重。
+   */
+  sourceChanged(sourceUri: vscode.Uri): void {
+    this.panels.get(sourceUri.toString())?.requestSourceRefresh();
   }
 
   /** 指定文件是否已有预览面板。 */
@@ -521,6 +545,18 @@ class PreviewPanelSession implements vscode.Disposable {
   private readonly ownedTasks = new Set<number>();
   /** 已推送到 Webview 的活动任务计数，避免重复 postMessage。 */
   private taskActivity = { running: 0, queued: 0 };
+  /** 新任务识别与 1 秒合并。 */
+  private readonly taskFlash = new TaskFlashTracker();
+  /** Webview 正在编辑或弹窗交互；期间暂停源文与逐批译文的自动刷新。 */
+  private uiInteracting = false;
+  /** 自动刷新调度：逐批合并、源文去抖、阻塞挂起与解除后补刷。 */
+  private readonly refreshQueue: PreviewRefreshQueue;
+  /** 正在执行队列合并后的刷新；此时不得反过来取消队列。 */
+  private applyingAutoRefresh = false;
+  /** 上一次成功渲染的源文哈希；用于跳过内容未变的源文刷新。 */
+  private lastRenderedSourceHash?: string;
+  /** 源文件自身的磁盘监听：外部修改同样刷新预览。 */
+  private readonly sourceWatcher: vscode.FileSystemWatcher;
   /** 最近的忙碌态；Webview 重载后需要重新下发，避免丢失独占锁。 */
   private busyState: { busy: boolean; message?: string } = { busy: false };
   /** 待执行的块定位请求；渲染完成后发送给 Webview。 */
@@ -557,6 +593,26 @@ class PreviewPanelSession implements vscode.Disposable {
     this.unsubscribeTasks = taskMonitor.onDidChange(() =>
       this.syncTaskActivity(),
     );
+    // 源文件在编辑器外被修改（外部工具/分支切换）时同样刷新预览；
+    // 只监听这一个文件，避免全工作区扫描。
+    const sourcePattern = new vscode.RelativePattern(
+      vscode.Uri.joinPath(sourceUri, ".."),
+      path.basename(sourceUri.fsPath),
+    );
+    this.sourceWatcher =
+      vscode.workspace.createFileSystemWatcher(sourcePattern);
+    const onSourceDiskChange = (): void => {
+      if (!this.exportCommitting) {
+        this.invalidateExportConfirmation();
+      }
+      this.requestSourceRefresh();
+    };
+    this.sourceWatcher.onDidChange(onSourceDiskChange);
+    this.sourceWatcher.onDidCreate(onSourceDiskChange);
+    this.refreshQueue = new PreviewRefreshQueue({
+      isBlocked: (kind) => this.autoRefreshBlocked(kind),
+      apply: (request) => this.applyAutoRefresh(request),
+    });
     // Webview 消息可能乱序/恶意：统一交给 onMessage 做形状校验后再分发。
     this.panel.webview.onDidReceiveMessage((message: unknown) => {
       void this.onMessage(message);
@@ -591,7 +647,7 @@ class PreviewPanelSession implements vscode.Disposable {
 
   /**
    * 把本面板当前任务计数推送给 Webview，用于锁定编辑但保留“继续入队”。
-   * 仅在计数变化时发送，避免任务进度刷新造成额外消息。
+   * 仅在计数变化时发送；出现新任务 ID 时额外请求一次闪烁（1 秒内合并）。
    */
   private syncTaskActivity(force = false): void {
     if (this.disposed) {
@@ -601,19 +657,130 @@ class PreviewPanelSession implements vscode.Disposable {
     const active = this.taskMonitor
       .snapshot()
       .active.filter((task) => task.uri?.toString() === key);
+    // 首次同步只建立基线：预览打开时已有任务不应闪烁。
+    const shouldFlash = this.taskFlash.observe(active.map((task) => task.id));
     const running = active.filter(
       (task) => task.status === "running",
     ).length;
     const queued = active.length - running;
     if (
-      !force &&
-      this.taskActivity.running === running &&
-      this.taskActivity.queued === queued
+      force ||
+      this.taskActivity.running !== running ||
+      this.taskActivity.queued !== queued
     ) {
+      this.taskActivity = { running, queued };
+      this.postToWebview({ type: "taskActivity", running, queued });
+    }
+    if (shouldFlash) {
+      this.postToWebview({ type: "taskFlash" });
+    }
+  }
+
+  /**
+   * 接收一批译文快照，250ms 合并后刷新预览。
+   * @param cacheText 基于已交付块构建的完整缓存文本。
+   */
+  requestProgress(cacheText: string): void {
+    this.refreshQueue.requestProgress(cacheText);
+  }
+
+  /**
+   * 源文发生变化（输入、保存或磁盘修改）后请求去抖刷新。
+   * 与逐批译文刷新共用一次渲染，避免同一时刻重复重建模型。
+   */
+  requestSourceRefresh(): void {
+    this.refreshQueue.requestSource();
+  }
+
+  /**
+   * 强制刷新（任务结束、缓存写盘、保存）：交互期间先挂起，结束后补一次。
+   * 内容已变化时先作废陈旧的导出确认，避免用户提交旧 prepared 文本。
+   */
+  async refreshFromCache(): Promise<void> {
+    if (!this.exportCommitting) {
+      this.invalidateExportConfirmation();
+    }
+    await this.refreshQueue.requestFinal();
+  }
+
+  /**
+   * 指定来源的自动刷新是否应暂缓。
+   *
+   * - 交互、导出确认、源文写回：全部暂缓，避免清空草稿或读到中间态；
+   * - 原文/译文暂存：只暂缓逐批译文，避免块内容在编辑期间跳动；
+   *   源文变化与最终刷新仍会落地（源文变了就必须让暂存失效并提示）。
+   */
+  private autoRefreshBlocked(kind: PreviewRefreshKind): boolean {
+    if (
+      this.uiInteracting ||
+      this.sourceWriteInFlight ||
+      this.exportCommitting
+    ) {
+      return true;
+    }
+    return (
+      kind === "progress" &&
+      (this.pendingExport !== undefined ||
+        this.exportConfirmPending ||
+        this.hasPendingSource() ||
+        this.pendingTargetPromotions.size > 0 ||
+        this.pendingPairedLocks.size > 0)
+    );
+  }
+
+  /**
+   * 作废待确认的导出（不写盘）并通知 Webview 关闭对话框。
+   * 任务结束、保存或外部磁盘变化会让已准备的差异过期；
+   * 导出提交中不得调用，由调用方保证。
+   */
+  private invalidateExportConfirmation(): void {
+    const pending = this.pendingExport;
+    if (!pending) {
       return;
     }
-    this.taskActivity = { running, queued };
-    this.postToWebview({ type: "taskActivity", running, queued });
+    this.pendingExport = undefined;
+    this.exportConfirmPending = false;
+    this.output.appendLine(
+      `[${new Date().toISOString()}] export invalidated: ${pending.prepared.target.fsPath}`,
+    );
+    if (this.disposed) {
+      return;
+    }
+    this.postToWebview({ type: "exportSettled", action: "cancel" });
+    this.showToast(UI_TEXT.notifications.exportConfirmCancelled, "info");
+  }
+
+  /** 执行调度器合并后的一次刷新。 */
+  private async applyAutoRefresh(
+    request: PreviewRefreshRequest,
+  ): Promise<void> {
+    // update() 在第一个 await 之前同步完成“是否取消队列”的判断，
+    // 因此标志只需覆盖调用入口，不能在整次渲染期间保持为真，
+    // 否则并发到达的显式编辑刷新会漏掉对旧进度的取消。
+    this.applyingAutoRefresh = true;
+    let task: Promise<void>;
+    try {
+      task =
+        request.cacheText !== undefined
+          ? this.update(undefined, undefined, request.cacheText)
+          : this.update(
+              undefined,
+              undefined,
+              undefined,
+              request.skipIfUnchanged,
+            );
+    } finally {
+      this.applyingAutoRefresh = false;
+    }
+    await task;
+  }
+
+  /** 更新 Webview 交互状态；交互结束时补一次挂起的自动刷新。 */
+  private setUiInteracting(active: boolean): void {
+    this.uiInteracting = active;
+    if (!active) {
+      this.refreshQueue.notifyUnblocked();
+    }
   }
 
   /**
@@ -893,11 +1060,22 @@ class PreviewPanelSession implements vscode.Disposable {
     notice?: PreviewNotice,
     exportConfirmation?: ExportConfirmationView,
     cacheTextOverride?: string,
+    skipIfUnchanged = false,
   ): Promise<void> {
+    // 显式刷新（含写缓存后传入快照）都以最新状态为准，取消排队中的自动刷新，
+    // 避免旧进度在写入之后再次落屏；队列自身的合并刷新除外。
+    if (!this.applyingAutoRefresh) {
+      this.refreshQueue.cancel();
+    }
     // 串行化渲染：避免并发的 loadPreviewState 用版本号互相丢弃，
     // 尤其是 beginExport 的确认框不能被稍后启动的后台刷新吞掉。
     const task = this.updateQueue.then(() =>
-      this.performUpdate(notice, exportConfirmation, cacheTextOverride),
+      this.performUpdate(
+        notice,
+        exportConfirmation,
+        cacheTextOverride,
+        skipIfUnchanged,
+      ),
     );
     this.updateQueue = task.catch(() => undefined);
     return task;
@@ -940,6 +1118,7 @@ class PreviewPanelSession implements vscode.Disposable {
     notice?: PreviewNotice,
     exportConfirmation?: ExportConfirmationView,
     cacheTextOverride?: string,
+    skipIfUnchanged = false,
   ): Promise<void> {
     if (this.disposed) {
       return;
@@ -966,6 +1145,20 @@ class PreviewPanelSession implements vscode.Disposable {
     try {
       const state = await this.syncService.loadPreviewState(this.sourceUri);
       if (this.disposed || version !== this.updateVersion) {
+        return;
+      }
+      const sourceHash = sha256(state.sourceText);
+      // 自动源文刷新在内容未变时直接跳过（保存/外部事件的重复触发很常见）。
+      if (
+        shouldSkipUnchangedSourceRefresh({
+          skipIfUnchanged,
+          hasNotice: notice !== undefined,
+          hasExportConfirmation: exportConfirmation !== undefined,
+          hasCacheOverride: cacheTextOverride !== undefined,
+          sourceHash,
+          lastRenderedSourceHash: this.lastRenderedSourceHash,
+        })
+      ) {
         return;
       }
       // 外部保存/切换分支导致源文件变化：暂存失效，提示用户重新编辑。
@@ -1027,6 +1220,7 @@ class PreviewPanelSession implements vscode.Disposable {
         return;
       }
       this.lastModel = model;
+      this.lastRenderedSourceHash = sourceHash;
       const layout = this.manager.previewLayout;
       const readonly = {
         source: this.sourceReadonly,
@@ -1064,6 +1258,8 @@ class PreviewPanelSession implements vscode.Disposable {
   /** 标记销毁并清空导出/暂存状态；之后不再向 Webview 发送任何消息。 */
   dispose(): void {
     this.disposed = true;
+    this.refreshQueue.dispose();
+    this.sourceWatcher.dispose();
     this.unsubscribeTasks();
     for (const taskId of this.ownedTasks) {
       this.scheduler.cancelTask(taskId);
@@ -1212,6 +1408,7 @@ class PreviewPanelSession implements vscode.Disposable {
         ? message.key
         : undefined;
     const assistValue = message.value === true;
+    const interactionActive = message.active === true;
     const blocks = parseBlockSelections(message.blocks);
     try {
       switch (type) {
@@ -1219,6 +1416,12 @@ class PreviewPanelSession implements vscode.Disposable {
         case "ready":
           this.webviewReady = true;
           this.flushPendingMessages();
+          // 重载后的新页面没有本地弹窗/编辑态：解除旧交互锁；旧导出确认
+          // 也不再回放，避免宿主已作废后仍让用户提交旧 prepared 差异。
+          if (!this.exportCommitting) {
+            this.invalidateExportConfirmation();
+          }
+          this.setUiInteracting(false);
           // Webview 可能被重新加载：状态、任务活动和忙碌锁都必须重新下发。
           this.syncTaskActivity(true);
           if (this.busyState.busy) {
@@ -1230,7 +1433,11 @@ class PreviewPanelSession implements vscode.Disposable {
                 : {}),
             });
           }
-          void this.update(undefined, this.pendingExport?.confirmation);
+          void this.update();
+          break;
+        // ---- 交互锁：弹窗/输入期间暂停自动刷新，结束后补刷 ----
+        case "interaction":
+          this.setUiInteracting(interactionActive);
           break;
         // ---- 布局与只读：只影响当前面板的渲染参数 ----
         case "setLayout": {
@@ -3116,6 +3323,7 @@ class PreviewPanelSession implements vscode.Disposable {
               summaryContext: this.summaryContext,
             },
             () => recordRetry(),
+            (cacheText) => this.requestProgress(cacheText),
           );
         } catch (error) {
           if (signal.aborted || error instanceof CancelledError) {
@@ -3679,6 +3887,7 @@ class PreviewPanelSession implements vscode.Disposable {
                     summaryContext: this.summaryContext,
                   },
                   () => recordRetry(),
+                  (cacheText) => this.requestProgress(cacheText),
                 )
               : await this.syncService.sync(
                   this.sourceUri,
@@ -3693,6 +3902,7 @@ class PreviewPanelSession implements vscode.Disposable {
                     summaryContext: this.summaryContext,
                   },
                   () => recordRetry(),
+                  (cacheText) => this.requestProgress(cacheText),
                 );
           const { result } = outcome;
           await this.update();
