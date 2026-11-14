@@ -1474,7 +1474,6 @@ function Toolbar(props: {
   selectionMode: boolean;
   canSelect: boolean;
   taskActivity: { running: number; queued: number };
-  taskFlash: number;
   onSync: () => void;
   onReview: () => void;
   onExport: () => void;
@@ -1483,31 +1482,8 @@ function Toolbar(props: {
   onToggleSelection: () => void;
   onOpenTasks: () => void;
 }) {
-  const { model, text, busy, locked, taskActivity, taskFlash } = props;
+  const { model, text, busy, locked, taskActivity } = props;
   const taskCount = taskActivity.running + taskActivity.queued;
-  const activityRef = useRef<HTMLButtonElement>(null);
-  useEffect(() => {
-    if (taskFlash <= 0) {
-      return;
-    }
-    const node = activityRef.current;
-    if (!node) {
-      return;
-    }
-    node.classList.remove("is-flashing");
-    // 强制回流，确保连续两次新任务都能重新播放同一段动画。
-    void node.offsetWidth;
-    node.classList.add("is-flashing");
-    const reduceMotion =
-      window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches === true;
-    const timer = window.setTimeout(
-      () => {
-        node.classList.remove("is-flashing");
-      },
-      reduceMotion ? 320 : 1200,
-    );
-    return () => window.clearTimeout(timer);
-  }, [taskFlash]);
   return (
     <header class="pv-toolbar">
       <div class="pv-file">
@@ -1522,9 +1498,8 @@ function Toolbar(props: {
       <div class="pv-toolbar-actions">
         {taskCount > 0 ? (
           <button
-            ref={activityRef}
             type="button"
-            class="pv-task-activity"
+            class="pv-task-activity is-breathing"
             title={text.preview.toolbar.taskActivityTitle}
             aria-label={text.preview.toolbar.taskActivityTitle}
             onClick={props.onOpenTasks}
@@ -4197,8 +4172,6 @@ export function App(props: { boot: BootData; text: UiCatalog }) {
     running: 0,
     queued: 0,
   });
-  /** 宿主推送的“新任务出现”信号计数；每次增加播放一次胶囊脉冲。 */
-  const [taskFlash, setTaskFlash] = useState(0);
   /** 焦点位于输入控件内；与弹窗/草稿状态一起上报交互锁。 */
   const [editableFocused, setEditableFocused] = useState(false);
   const [selectionMode, setSelectionMode] = useState(false);
@@ -4345,9 +4318,6 @@ export function App(props: { boot: BootData; text: UiCatalog }) {
           setTaskActivity({ running, queued });
           break;
         }
-        case "taskFlash":
-          setTaskFlash((current) => current + 1);
-          break;
         case "revealBlock":
           setRevealRequest({
             ...(typeof message.blockKey === "string"
@@ -5407,7 +5377,6 @@ export function App(props: { boot: BootData; text: UiCatalog }) {
         selectionMode={selectionMode}
         canSelect={selectableBlocks.length > 0}
         taskActivity={taskActivity}
-        taskFlash={taskFlash}
         onSync={() => sendMessage({ type: "sync" })}
         onReview={() => sendMessage({ type: "reviewMachineBlocks" })}
         onExport={() => sendMessage({ type: "export" })}

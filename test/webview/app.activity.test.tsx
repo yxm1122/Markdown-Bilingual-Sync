@@ -1,8 +1,8 @@
 // @vitest-environment jsdom
 /**
- * 预览交互：新任务闪烁、交互锁上报与释放。
+ * 预览交互：任务活动呼吸指示、交互锁上报与释放。
  */
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import {
   cleanup,
   fireEvent,
@@ -29,7 +29,6 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  vi.useRealTimers();
   cleanup();
 });
 
@@ -39,50 +38,38 @@ function activityChip(): HTMLButtonElement | null {
   ) as HTMLButtonElement | null;
 }
 
-describe("task activity flash", () => {
-  it("shows the chip without flashing when activity starts from zero", () => {
+describe("task activity breathing", () => {
+  it("breathes while tasks are active and starts from zero", () => {
     render(<harness.App boot={makeBoot(makeModel())} text={harness.text} />);
     expect(activityChip()).toBeNull();
 
     postHostMessage({ type: "taskActivity", running: 1, queued: 0 });
     const chip = activityChip();
     expect(chip).toBeTruthy();
-    expect(chip?.classList.contains("is-flashing")).toBe(false);
+    expect(chip?.classList.contains("is-breathing")).toBe(true);
     expect(
       screen.getByTitle(harness.text.preview.toolbar.taskActivityTitle),
     ).toBe(chip);
   });
 
-  it("adds the flashing class on taskFlash and removes it afterwards", () => {
+  it("keeps a single breathing chip while counts change", () => {
     render(<harness.App boot={makeBoot(makeModel())} text={harness.text} />);
-    postHostMessage({ type: "taskActivity", running: 1, queued: 0 });
+    postHostMessage({ type: "taskActivity", running: 2, queued: 1 });
+    expect(activityChip()?.classList.contains("is-breathing")).toBe(true);
 
-    vi.useFakeTimers();
-    postHostMessage({ type: "taskFlash" });
-    const chip = activityChip();
-    expect(chip?.classList.contains("is-flashing")).toBe(true);
-
-    vi.advanceTimersByTime(1200);
-    expect(chip?.classList.contains("is-flashing")).toBe(false);
+    postHostMessage({ type: "taskActivity", running: 1, queued: 3 });
+    const chips = document.querySelectorAll(".pv-task-activity");
+    expect(chips).toHaveLength(1);
+    expect(chips[0]?.classList.contains("is-breathing")).toBe(true);
   });
 
-  it("restarts the animation when another flash arrives", () => {
+  it("stops breathing when all tasks finish", () => {
     render(<harness.App boot={makeBoot(makeModel())} text={harness.text} />);
-    postHostMessage({ type: "taskActivity", running: 1, queued: 0 });
+    postHostMessage({ type: "taskActivity", running: 1, queued: 1 });
+    expect(activityChip()).toBeTruthy();
 
-    vi.useFakeTimers();
-    postHostMessage({ type: "taskFlash" });
-    const chip = activityChip();
-    expect(chip?.classList.contains("is-flashing")).toBe(true);
-
-    vi.advanceTimersByTime(600);
-    postHostMessage({ type: "taskFlash" });
-    expect(chip?.classList.contains("is-flashing")).toBe(true);
-
-    vi.advanceTimersByTime(1199);
-    expect(chip?.classList.contains("is-flashing")).toBe(true);
-    vi.advanceTimersByTime(1);
-    expect(chip?.classList.contains("is-flashing")).toBe(false);
+    postHostMessage({ type: "taskActivity", running: 0, queued: 0 });
+    expect(activityChip()).toBeNull();
   });
 });
 

@@ -88,7 +88,6 @@ import {
   type PreviewRefreshKind,
   type PreviewRefreshRequest,
 } from "./refreshQueue";
-import { TaskFlashTracker } from "./taskFlash";
 import type {
   TaskOperation,
   TaskTarget,
@@ -545,8 +544,6 @@ class PreviewPanelSession implements vscode.Disposable {
   private readonly ownedTasks = new Set<number>();
   /** 已推送到 Webview 的活动任务计数，避免重复 postMessage。 */
   private taskActivity = { running: 0, queued: 0 };
-  /** 新任务识别与 1 秒合并。 */
-  private readonly taskFlash = new TaskFlashTracker();
   /** Webview 正在编辑或弹窗交互；期间暂停源文与逐批译文的自动刷新。 */
   private uiInteracting = false;
   /** 自动刷新调度：逐批合并、源文去抖、阻塞挂起与解除后补刷。 */
@@ -647,7 +644,7 @@ class PreviewPanelSession implements vscode.Disposable {
 
   /**
    * 把本面板当前任务计数推送给 Webview，用于锁定编辑但保留“继续入队”。
-   * 仅在计数变化时发送；出现新任务 ID 时额外请求一次闪烁（1 秒内合并）。
+   * 仅在计数变化时发送；页面在计数大于 0 期间持续播放呼吸指示。
    */
   private syncTaskActivity(force = false): void {
     if (this.disposed) {
@@ -657,8 +654,6 @@ class PreviewPanelSession implements vscode.Disposable {
     const active = this.taskMonitor
       .snapshot()
       .active.filter((task) => task.uri?.toString() === key);
-    // 首次同步只建立基线：预览打开时已有任务不应闪烁。
-    const shouldFlash = this.taskFlash.observe(active.map((task) => task.id));
     const running = active.filter(
       (task) => task.status === "running",
     ).length;
@@ -670,9 +665,6 @@ class PreviewPanelSession implements vscode.Disposable {
     ) {
       this.taskActivity = { running, queued };
       this.postToWebview({ type: "taskActivity", running, queued });
-    }
-    if (shouldFlash) {
-      this.postToWebview({ type: "taskFlash" });
     }
   }
 
