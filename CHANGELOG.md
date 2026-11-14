@@ -7,12 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.17.1] - 2026-11-15
+
 ### Added
 
-- Breathe the preview task chip with a white, reduced-motion-aware glow while tasks for the current file are running or queued, stopping when all tasks finish.
+- Breathe the preview task chip with a white, reduced-motion-aware glow while tasks for the current file are running or queued, stopping when all tasks finish; the light theme adds a dark edge for contrast.
 - Display translated blocks in the preview as each provider batch is validated instead of waiting for the whole run; explicitly started single-file translations open the preview at task start.
 - Auto-refresh the preview while source text changes through typing, saving, or external edits, with 300ms debounce and content-hash deduplication.
-- Pause both incremental translation updates and source auto-refresh while a preview dialog, annotation composer, staged edit, or export confirmation is active, then flush once when interaction ends.
+- Pause both incremental translation updates and source auto-refresh while a preview dialog, annotation composer, staged edit, or export confirmation is active, then flush once when interaction ends; stale export confirmations are invalidated when content changes.
 
 ## [0.17.0] - 2026-11-01
 
