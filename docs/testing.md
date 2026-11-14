@@ -54,6 +54,8 @@ CI 会依次执行 `npm ci`、`typecheck`、`test`、`package`。本地提交前
 | `mockProvider.test.ts` | 演示 Provider 输出契约 |
 | `presets.test.ts` | Provider 预设唯一性与合法值 |
 | `previewModel.test.ts` | 块状态、统计、分栏/只读/占位、摘要面板、HTML 转义、悬停提示 |
+| `refreshQueue.test.ts` | 预览自动刷新调度：250ms 进度合并、300ms 源文去抖、阻塞挂起/解除、最终刷新优先级、哈希跳过 |
+| `syncProgress.test.ts` | 逐批缓存快照、非 partial 模式快照、回调异常不中断翻译 |
 | `taskMonitor.test.ts` | 任务状态机、取消、历史快照 |
 | `language.test.ts` | markdown/skill 支持、manifest 激活与菜单条件、assistantLanguage 解析与设置声明 |
 | `documentMetadata.test.ts` | frontmatter 白名单（含 name）、列表/块值、截断、相对路径与 frontmatter 剥离 |
@@ -83,6 +85,7 @@ CI 会依次执行 `npm ci`、`typecheck`、`test`、`package`。本地提交前
 | `reviewEvaluationDataset.test.ts` | `eval/review` 12 个用例唯一性、源/译文块对齐、预期块/关键词/处理项自洽性、多分支与持久规则覆盖 |
 | `reviewEvaluationReport.test.ts` | 批注评测 report/human-review 格式、基线对比与 delta |
 | `webview/app.dialogs.test.tsx` | 导出/原文 diff、写入态竞态、错误恢复、关闭与焦点 |
+| `webview/app.activity.test.tsx` | 任务胶囊呼吸指示、计数归零卸载、交互锁上报与释放 |
 | `webview/bridge.test.ts` | 首屏 JSON、格式化、VS Code API 与静态预览 localStorage 回退 |
 
 `align.ts` 没有独立测试文件，对齐逻辑通过 `sync`、`previewModel`、`export` 和 `syncEditing` 测试间接覆盖。修改对齐算法时应主动补充直接用例。

@@ -74,6 +74,7 @@ Click or drag across blocks to select them (Shift-click for a range), then retra
 - **Blocks as translation units.** Translation works on top-level semantic blocks: headings, paragraphs, complete list sections, whole tables, whole blockquotes, and footnote definitions.
 - **Protected syntax.** Inline code, URLs, and footnote labels are restored before a cache write if the model rewrites them. Footnote definitions are translated while keeping their `[^id]` labels.
 - **Batch translation and incremental sync.** Saving the source only marks translations as stale; translation requests are made only by explicit commands.
+- **Live preview progress.** Open previews receive each translated batch as it is validated (coalesced at 250 ms) instead of waiting for the whole run; explicitly started single-file translations open the preview at task start. Blocks already delivered survive later batch failures or cancellation.
 - **Translation lock.** After you edit and save a translation in the cache, that block is protected from automatic retranslation.
 - **Back-translate to rewrite the source.** Back-translating a block sends the result straight to source staging. Writing it back locks the translation to the new source so sync cannot overwrite it.
 - **Stable translation.** Retranslation references the previous translation and back-translation references the current source, which reduces wording drift after small edits. Controlled by a setting and a preview toggle.
@@ -85,6 +86,7 @@ Click or drag across blocks to select them (Shift-click for a range), then retra
 ### Preview and editing
 
 - **Bilingual preview.** Side-by-side, stacked, and a true split layout. The split layout gives the source and the translation independent scrolling panes with block-level scroll sync. Renders GFM, syntax highlighting, KaTeX, footnotes, and GitHub Alerts.
+- **Source-aware refresh and task activity.** Open previews follow typing, saves, and external file changes with a 300 ms debounce and content-hash dedupe; automatic refresh pauses while you edit inside the preview, stage source changes, or confirm an export, then flushes once. The toolbar task chip breathes with a white glow while tasks for the file run and disappears when they finish; task completion and saved or external source changes invalidate stale export confirmations.
 - **In-preview editing.** Click source or translation content to edit the underlying Markdown in place. A saved translation is locked immediately; source edits can be staged, reviewed as a diff, and then written back.
 - **Block multi-select and operation queue.** Click or drag across blocks to select them (Shift-click for a range), then retranslate, review, back-translate, mark synchronized, or delete translations in bulk. Operations on one file run serially while different files run in parallel; the task panel and status bar show running/queued state, and you can keep enqueueing while tasks run.
 - **Translation Tasks view.** A status bar button toggles a native TreeView showing the batch overview, active tasks, recent completions, and runtime status. Clicking a task opens the bilingual preview at its block (or the first block for file batches), while row actions can open the source file or cancel. Consecutive block tasks are grouped into collapsible rows, and hovering shows status plus retry counts. The view title's **Change Languages** action uses a native QuickPick to switch or swap source/target languages.
@@ -140,7 +142,7 @@ The build output is `artifacts/vsix/markdown-bilingual-sync.vsix`, which you can
    - Set `markdownBilingualSync.apiModel`, for example `gpt-4o-mini`.
    - Or set the provider to `http` and configure `httpEndpoint`, `httpHeaders`, `httpBody`, and `httpResponsePath`.
 5. Run **Markdown Bilingual Sync: Test AI Translation Connection** to verify that the endpoint, model or template, and key work.
-6. Run **Markdown Bilingual Sync: Translate Current File**. The bilingual preview opens in a new tab in the current editor group; the editor window is not split automatically.
+6. Run **Markdown Bilingual Sync: Translate Current File**. The preview opens when the task starts and updates block by block while the translation runs; the editor window is not split automatically.
 7. Later, after you edit and save the source, run **Sync Translation** to translate only missing or stale blocks.
 8. For an existing translation, click **Import translation** in the preview toolbar, or run **Import Existing Translation…** from the Command Palette, to import it as locked translations.
 
@@ -149,7 +151,7 @@ The build output is `artifacts/vsix/markdown-bilingual-sync.vsix`, which you can
 ### Source Text Is the Reference
 
 - The source is never rewritten automatically. It changes only when you explicitly edit or delete source text, or confirm a back-translation write-back.
-- Saving the source updates stale status and refreshes the preview. It does not call the translation API.
+- Saving the source updates stale status and refreshes the preview. The open preview also follows typing and external file edits; these paths are display-only and pause while you edit inside the preview. None of them call the translation API.
 - **Sync Translation** processes only missing and stale blocks.
 - Sync, retranslation, and batch translation write to the cache in batches. If a run fails or is cancelled midway, batches already written are kept and missing blocks are retried on the next sync.
 - To switch models or refresh existing machine translations, use **Retranslate All**. Locked translations are never overwritten.

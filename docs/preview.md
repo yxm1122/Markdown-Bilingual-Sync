@@ -91,6 +91,7 @@ Webview 只通过 `vscode.postMessage` 与宿主通信。宿主在 `PreviewManag
 | type | 关键字段 | 作用 |
 | --- | --- | --- |
 | `ready` | — | 脚本完成挂载；之后宿主可以发送 `state` |
+| `interaction` | `active: boolean` | 弹窗、输入焦点或未保存草稿的交互状态；宿主据此暂停自动刷新 |
 
 
 | type | 关键字段 | 作用 |
@@ -152,6 +153,7 @@ Webview 只通过 `vscode.postMessage` 与宿主通信。宿主在 `PreviewManag
 | --- | --- | --- |
 | `state` | `state.model`, `state.layout`, `state.readonly`, `notice?`, `exportConfirmation?` | 下发完整模型与面板状态；Preact 局部更新 |
 | `busy` | `busy`, `message?` | 显示/解除忙碌态 |
+| `taskActivity` | `running`, `queued` | 当前文件的活动任务计数；大于 0 时任务胶囊显示白色呼吸光晕，归零后卸载 |
 | `toast` | `text`, `kind` | 面板内提示 |
 | `sourceConfirm` | `data.destination`, `count`, `diff` | 打开原文写回确认框 |
 | `sourceSettled` | — | 原文写回成功，关闭确认框 |
@@ -159,7 +161,7 @@ Webview 只通过 `vscode.postMessage` 与宿主通信。宿主在 `PreviewManag
 | `exportSettled` | `action: write\|cancel` | 导出写入/取消完成 |
 | `exportError` | `message` | 导出写入失败 |
 
-首次加载的初始化数据和本地化文案序列化进 `application/json` 脚本标签；导出确认随初始状态或 `state` 消息下发，原文确认继续使用独立的 `sourceConfirm` 消息。任何普通刷新都会关闭已展示的导出确认，避免提交过期 diff。
+首次加载的初始化数据和本地化文案序列化进 `application/json` 脚本标签；导出确认随初始状态或 `state` 消息下发，原文确认继续使用独立的 `sourceConfirm` 消息。任何普通刷新都会关闭已展示的导出确认，避免提交过期 diff；任务结束、保存或外部磁盘变化会主动作废并关闭确认框。
 
 ### 4.3 状态归属
 
@@ -169,6 +171,16 @@ Webview 只通过 `vscode.postMessage` 与宿主通信。宿主在 `PreviewManag
 | 预览模式 | Webview | `vscode.setState` |
 | 简报展开、摘要/术语表/brief 草稿、批注 popover、菜单、滚动位置 | Webview | 内存（面板重新加载后丢失；模式/布局/滚动用 `vscode.setState`） |
 | 内联编辑/插入草稿 | 编辑器组件局部 state | 内存（块被移除或取消即丢弃） |
+
+### 4.4 自动刷新与进度
+
+- 自动刷新由 `PreviewRefreshQueue` 统一调度，有三个来源：
+  - **逐批译文**：`SyncService` 在每批 Provider 结果通过结构校验后回调最新缓存快照，250ms 合并刷新；显示可以早于磁盘的 4 块 / 2 秒提交。
+  - **源文变化**：输入、保存与磁盘监听共用 300ms 去抖，按源文哈希跳过内容未变的刷新。
+  - **最终刷新**：任务结束、缓存写盘或保存时强制读盘；被交互阻塞时挂起，解除后补一次。
+- Webview 通过 `interaction` 上报弹窗、输入焦点与未保存草稿；宿主暂停自动刷新。原文/译文暂存只暂停逐批译文，源文变化与最终刷新仍会落地，避免陈旧暂存长期不失效。
+- 任务结束、保存或外部磁盘变化会先作废已准备的导出确认，防止提交过期差异。
+- 任务胶囊由 `taskActivity` 的 running/queued 驱动：计数大于 0 时显示白色呼吸光晕（浅色主题外加深色细边），全部任务结束后随胶囊卸载自然停止。
 
 ## 5. 原文暂存与写回
 
